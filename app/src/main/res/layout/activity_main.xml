@@ -1,0 +1,650 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Four sibling overlays in one FrameLayout. MainActivity toggles visibility:
+    - gameRoot           : in-dungeon UI (GameView + bottom HeroPanelView)
+    - titleOverlay       : title screen, shown on cold launch / Save & Quit
+    - classSelectOverlay : new-game class assignment, shown only between Title and Floor 1
+    - heroDetailOverlay  : modal hero info / equipment panel (over gameRoot)
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/dungeon_bg">
+
+    <!-- ============== In-game UI (hidden until party enters Floor 1) ============== -->
+    <LinearLayout
+        android:id="@+id/gameRoot"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <!-- Dungeon view: fills available space above the action bar + hero panel. -->
+        <com.tavisdor.app.GameView
+            android:id="@+id/gameView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <!--
+          Action bar: Menu / Action / Items in a horizontal row, sitting
+          between the dungeon view and the hero panel. Equal-weight
+          MaterialButtons share the full screen width.
+        -->
+        <LinearLayout
+            android:id="@+id/actionBar"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/action_bar_height"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="@dimen/action_bar_padding_horizontal"
+            android:paddingVertical="@dimen/action_bar_padding_vertical">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnActionBarMenu"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginEnd="@dimen/action_bar_button_gap"
+                android:layout_weight="1"
+                android:text="@string/action_bar_menu" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnActionBarAction"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginEnd="@dimen/action_bar_button_gap"
+                android:layout_weight="1"
+                android:text="@string/action_bar_action" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnActionBarItems"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="@string/action_bar_items" />
+        </LinearLayout>
+
+        <!-- Persistent bottom panel: 2x2 hero portraits, front-line top row, back-line bottom row. -->
+        <com.tavisdor.app.HeroPanelView
+            android:id="@+id/heroPanel"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/hero_panel_height" />
+    </LinearLayout>
+
+    <!-- ============== Title screen overlay (visible on cold launch) ============== -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/titleOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/dungeon_bg"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="visible">
+
+        <TextView
+            android:id="@+id/tvTitleMain"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="120dp"
+            android:letterSpacing="0.18"
+            android:text="@string/title_main"
+            android:textColor="@color/title_text"
+            android:textSize="@dimen/title_main_text_size"
+            android:textStyle="bold"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <TextView
+            android:id="@+id/tvTitleSubtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/title_subtitle"
+            android:textColor="@color/title_subtitle_text"
+            android:textSize="@dimen/title_subtitle_text_size"
+            android:textStyle="italic"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/tvTitleMain" />
+
+        <LinearLayout
+            android:id="@+id/titleButtonColumn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/tvTitleSubtitle"
+            app:layout_constraintVertical_bias="0.5">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnTitleStartNewGame"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="@dimen/title_button_min_width"
+                android:text="@string/title_start_new_game" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnTitleContinue"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/title_button_vertical_gap"
+                android:minWidth="@dimen/title_button_min_width"
+                android:text="@string/title_continue"
+                android:visibility="gone" />
+        </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <!-- ============== Class-select overlay (visible only for a new game) ============== -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/classSelectOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/dungeon_bg"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvClassSelectTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="48dp"
+            android:text="@string/class_select_title"
+            android:textColor="@color/title_text"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <TextView
+            android:id="@+id/tvFrontLineLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="32dp"
+            android:text="@string/class_select_front_line"
+            android:textColor="@color/line_tag_text"
+            android:textSize="13sp"
+            android:letterSpacing="0.12"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/tvClassSelectTitle" />
+
+        <!-- Front-line row: slot 1 + slot 2 -->
+        <LinearLayout
+            android:id="@+id/classSelectFrontRow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center"
+            android:orientation="horizontal"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/tvFrontLineLabel">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSlot1"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="@dimen/class_select_slot_size"
+                android:layout_height="@dimen/class_select_slot_size"
+                android:text="@string/class_select_slot_empty"
+                android:textSize="@dimen/class_select_slot_label_text_size" />
+
+            <Space
+                android:layout_width="@dimen/class_select_slot_h_gap"
+                android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSlot2"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="@dimen/class_select_slot_size"
+                android:layout_height="@dimen/class_select_slot_size"
+                android:text="@string/class_select_slot_empty"
+                android:textSize="@dimen/class_select_slot_label_text_size" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvBackLineLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/class_select_back_line"
+            android:textColor="@color/line_tag_text"
+            android:textSize="13sp"
+            android:letterSpacing="0.12"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/classSelectFrontRow" />
+
+        <!-- Back-line row: slot 3 + slot 4 -->
+        <LinearLayout
+            android:id="@+id/classSelectBackRow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center"
+            android:orientation="horizontal"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/tvBackLineLabel">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSlot3"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="@dimen/class_select_slot_size"
+                android:layout_height="@dimen/class_select_slot_size"
+                android:text="@string/class_select_slot_empty"
+                android:textSize="@dimen/class_select_slot_label_text_size" />
+
+            <Space
+                android:layout_width="@dimen/class_select_slot_h_gap"
+                android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSlot4"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="@dimen/class_select_slot_size"
+                android:layout_height="@dimen/class_select_slot_size"
+                android:text="@string/class_select_slot_empty"
+                android:textSize="@dimen/class_select_slot_label_text_size" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvClassPickPrompt"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="36dp"
+            android:text="@string/class_select_pick_class_prompt"
+            android:textColor="@color/title_subtitle_text"
+            android:textSize="14sp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/classSelectBackRow" />
+
+        <!-- Class picker buttons (tap one to fill the highlighted slot). -->
+        <LinearLayout
+            android:id="@+id/classPickerRow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:orientation="horizontal"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/tvClassPickPrompt">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnPickMage"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/class_mage" />
+
+            <Space
+                android:layout_width="8dp"
+                android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnPickThief"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/class_thief" />
+
+            <Space
+                android:layout_width="8dp"
+                android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnPickFighter"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/class_fighter" />
+
+            <Space
+                android:layout_width="8dp"
+                android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnPickArcher"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/class_archer" />
+        </LinearLayout>
+
+        <!--
+          Rename button: operates on the currently selected slot. Opens a small
+          dialog with a 6-char-capped EditText pre-filled with that slot's
+          current name (auto-generated or previously customized).
+        -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnRenameHero"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/class_select_rename_button"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/classPickerRow" />
+
+        <!-- Bottom action row: Back (left) + Start Adventure (right). -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnClassSelectBack"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="24dp"
+            android:layout_marginBottom="32dp"
+            android:text="@string/class_select_back"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnClassSelectStart"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="24dp"
+            android:layout_marginBottom="32dp"
+            android:enabled="false"
+            android:minWidth="180dp"
+            android:text="@string/class_select_start"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <!--
+      ============== Hero detail overlay (modal, hidden by default) ==============
+      Outer FrameLayout is the scrim: it eats touches everywhere (clickable),
+      and tapping outside the centered panel closes the overlay. The inner
+      panel sets its own onClick so it does NOT propagate to the scrim.
+    -->
+    <FrameLayout
+        android:id="@+id/heroDetailOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/hero_detail_scrim"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <ScrollView
+            android:id="@+id/heroDetailScroll"
+            android:layout_width="320dp"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginVertical="24dp"
+            android:background="@drawable/bg_hero_detail_panel"
+            android:clipToOutline="true"
+            android:fillViewport="false"
+            android:scrollbars="none">
+
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/heroDetailPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clickable="true"
+            android:focusable="true"
+            android:padding="@dimen/hero_detail_panel_padding">
+
+            <!-- Header: "Name - Class" centered at top. -->
+            <TextView
+                android:id="@+id/tvHeroDetailHeader"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:textColor="@color/hero_detail_value"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent"
+                tools:text="John - Fighter" />
+
+            <!-- Upper-left stat block: level, hp, mp. -->
+            <LinearLayout
+                android:id="@+id/heroDetailUpperLeft"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:orientation="vertical"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/tvHeroDetailHeader">
+
+                <TextView
+                    android:id="@+id/tvHeroDetailLevel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/hero_detail_value"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    tools:text="Level 1" />
+
+                <TextView
+                    android:id="@+id/tvHeroDetailHp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textColor="@color/hero_detail_value"
+                    android:textSize="13sp"
+                    tools:text="HP 10 / 10" />
+
+                <TextView
+                    android:id="@+id/tvHeroDetailMp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textColor="@color/hero_detail_value"
+                    android:textSize="13sp"
+                    tools:text="MP 10 / 10" />
+            </LinearLayout>
+
+            <!-- Upper-right: xp current / next-level threshold. -->
+            <TextView
+                android:id="@+id/tvHeroDetailXp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:textColor="@color/hero_detail_value"
+                android:textSize="13sp"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/tvHeroDetailHeader"
+                tools:text="XP 0 / 100" />
+
+            <!--
+              Equipment grid: 3x3 paper-doll.
+              Layout:
+                .  H  .       (row 0)
+                W1 B  W2      (row 1)
+                .  F  .       (row 2)
+              Each filled slot is a TextView with a 2-line label
+              ("Helmet" / "(empty)") on the bg_equip_slot drawable.
+            -->
+            <GridLayout
+                android:id="@+id/heroDetailEquipGrid"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:columnCount="3"
+                android:rowCount="3"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/heroDetailUpperLeft">
+
+                <!-- Row 0: spacer | helmet | spacer -->
+                <Space
+                    android:layout_width="@dimen/hero_detail_equip_slot_size"
+                    android:layout_height="@dimen/hero_detail_equip_slot_size"
+                    android:layout_marginEnd="@dimen/hero_detail_equip_grid_gap"
+                    android:layout_marginBottom="@dimen/hero_detail_equip_grid_gap" />
+
+                <TextView
+                    android:id="@+id/equipSlotHelmet"
+                    android:layout_width="@dimen/hero_detail_equip_slot_size"
+                    android:layout_height="@dimen/hero_detail_equip_slot_size"
+                    android:layout_marginEnd="@dimen/hero_detail_equip_grid_gap"
+                    android:layout_marginBottom="@dimen/hero_detail_equip_grid_gap"
+                    android:background="@drawable/bg_equip_slot"
+                    android:gravity="center"
+                    android:padding="4dp"
+                    android:textColor="@color/hero_detail_slot_label"
+                    android:textSize="11sp" />
+
+                <Space
+                    android:layout_width="@dimen/hero_detail_equip_slot_size"
+                    android:layout_height="@dimen/hero_detail_equip_slot_size"
+                    android:layout_marginBottom="@dimen/hero_detail_equip_grid_gap" />
+
+                <!-- Row 1: weapon1 | armor | weapon2 -->
+                <TextView
+                    android:id="@+id/equipSlotWeapon1"
+                    android:layout_width="@dimen/hero_detail_equip_slot_size"
+                    android:layout_height="@dimen/hero_detail_equip_slot_size"
+                    android:layout_marginEnd="@dimen/hero_detail_equip_grid_gap"
+                    android:layout_marginBottom="@dimen/hero_detail_equip_grid_gap"
+                    android:background="@drawable/bg_equip_slot"
+                    android:gravity="center"
+                    android:padding="4dp"
+                    android:textColor="@color/hero_detail_slot_label"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/equipSlotArmor"
+                    android:layout_width="@dimen/hero_detail_equip_slot_size"
+                    android:layout_height="@dimen/hero_detail_equip_slot_size"
+                    android:layout_marginEnd="@dimen/hero_detail_equip_grid_gap"
+                    android:layout_marginBottom="@dimen/hero_detail_equip_grid_gap"
+                    android:background="@drawable/bg_equip_slot"
+                    android:gravity="center"
+                    android:padding="4dp"
+                    android:textColor="@color/hero_detail_slot_label"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/equipSlotWeapon2"
+                    android:layout_width="@dimen/hero_detail_equip_slot_size"
+                    android:layout_height="@dimen/hero_detail_equip_slot_size"
+                    android:layout_marginBottom="@dimen/hero_detail_equip_grid_gap"
+                    android:background="@drawable/bg_equip_slot"
+                    android:gravity="center"
+                    android:padding="4dp"
+                    android:textColor="@color/hero_detail_slot_label"
+                    android:textSize="11sp" />
+
+                <!-- Row 2: spacer | boots | spacer -->
+                <Space
+                    android:layout_width="@dimen/hero_detail_equip_slot_size"
+                    android:layout_height="@dimen/hero_detail_equip_slot_size"
+                    android:layout_marginEnd="@dimen/hero_detail_equip_grid_gap" />
+
+                <TextView
+                    android:id="@+id/equipSlotBoots"
+                    android:layout_width="@dimen/hero_detail_equip_slot_size"
+                    android:layout_height="@dimen/hero_detail_equip_slot_size"
+                    android:layout_marginEnd="@dimen/hero_detail_equip_grid_gap"
+                    android:background="@drawable/bg_equip_slot"
+                    android:gravity="center"
+                    android:padding="4dp"
+                    android:textColor="@color/hero_detail_slot_label"
+                    android:textSize="11sp" />
+
+                <Space
+                    android:layout_width="@dimen/hero_detail_equip_slot_size"
+                    android:layout_height="@dimen/hero_detail_equip_slot_size" />
+            </GridLayout>
+
+            <!-- Lower-left stat block: strength / dexterity / intelligence. -->
+            <LinearLayout
+                android:id="@+id/heroDetailLowerLeft"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:orientation="vertical"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/heroDetailEquipGrid">
+
+                <TextView
+                    android:id="@+id/tvHeroDetailStr"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/hero_detail_value"
+                    android:textSize="13sp"
+                    tools:text="STR 10" />
+
+                <TextView
+                    android:id="@+id/tvHeroDetailDex"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textColor="@color/hero_detail_value"
+                    android:textSize="13sp"
+                    tools:text="DEX 10" />
+
+                <TextView
+                    android:id="@+id/tvHeroDetailInt"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textColor="@color/hero_detail_value"
+                    android:textSize="13sp"
+                    tools:text="INT 10" />
+            </LinearLayout>
+
+            <!-- Lower-right: armor class. -->
+            <TextView
+                android:id="@+id/tvHeroDetailAc"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:textColor="@color/hero_detail_value"
+                android:textSize="13sp"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/heroDetailEquipGrid"
+                tools:text="AC 10" />
+
+            <!--
+              "Skills & Spells" button: opens a separate dialog
+              (HeroSkillsDialog) that lists the hero's known skills
+              grouped under ACT / GRD / SPL with descriptions. Keeps
+              the detail panel itself tight.
+            -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnHeroDetailSkills"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="@string/hero_detail_skills_button"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/heroDetailLowerLeft" />
+
+            <!-- Close button: dismiss via explicit tap. -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnHeroDetailClose"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:minWidth="140dp"
+                android:text="@string/hero_detail_close"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/btnHeroDetailSkills" />
+        </androidx.constraintlayout.widget.ConstraintLayout>
+        </ScrollView>
+    </FrameLayout>
+</FrameLayout>

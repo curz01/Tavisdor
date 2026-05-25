@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Legacy round launcher icon fallback for API 24-25. Same content as the
+  square legacy variant; older launchers that ask for the round icon use this.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF1A1410"
+        android:pathData="M0,0 H108 V108 H0 Z" />
+    <path
+        android:fillColor="#FFEFE7D0"
+        android:pathData="M30,32 H78 V44 H60 V82 H48 V44 H30 Z" />
+</vector>

@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Tavisdor</string>
+
+    <!-- Title screen -->
+    <string name="title_main">Tavisdor</string>
+    <string name="title_subtitle">: The Shifting Passage</string>
+    <string name="title_start_new_game">Start New Game</string>
+    <string name="title_continue">Continue</string>
+    <string name="title_new_game_overwrite_title">Start a new game?</string>
+    <string name="title_new_game_overwrite_message">This will erase your current saved game.</string>
+    <string name="title_new_game_overwrite_confirm">Erase &amp; Start New</string>
+    <string name="title_new_game_overwrite_cancel">Cancel</string>
+
+    <!-- Class select screen -->
+    <string name="class_select_title">Choose Your Party</string>
+    <string name="class_select_front_line">Front Line</string>
+    <string name="class_select_back_line">Back Line</string>
+    <string name="class_select_slot_empty">EMPTY</string>
+    <string name="class_select_pick_class_prompt">Pick a class:</string>
+    <string name="class_select_back">Back</string>
+    <string name="class_select_start">Start Adventure</string>
+
+    <!-- Rename hero dialog (class-select screen). -->
+    <string name="class_select_rename_button">Rename Hero</string>
+    <string name="class_select_rename_title">Rename Hero</string>
+    <string name="class_select_rename_hint">Up to 6 characters</string>
+    <string name="class_select_rename_confirm">Save</string>
+    <string name="class_select_rename_cancel">Cancel</string>
+
+    <!-- Hero classes -->
+    <string name="class_mage">Mage</string>
+    <string name="class_thief">Thief</string>
+    <string name="class_fighter">Fighter</string>
+    <string name="class_archer">Archer</string>
+
+    <!-- In-game placeholder labels -->
+    <string name="game_floor_label">Tavisdor - Floor %1$d</string>
+    <string name="hero_slot_label_format">Slot %1$d</string>
+
+    <!-- Action bar (between dungeon view and hero panel). -->
+    <string name="action_bar_menu">Menu</string>
+    <string name="action_bar_action">Action</string>
+    <string name="action_bar_items">Items</string>
+
+    <!-- Action button feedback / errors. -->
+    <string name="action_bar_action_no_hero">Tap a hero\'s ACT / GRD / SPL first.</string>
+    <string name="action_bar_action_fired">%1$s used %2$s. (combat not implemented yet)</string>
+    <string name="action_bar_items_unavailable">Items - coming soon.</string>
+
+    <!-- In-game menu dialog (opened from the action bar). -->
+    <string name="ingame_menu_title">Menu</string>
+    <string name="ingame_menu_save_and_quit">Save &amp; Quit</string>
+    <string name="ingame_menu_resume">Resume</string>
+    <string name="ingame_menu_sfx">Sound effects</string>
+    <string name="ingame_menu_music">Music</string>
+
+    <!-- Hero detail panel -->
+    <string name="hero_detail_header_format">%1$s - %2$s</string>
+    <string name="hero_detail_level_format">Level %1$d</string>
+    <string name="hero_detail_hp_format">HP %1$d / %2$d</string>
+    <string name="hero_detail_mp_format">MP %1$d / %2$d</string>
+    <string name="hero_detail_xp_format">XP %1$d / %2$d</string>
+    <string name="hero_detail_str_format">STR %1$d</string>
+    <string name="hero_detail_dex_format">DEX %1$d</string>
+    <string name="hero_detail_int_format">INT %1$d</string>
+    <string name="hero_detail_ac_format">AC %1$d</string>
+    <string name="hero_detail_slot_helmet">Helmet</string>
+    <string name="hero_detail_slot_armor">Armor</string>
+    <string name="hero_detail_slot_weapon1">Weapon</string>
+    <string name="hero_detail_slot_weapon2">Off-hand</string>
+    <string name="hero_detail_slot_boots">Boots</string>
+    <string name="hero_detail_slot_empty">(empty)</string>
+    <string name="hero_detail_close">Close</string>
+
+    <!-- Skills / spells: button on the hero detail panel + dialog
+         title for the standalone Skills & Spells viewer. -->
+    <string name="hero_detail_skills_button">Skills &amp; Spells</string>
+    <string name="hero_detail_skills_dialog_title">%1$s - Skills &amp; Spells</string>
+    <string name="hero_detail_skills_section_action">Actions</string>
+    <string name="hero_detail_skills_section_guard">Guard</string>
+    <string name="hero_detail_skills_section_spells">Spells</string>
+    <string name="hero_detail_skills_none">(no skills unlocked)</string>
+    <string name="hero_skill_row_format">%1$s\u00A0\u00A0R%2$d</string>
+    <string name="hero_skill_row_mp_suffix">\u00A0\u00A0%1$d MP</string>
+    <string name="hero_skill_passive_tag">passive</string>
+    <string name="hero_skill_prepare_tag">prepare</string>
+    <string name="hero_skill_popup_title_action">%1$s - Actions</string>
+    <string name="hero_skill_popup_title_guard">%1$s - Guard</string>
+    <string name="hero_skill_popup_title_spells">%1$s - Spells</string>
+    <string name="hero_skill_popup_empty">No skills here yet.</string>
+    <string name="hero_skill_popup_close">Close</string>
+
+    <!-- Skill picker dialog (the version with persistent selection +
+         green / yellow blinking border). Distinct strings from the
+         detail-panel skill list so wording can diverge later. -->
+    <string name="skill_picker_free_tag">FREE</string>
+    <string name="skill_picker_selected_label">Selected</string>
+    <string name="skill_picker_passive_locked">Always active - cannot be staged.</string>
+    <string name="skill_picker_toast_selected">%1$s staged for %2$s.</string>
+    <string name="skill_picker_toast_reverted">%1$s will use a basic Attack.</string>
+
+    <!-- Locked door dialog -->
+    <string name="door_locked_title">Locked Door</string>
+    <string name="door_locked_message">A heavy lock holds this door shut. What will you do?</string>
+    <string name="door_action_use_key">Use a Key</string>
+    <string name="door_action_pick_lock">Pick the Lock</string>
+    <string name="door_action_force_open">Force it Open</string>
+    <string name="door_action_cancel">Step Back</string>
+    <string name="door_result_opened">The door swings open.</string>
+    <string name="door_result_failed_pick">The lock holds firm.</string>
+    <string name="door_result_failed_force">The door won\'t budge.</string>
+</resources>

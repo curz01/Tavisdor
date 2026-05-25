@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Solid yellow frame for the "selected, does NOT cost an action" state.
+    Color matches the existing action-button accent so the visual
+    language stays consistent across the UI.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@android:color/transparent" />
+    <stroke
+        android:width="2dp"
+        android:color="#FFE6C12C" />
+    <corners android:radius="6dp" />
+</shape>

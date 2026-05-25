@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Two-frame loop for the selected free-action skill row (skill does
+    not consume the hero's main action).
+-->
+<animation-list xmlns:android="http://schemas.android.com/apk/res/android"
+    android:oneshot="false">
+    <item
+        android:drawable="@drawable/skill_select_border_yellow_on"
+        android:duration="500" />
+    <item
+        android:drawable="@drawable/skill_select_border_yellow_off"
+        android:duration="500" />
+</animation-list>

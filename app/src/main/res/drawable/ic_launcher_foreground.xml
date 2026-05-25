@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Foreground layer of the adaptive launcher icon: placeholder stylized "T".
+  Drawn inside the 66x66 safe zone (centered in a 108x108 viewport) so the
+  launcher's circle / squircle / teardrop mask never clips the letter.
+  Background lives separately in [ic_launcher_background].
+
+  Replace by running Android Studio's Image Asset wizard with your foreground
+  source; the wizard regenerates this file and all density buckets at once.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFEFE7D0"
+        android:pathData="M30,32 H78 V44 H60 V82 H48 V44 H30 Z" />
+</vector>

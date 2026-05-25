@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.Tavisdor" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">@color/dungeon_bg</item>
+        <item name="android:statusBarColor">@color/dungeon_bg</item>
+        <item name="android:navigationBarColor">@color/dungeon_bg</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="p">shortEdges</item>
+    </style>
+</resources>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Solid green frame for the "selected, costs action" state of a skill
+    row in the picker dialog. Paired with skill_select_border_green_off
+    in skill_select_border_green_blink to produce the blinking effect.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@android:color/transparent" />
+    <stroke
+        android:width="2dp"
+        android:color="#FF4FE04F" />
+    <corners android:radius="6dp" />
+</shape>

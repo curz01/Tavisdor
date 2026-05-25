@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Background layer of the adaptive launcher icon. Fills the full 108x108 viewport
+  with a solid dark color; the foreground layer ([ic_launcher_foreground]) sits
+  on top inside the 66x66 safe zone. Replace via Android Studio: New -> Image
+  Asset (Launcher Icons - Adaptive and Legacy) when you have real branding.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF1A1410"
+        android:pathData="M0,0 H108 V108 H0 Z" />
+</vector>

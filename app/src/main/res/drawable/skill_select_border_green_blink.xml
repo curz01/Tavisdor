@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Two-frame loop used as the background of a selected skill row when
+    the skill DOES consume the hero's main action. AnimationDrawable
+    auto-loops while oneshot="false"; the dialog calls start() on it
+    right after assigning the background.
+-->
+<animation-list xmlns:android="http://schemas.android.com/apk/res/android"
+    android:oneshot="false">
+    <item
+        android:drawable="@drawable/skill_select_border_green_on"
+        android:duration="500" />
+    <item
+        android:drawable="@drawable/skill_select_border_green_off"
+        android:duration="500" />
+</animation-list>

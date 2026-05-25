@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Solid black behind everything; same edge color the dungeon view paints around the playfield. -->
+    <color name="dungeon_bg">#FF000000</color>
+
+    <!-- Title screen text. -->
+    <color name="title_text">#FFEFE7D0</color>
+    <color name="title_subtitle_text">#FFB8AE92</color>
+
+    <!-- Hero panel slot frames. -->
+    <color name="hero_slot_border">#FF8C7A52</color>
+    <color name="hero_slot_fill_empty">#FF1E1A12</color>
+    <color name="hero_slot_fill_filled">#FF332B1B</color>
+    <color name="hero_slot_label">#FFE6D9B6</color>
+
+    <!-- Front/back line row tags above hero panel. -->
+    <color name="line_tag_text">#FFB8AE92</color>
+
+    <!-- Hero detail overlay: scrim dims everything behind the panel. -->
+    <color name="hero_detail_scrim">#CC000000</color>
+    <color name="hero_detail_label_dim">#FFB8AE92</color>
+    <color name="hero_detail_value">#FFEFE7D0</color>
+    <color name="hero_detail_slot_label">#FFE6D9B6</color>
+    <color name="hero_detail_slot_empty">#FF6B6450</color>
+
+    <!-- Skill picker dialog rows. The blink colors themselves live as
+         hex constants inside the drawable XMLs so a designer can tweak
+         them without editing this palette. -->
+    <color name="skill_picker_row_name">#FFEFE7D0</color>
+    <color name="skill_picker_row_meta">#FFB8AE92</color>
+    <color name="skill_picker_row_desc">#FFC9BC97</color>
+    <color name="skill_picker_free_tag">#FFE6C12C</color>
+    <color name="skill_picker_passive_tag">#FF8C7A52</color>
+</resources>

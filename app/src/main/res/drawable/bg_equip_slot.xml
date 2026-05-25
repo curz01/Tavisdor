@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single equipment slot square: dim inner fill with brass border. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FF0F0C08" />
+    <stroke
+        android:width="1.5dp"
+        android:color="#FF5A4F38" />
+    <corners android:radius="6dp" />
+</shape>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Dim companion frame for the green blink animation. We keep the stroke
+    width identical to the "on" frame so the row content does not shift
+    by a pixel on every blink tick.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@android:color/transparent" />
+    <stroke
+        android:width="2dp"
+        android:color="#334FE04F" />
+    <corners android:radius="6dp" />
+</shape>

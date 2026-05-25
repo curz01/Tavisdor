@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Legacy launcher icon fallback for API 24-25 (Android 7.0-7.1) which predate
+  adaptive icons. Combines background fill + foreground T into one vector so
+  the icon renders correctly on legacy devices. Modern devices (API 26+) use
+  the adaptive-icon definitions under mipmap-anydpi-v26/.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF1A1410"
+        android:pathData="M0,0 H108 V108 H0 Z" />
+    <path
+        android:fillColor="#FFEFE7D0"
+        android:pathData="M30,32 H78 V44 H60 V82 H48 V44 H30 Z" />
+</vector>

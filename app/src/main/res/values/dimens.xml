@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Title screen layout. -->
+    <dimen name="title_main_text_size">56sp</dimen>
+    <dimen name="title_subtitle_text_size">20sp</dimen>
+    <dimen name="title_button_min_width">240dp</dimen>
+    <dimen name="title_button_vertical_gap">12dp</dimen>
+
+    <!-- Class select screen layout. -->
+    <dimen name="class_select_slot_size">120dp</dimen>
+    <dimen name="class_select_slot_h_gap">16dp</dimen>
+    <dimen name="class_select_slot_v_gap">12dp</dimen>
+    <dimen name="class_select_slot_label_text_size">14sp</dimen>
+
+    <!-- Action bar sits above the hero panel: Menu / Action / Items. -->
+    <dimen name="action_bar_height">56dp</dimen>
+    <dimen name="action_bar_padding_horizontal">10dp</dimen>
+    <dimen name="action_bar_padding_vertical">6dp</dimen>
+    <dimen name="action_bar_button_gap">8dp</dimen>
+
+    <!-- Hero panel (persistent bottom 2x2 grid in-game). -->
+    <dimen name="hero_panel_height">200dp</dimen>
+    <dimen name="hero_panel_slot_size">80dp</dimen>
+    <dimen name="hero_panel_slot_h_gap">10dp</dimen>
+    <dimen name="hero_panel_slot_v_gap">8dp</dimen>
+    <dimen name="hero_panel_padding">12dp</dimen>
+
+    <!-- Hero detail overlay (modal opened by tapping a portrait). -->
+    <dimen name="hero_detail_panel_padding">16dp</dimen>
+    <dimen name="hero_detail_equip_slot_size">64dp</dimen>
+    <dimen name="hero_detail_equip_grid_gap">8dp</dimen>
+</resources>
