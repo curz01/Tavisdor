@@ -2,7 +2,10 @@ package com.tavisdor.app.game
 
 import android.content.Context
 import com.tavisdor.app.combat.Combat
+import com.tavisdor.app.combat.CombatController
+import com.tavisdor.app.combat.CombatLog
 import com.tavisdor.app.dungeon.Cell
+import com.tavisdor.app.enemies.Enemy
 import com.tavisdor.app.dungeon.Floor
 import com.tavisdor.app.dungeon.FloorGenerator
 import com.tavisdor.app.dungeon.Pathfinder
@@ -58,8 +61,132 @@ class Game(
      */
     private val runtimeRng: Random = Random(System.nanoTime())
 
+    /**
+     * Active encounter, or null when out of combat. Mutated only
+     * through [setCombat] so listeners (the top-of-screen turn-order
+     * strip, audio gating, save guard) all hear the same edge.
+     */
     var combat: Combat? = null
         private set
+
+    /**
+     * Listener invoked every time [combat] is reassigned. Fires
+     * with the new value (null = encounter just ended); MainActivity
+     * uses this to flip [com.tavisdor.app.ui.TurnOrderBarView]
+     * visibility and bind the strip to the new fight.
+     */
+    var onCombatChanged: ((Combat?) -> Unit)? = null
+
+    /**
+     * Orchestrator for the active encounter. Null whenever [combat]
+     * is null. Created automatically by [setCombat] and torn down
+     * when combat ends. The Game loop ticks it from [tickAnimations].
+     */
+    var combatController: CombatController? = null
+        private set
+
+    /**
+     * Rolling action history shown by [com.tavisdor.app.ui.CombatLogView]
+     * above the action bar. Persistent across the Game's lifetime
+     * (single instance reused for every encounter) but cleared on
+     * each fresh [setCombat\(non-null\)] so a new fight starts with
+     * an empty board.
+     */
+    val combatLog: CombatLog = CombatLog()
+
+    /**
+     * Enemy whose hate values the hero panel currently surfaces
+     * via the `hate1..hate5` icon slot. Auto-set to the first
+     * living enemy when combat starts, advanced past KOs by the
+     * controller's [CombatController.onEnemyDefeated] hook, and
+     * cleared back to null whenever combat ends.
+     *
+     * Tap-to-select (see [com.tavisdor.app.input.InputHandler])
+     * overrides the auto-pick so the player can study a specific
+     * goblin's aggro without waiting for the AI to swing.
+     */
+    var selectedEnemy: Enemy? = null
+        private set
+
+    /**
+     * Fires with the new selection (or null) every time
+     * [selectedEnemy] changes. MainActivity wires this to
+     * `HeroPanelView.invalidate()` so the hate-icon column
+     * refreshes the moment the player taps a new enemy.
+     */
+    var onSelectedEnemyChanged: ((Enemy?) -> Unit)? = null
+
+    /**
+     * Replace the active encounter. Pass null to clear combat. The
+     * change-listener fires AFTER the field is updated so observers
+     * see the new value during their callback.
+     *
+     * When [next] is non-null this also spins up a [CombatController]
+     * to drive the per-turn loop; when null the previous controller
+     * is dropped. The controller's [CombatController.onEnd] callback
+     * routes back here via [setCombat\(null\)] so victories / wipes
+     * clean up automatically.
+     */
+    fun setCombat(next: Combat?) {
+        if (combat === next) return
+        combat = next
+        combatController = null
+        if (next != null) {
+            mode = Mode.COMBAT
+            combatLog.clear()
+            val f = floor
+            if (f != null) {
+                combatController = CombatController(
+                    combat = next,
+                    floor = f,
+                    log = combatLog,
+                    camera = camera,
+                    rng = runtimeRng,
+                    onEnd = { _ -> setCombat(null) },
+                    onEnemyDefeated = ::handleEnemyDefeated,
+                )
+            }
+            // Auto-select the first living enemy so the hate icons
+            // on the hero panels are populated the moment combat
+            // begins. The player can override with a tap.
+            setSelectedEnemy(next.enemies.firstOrNull { it.isAlive })
+        } else {
+            mode = Mode.EXPLORATION
+            // No active encounter -> nothing to show hate for.
+            // Clear the selection so the hate slots render empty.
+            setSelectedEnemy(null)
+        }
+        onCombatChanged?.invoke(next)
+    }
+
+    /**
+     * Caller-facing selection setter used by the input handler when
+     * the player taps an enemy cell. Idempotent (same enemy =
+     * no-op) so re-taps don't spam the listener; passing a dead
+     * enemy clears the selection because tap-to-target a corpse
+     * makes no sense.
+     */
+    fun setSelectedEnemy(enemy: Enemy?) {
+        val next = if (enemy != null && !enemy.isAlive) null else enemy
+        if (selectedEnemy === next) return
+        selectedEnemy = next
+        onSelectedEnemyChanged?.invoke(next)
+    }
+
+    /**
+     * Wired into [CombatController]: when the defeated enemy was
+     * the one the panel is currently surfacing, rotate to the next
+     * living enemy in the encounter so the icons stay populated
+     * for the rest of the fight. When no living enemies remain
+     * the selection clears - combat is about to end anyway, but
+     * being explicit keeps the icon column from rendering a stale
+     * corpse during the victory log lines.
+     */
+    private fun handleEnemyDefeated(defeated: Enemy) {
+        if (selectedEnemy !== defeated) return
+        val nextAlive = combat?.enemies?.firstOrNull { it.isAlive }
+        setSelectedEnemy(nextAlive)
+    }
 
     // ---- Auto-move state ----
     //
@@ -131,6 +258,28 @@ class Game(
     var onActiveHeroSlotChanged: ((Int?) -> Unit)? = null
 
     /**
+     * Slot the bottom hero panel should highlight with the white
+     * "you're up" border:
+     *   - In combat, follows the active hero whose turn it is via
+     *     the controller's [CombatController.currentHeroSlot]. The
+     *     user can't override this - the box always tracks the
+     *     initiative order during a fight.
+     *   - Out of combat, falls back to [activeHeroSlot] (the
+     *     user-selected slot from the exploration-mode flow).
+     *
+     * Null when nothing should be highlighted (e.g. the party
+     * isn't built yet, or it's an enemy's turn mid-combat).
+     */
+    val spotlightHeroSlot: Int?
+        get() {
+            val controller = combatController
+            if (combat != null && controller != null) {
+                return controller.currentHeroSlot
+            }
+            return activeHeroSlot
+        }
+
+    /**
      * Marks [slot] as the active hero (or clears it when [slot] is null).
      * Fires [onActiveHeroSlotChanged] once; idempotent if the slot is
      * already active.
@@ -168,7 +317,10 @@ class Game(
      */
     private fun defaultSkillFor(slot: Int): Skill? {
         val hero = party?.heroes?.getOrNull(slot) ?: return null
-        return SkillCatalog.basicAttackFor(hero.heroClass)
+        // Weapon-aware basic attack so the staged auto-Attack
+        // shows the correct R-value (e.g. R2 for an Archer with
+        // a crude bow) in the picker.
+        return hero.basicAttackSkill
     }
 
     /**
@@ -203,17 +355,19 @@ class Game(
     }
 
     /**
-     * Attempts to grow the current floor by attaching a random template at
-     * the open connector [cell]. Returns true if a new template was placed.
+     * Read-only probe: can the dungeon grow at [cell] right now?
      *
-     * Called every time the party steps onto an open-connector cell - both
-     * single-tap adjacent moves and auto-move path steps. No-op if [cell]
-     * is not an open connector or no candidate template fits.
+     * Under the current "sealed-at-gen" floor model the answer is
+     * always false - [FloorGenerator] places every room, hall, and
+     * cap up-front, so by the time the player walks the floor every
+     * connector is either merged or capped. The method is retained
+     * because the renderer still calls it as a defensive secondary
+     * check next to its primary hidden-neighbor exit-arrow logic;
+     * returning false unconditionally lets that branch fall through
+     * cleanly. Remove (and the renderer call with it) if the design
+     * ever swings back to runtime tap-to-extend.
      */
-    fun tryExtendFromConnector(cell: Cell): Boolean {
-        val f = floor ?: return false
-        return f.tryExtendFromConnector(cell, templates, runtimeRng)
-    }
+    fun canExtendAt(@Suppress("UNUSED_PARAMETER") cell: Cell): Boolean = false
 
     // ---- Auto-move API ----
 
@@ -245,6 +399,37 @@ class Game(
         moveAccumSec = MOVE_STEP_SEC
         lastRequestedTarget = target
         return true
+    }
+
+    /**
+     * Routes a tap during combat to the controller's
+     * [CombatController.attemptPartyMove] - the only legal way for
+     * the party to move while a fight is active.
+     *
+     * No-op (returns [CombatController.PartyMoveResult.REJECTED])
+     * outside of combat or before the controller has been set up.
+     * The host can use the result to decide whether to redraw or
+     * show feedback; tapping random cells during combat
+     * intentionally returns REJECTED rather than failing loudly.
+     */
+    fun attemptPartyMoveInCombat(target: Cell): CombatController.PartyMoveResult {
+        val controller = combatController ?: return CombatController.PartyMoveResult.REJECTED
+        return controller.attemptPartyMove(target)
+    }
+
+    /**
+     * Heal commit wrapper used by the action-bar handler once the
+     * player picks a target from [com.tavisdor.app.ui.HealTargetDialog].
+     * Routes to the controller and returns its accept / reject
+     * verdict so the activity can decide whether to clear the
+     * staged skill and force a redraw.
+     *
+     * No-op (returns false) outside of combat or before the
+     * controller has been set up.
+     */
+    fun commitHeroHealInCombat(casterSlot: Int, skill: Skill, targetSlot: Int): Boolean {
+        val controller = combatController ?: return false
+        return controller.commitHeroHeal(casterSlot, skill, targetSlot)
     }
 
     /**
@@ -296,16 +481,19 @@ class Game(
 
         pendingPath.removeFirst()
         f.partyCell = next
-        // Tracks exploration for gates like the staircase-spawn threshold
-        // (see Floor.staircaseTemplateAllowed); keep this immediately
-        // after the move so every visited cell is counted exactly once.
+        // Tracks exploration for gates that still care about visited
+        // counts (boss-room gates, future XP / journal triggers).
+        // Fog of war reveal lives inside recordVisited too via the
+        // one-room-ahead lookahead.
         f.recordVisited(next)
         camera.centerOn(next.x, next.y)
 
-        // Stepping onto a still-open red pixel attaches a fresh template
-        // there. The path itself is unaffected (the connector cell stays
-        // walkable), so the party can keep walking through it.
-        if (f.isOpenConnector(next)) tryExtendFromConnector(next)
+        // Note: runtime tap-to-extend is intentionally absent. Floors
+        // ship fully sealed from FloorGenerator (all open connectors
+        // are merged or capped at gen time), so stepping onto a
+        // connector is just a normal walk. If the sealed-at-gen
+        // contract ever changes, restore the extension call here AND
+        // un-stub Game.canExtendAt.
 
         if (checkEnterCombatOn(next)) {
             pendingPath.clear()
@@ -357,17 +545,42 @@ class Game(
     }
 
     /**
-     * Hook for combat detection during auto-move. Returns true when the
-     * party should stop walking because an enemy has been revealed at or
-     * adjacent to [cell]; the move loop will then halt and [mode] should
-     * be flipped to [Mode.COMBAT].
+     * Combat trigger fired each step of [advanceOneStep] when the
+     * party moves onto [cell].
      *
-     * Stubbed to always return false until monsters are spawned onto floors.
-     * When that lands, this is where line-of-sight + room-entry checks fire
-     * and [combat] gets populated.
+     * Rule (from the combat spec): the party is in combat with every
+     * living enemy in the SAME placement as [cell] - "same room"
+     * for ordinary rooms, "same hallway" for hall_* templates. Merge
+     * connectors (cells that belong to two adjacent placements) pull
+     * enemies from both, so stepping into the boundary cell of an
+     * occupied room counts as entering that room.
+     *
+     * On a positive hit:
+     *   1. Snapshot the living enemies into a fresh [Combat].
+     *   2. Hand it to [setCombat]; that flips [mode] to COMBAT, fires
+     *      [onCombatChanged] (the activity binds the turn-order
+     *      strip + flips its visibility off that), and pre-rolls
+     *      initiative with d6 tiebreaks.
+     *   3. Returns true so the auto-move loop halts the party
+     *      mid-path; the next move requires a fresh tap.
+     *
+     * Already-in-combat is a no-op: the trigger only fires when we
+     * transition OUT of [Mode.EXPLORATION], so a single fight doesn't
+     * re-construct itself every step. Empty rooms also no-op.
      */
-    private fun checkEnterCombatOn(@Suppress("UNUSED_PARAMETER") cell: Cell): Boolean {
-        return false
+    private fun checkEnterCombatOn(cell: Cell): Boolean {
+        if (mode != Mode.EXPLORATION) return false
+        val f = floor ?: return false
+        val p = party ?: return false
+        val livingEnemies = f.enemiesInRoomOf(cell).filter { it.hp > 0 }
+        if (livingEnemies.isEmpty()) return false
+        val encounter = Combat(
+            party = p,
+            enemies = livingEnemies.toMutableList(),
+            rng = runtimeRng,
+        )
+        setCombat(encounter)
+        return true
     }
 
     /**
@@ -433,12 +646,28 @@ class Game(
      * (smooth walk tweens, combat hit reactions, fog reveals) go here too.
      */
     fun tickAnimations(dtSec: Float): Boolean {
+        // While in combat, drive the per-turn orchestrator. Enemy AI
+        // think-delays and the turn-order strip's slide-off animation
+        // both need wall-clock progress; the controller returns true
+        // whenever a redraw is warranted so the host can keep its
+        // invalidate loop hot.
+        if (mode == Mode.COMBAT) {
+            val controller = combatController ?: return false
+            val deltaMs = (dtSec * 1000f).toLong().coerceAtLeast(0L)
+            return controller.tick(deltaMs)
+        }
+        // While exploring, the renderer drives an idle "!" bounce
+        // animation that needs a continuous redraw cadence even when
+        // the party isn't moving. Returning true here keeps GameView's
+        // Choreographer loop invalidating once per frame; the per-step
+        // mover below still runs at its own MOVE_STEP_SEC cadence.
         if (mode != Mode.EXPLORATION) return false
-        if (pendingPath.isEmpty()) return false
+        if (pendingPath.isEmpty()) return true
         moveAccumSec += dtSec
-        if (moveAccumSec < MOVE_STEP_SEC) return false
+        if (moveAccumSec < MOVE_STEP_SEC) return true
         moveAccumSec -= MOVE_STEP_SEC
-        return advanceOneStep()
+        advanceOneStep()
+        return true
     }
 
     companion object {

@@ -16,13 +16,26 @@ import android.util.Log
  *   - Blue  (#0000FF) -> floor cell AND a staircase down to the next floor.
  *   - Any other color -> skipped with a warning log so typos are caught early.
  *
- * Filename conventions:
- *   - `tile*.png`  -> normal room template (eligible on every floor).
- *   - `boss*.png`  -> boss room (eligible only on even-depth floors, max
- *                    one per floor; see [Floor.bossTemplateAllowed]).
- *
- * The hallway folder is currently unused (a unified pool keeps the generator
- * simple); leave it empty until/unless a rooms/hallways distinction is needed.
+ * Filename conventions (checked in this order so `end_room_*` is NOT
+ * misclassified as `end_*`):
+ *   - `start_*.png`     -> entrance room (one per floor, always at origin).
+ *   - `end_room_*.png`  -> hallway end-cap. Used by [FloorGenerator] to
+ *                          seal any still-open connectors after the
+ *                          room budget is met. NOT a room for budget
+ *                          purposes.
+ *   - `end_*.png`       -> stairs-down room. Exactly one per floor;
+ *                          [FloorGenerator] reserves placement until
+ *                          the very end so it lands at the deepest
+ *                          open connector.
+ *   - `sp_*.png`        -> "special" room. At most one per floor.
+ *   - `boss*.png`       -> boss room. Even-depth floors only, at most
+ *                          one per floor.
+ *   - `hall_*.png`      -> hallway segment. Links rooms together;
+ *                          does NOT count toward the room budget.
+ *   - `room_*.png`      -> destination room. Counts toward budget.
+ *   - `tile*.png`       -> legacy unprefixed fallback. Treated as
+ *                          `room_*` so old assets still work while
+ *                          filenames are migrated.
  */
 class TemplateLibrary private constructor(
     val rooms: List<RoomTemplate>,
@@ -51,8 +64,15 @@ class TemplateLibrary private constructor(
                     TAG,
                     "Template ${it.id} (${it.width}x${it.height}, " +
                         "${it.floorCells.size} floor, ${it.connectors.size} conn, " +
-                        "${it.doors.size} door, ${it.staircases.size} stair" +
-                        (if (it.isBoss) ", BOSS" else "") + ")\n${it.toAsciiGrid()}",
+                        "${it.doors.size} door, ${it.staircases.size} down, ${it.stairsUp.size} up" +
+                        (if (it.isBoss) ", BOSS" else "") +
+                        (if (it.isStart) ", START" else "") +
+                        (if (it.isEnd) ", END" else "") +
+                        (if (it.isEndCap) ", ENDCAP" else "") +
+                        (if (it.isSpecial) ", SP" else "") +
+                        (if (it.isHall) ", HALL" else "") +
+                        (if (it.isRoom) ", ROOM" else "") +
+                        ")\n${it.toAsciiGrid()}",
                 )
             }
             return TemplateLibrary(rooms)
@@ -66,6 +86,7 @@ class TemplateLibrary private constructor(
                 val rawConn = HashSet<Cell>()
                 val rawDoor = HashSet<Cell>()
                 val rawStair = HashSet<Cell>()
+                val rawStairUp = HashSet<Cell>()
                 for (y in 0 until bmp.height) {
                     for (x in 0 until bmp.width) {
                         val px = bmp.getPixel(x, y)
@@ -84,6 +105,9 @@ class TemplateLibrary private constructor(
                             r == 0 && g == 0 && b == 255 -> {
                                 rawFloor += Cell(x, y); rawStair += Cell(x, y)
                             }
+                            r == 255 && g == 255 && b == 0 -> {
+                                rawFloor += Cell(x, y); rawStairUp += Cell(x, y)
+                            }
                             else -> Log.w(TAG, "Unknown color in $path at ($x,$y): rgb($r,$g,$b) - ignored.")
                         }
                     }
@@ -96,6 +120,21 @@ class TemplateLibrary private constructor(
                 val maxY = rawFloor.maxOf { it.y }
                 fun rebase(set: HashSet<Cell>): HashSet<Cell> =
                     set.mapTo(HashSet(set.size)) { Cell(it.x - minX, it.y - minY) }
+                // Order-sensitive classification: `end_room_*` MUST be
+                // checked before `end_*` (both start with "end_"), and the
+                // legacy `tile*` fallback only fires when none of the
+                // explicit prefixes match.
+                val isStart = id.startsWith("start_", ignoreCase = true)
+                val isEndCap = id.startsWith("end_room_", ignoreCase = true)
+                val isEnd = !isEndCap && id.startsWith("end_", ignoreCase = true)
+                val isSpecial = id.startsWith("sp_", ignoreCase = true)
+                val isBoss = id.startsWith("boss", ignoreCase = true)
+                val isHall = id.startsWith("hall_", ignoreCase = true)
+                val explicitRoom = id.startsWith("room_", ignoreCase = true)
+                val isLegacyTile = id.startsWith("tile", ignoreCase = true) &&
+                    !isStart && !isEnd && !isEndCap && !isSpecial &&
+                    !isBoss && !isHall && !explicitRoom
+                val isRoom = explicitRoom || isLegacyTile
                 return RoomTemplate(
                     id = id,
                     width = maxX - minX + 1,
@@ -104,7 +143,14 @@ class TemplateLibrary private constructor(
                     connectors = rebase(rawConn),
                     doors = rebase(rawDoor),
                     staircases = rebase(rawStair),
-                    isBoss = id.startsWith("boss", ignoreCase = true),
+                    stairsUp = rebase(rawStairUp),
+                    isBoss = isBoss,
+                    isStart = isStart,
+                    isEnd = isEnd,
+                    isSpecial = isSpecial,
+                    isHall = isHall,
+                    isRoom = isRoom,
+                    isEndCap = isEndCap,
                 )
             } finally {
                 bmp.recycle()

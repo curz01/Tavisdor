@@ -21,10 +21,12 @@ import com.tavisdor.app.skills.SkillCastType
  *
  * Opened from the "Skills & Spells" button on the hero detail panel.
  * Lists all known skills (everything with unlockLevel <= hero level)
- * grouped into three sections in deterministic order:
- *   - Actions  (SkillButton.ACTION)
- *   - Guard    (SkillButton.GUARD)
- *   - Spells   (SkillButton.SPELLS)
+ * grouped into two sections in deterministic order:
+ *   - Actions  (SkillButton.ACTION) - damage skills and spells
+ *   - Guard    (SkillButton.GUARD)  - prepared / passive / defensive
+ *
+ * The standalone Spells section was retired when spells were folded
+ * into Actions; the SPL bucket is gone from [SkillButton] entirely.
  *
  * No selection / staging happens here - that flow lives in
  * [SkillPickerDialog]. This dialog is purely informational. Close
@@ -71,7 +73,6 @@ class HeroSkillsDialog(private val context: Context) {
         listOf(
             SkillButton.ACTION to R.string.hero_detail_skills_section_action,
             SkillButton.GUARD to R.string.hero_detail_skills_section_guard,
-            SkillButton.SPELLS to R.string.hero_detail_skills_section_spells,
         ).forEach { (bucket, headerRes) ->
             val list = grouped[bucket].orEmpty()
             if (list.isEmpty()) return@forEach

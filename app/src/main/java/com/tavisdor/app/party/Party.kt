@@ -1,6 +1,7 @@
 package com.tavisdor.app.party
 
 import com.tavisdor.app.debug.DebugConfig
+import com.tavisdor.app.items.Weapon
 import com.tavisdor.app.save.HeroSaveData
 
 /**
@@ -66,7 +67,16 @@ class Party private constructor(
         // [Hero.dexterity] and [Hero.maxHp] are derived now; persisting
         // them keeps the schema unchanged but the values are informational
         // only - load re-derives both.
-        HeroSaveData(it.name, it.heroClass, it.level, it.xp, it.maxHp, it.hp, it.dexterity)
+        HeroSaveData(
+            name = it.name,
+            heroClass = it.heroClass,
+            gender = it.gender,
+            level = it.level,
+            xp = it.xp,
+            maxHp = it.maxHp,
+            hp = it.hp,
+            dexterity = it.dexterity,
+        )
     }
 
     companion object {
@@ -89,7 +99,7 @@ class Party private constructor(
         fun create(drafts: List<HeroDraft>): Party {
             require(drafts.size == 4) { "Party.create requires exactly 4 hero drafts." }
             return Party(drafts.map { draft ->
-                Hero.spawn(name = draft.name, cls = draft.heroClass)
+                Hero.spawn(name = draft.name, cls = draft.heroClass, gender = draft.gender)
             })
         }
 
@@ -110,6 +120,7 @@ class Party private constructor(
                 val proto = Hero(
                     name = it.name,
                     heroClass = it.heroClass,
+                    gender = it.gender,
                     level = effectiveLevel,
                     // Wipe XP toward the next level if the override
                     // pushed this hero up - the saved value belongs to
@@ -117,6 +128,11 @@ class Party private constructor(
                     // displayed against a different denominator.
                     xp = if (effectiveLevel == it.level) it.xp else 0,
                     armorClass = Hero.defaultArmorClassFor(it.heroClass),
+                    // Weapons aren't part of the save schema yet, so
+                    // re-issue the crude starter on every load. Once
+                    // looted weapons can be carried across saves this
+                    // becomes "saved weapon ?: crude starter".
+                    weapon1 = Weapon.crudeStarterFor(it.heroClass),
                 )
                 // Saved hp may exceed the freshly-derived maxHp (shouldn't,
                 // but defend against a retuned chart) - clamp so the

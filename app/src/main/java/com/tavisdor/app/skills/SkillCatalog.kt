@@ -1,5 +1,6 @@
 package com.tavisdor.app.skills
 
+import com.tavisdor.app.enemies.Element
 import com.tavisdor.app.party.HeroClass
 import com.tavisdor.app.party.LevelProgression
 
@@ -8,8 +9,10 @@ import com.tavisdor.app.party.LevelProgression
  * unlock chart (level -> skill) and the effect descriptions, verbatim
  * from the design doc.
  *
- * Bucketing into the panel buttons (ACT / GRD / SPL) is computed from
- * [Skill.mpCost] + [Skill.castType] - see [Skill.button].
+ * Bucketing into the panel buttons (ACT / GRD) is computed from
+ * [Skill.castType] with optional per-skill overrides - see
+ * [Skill.button]. The standalone SPL bucket was retired; spells now
+ * surface under ACTION alongside other damage skills.
  */
 object SkillCatalog {
 
@@ -18,9 +21,13 @@ object SkillCatalog {
         skill(
             id = "mage_fire_1", name = "Fire I", level = 1,
             type = SkillCastType.ACTIVE, range = 1, mp = 1,
+            damage = 3, element = Element.FIRE,
             desc = "Fire damage 3, 1 mana. Less damage to Water type, more to Earth type.",
         ),
         skill(
+            // Heal is not an attack - element stays null so combat
+            // math routes it through a future heal resolver rather
+            // than the damage / resist pipeline.
             id = "mage_heal_1", name = "Heal I", level = 2,
             type = SkillCastType.ACTIVE, range = 1, mp = 1,
             desc = "Heal one target 3 HP, 1 mana. Cannot heal dead (someone at 0 HP).",
@@ -34,12 +41,14 @@ object SkillCatalog {
         skill(
             id = "mage_fire_2", name = "Fire II", level = 4,
             type = SkillCastType.ACTIVE, range = 2, mp = 3,
+            damage = 6, element = Element.FIRE,
             desc = "Fire damage 6, 3 mana. 50% chance to burn target next turn for 1 damage. " +
                 "Less damage to Water type, more to Earth type.",
         ),
         skill(
             id = "mage_earth_1", name = "Earth I", level = 5,
             type = SkillCastType.ACTIVE, range = 1, mp = 1,
+            damage = 2, element = Element.EARTH,
             desc = "Earth damage 2, 1 mana.",
         ),
         skill(
@@ -50,17 +59,20 @@ object SkillCatalog {
         skill(
             id = "mage_earth_2", name = "Earth II", level = 7,
             type = SkillCastType.ACTIVE, range = 1, mp = 3,
+            damage = 4, element = Element.EARTH,
             desc = "Earth damage 4, 3 mana. 50% chance the enemy cannot move for 1 turn.",
         ),
         skill(
             id = "mage_fire_3", name = "Fire III", level = 8,
             type = SkillCastType.ACTIVE, range = 3, mp = 5,
+            damage = 10, element = Element.FIRE,
             desc = "Fire damage 10, 5 mana. 85% chance to burn target for 2 turns at 3 damage. " +
                 "Less damage to Water type, more to Earth type.",
         ),
         skill(
             id = "mage_earth_3", name = "Earth III", level = 9,
             type = SkillCastType.ACTIVE, range = 2, mp = 5,
+            damage = 6, element = Element.EARTH,
             desc = "Earth damage 6, 5 mana. 75% chance the enemy cannot move for 2 turns; " +
                 "25% chance the enemy cannot attack next turn.",
         ),
@@ -73,10 +85,15 @@ object SkillCatalog {
     ).forClass(HeroClass.MAGE)
 
     // ---------- FIGHTER ----------
+    // Damage on melee skills represents the bonus added to the
+    // basic-attack damage (STR + weapon). Authored averages for
+    // dice expressions in the description doc; the descriptive
+    // string is left intact for flavor.
     private val FIGHTER: List<Skill> = listOf(
         skill(
             id = "fighter_heavy_strike", name = "Heavy Strike", level = 1,
             type = SkillCastType.ACTIVE, range = 1, mp = 0,
+            damage = 4, // 2d3 average
             desc = "Attack +2d3 damage. Cannot take an action next turn.",
         ),
         skill(
@@ -94,6 +111,14 @@ object SkillCatalog {
                 "Does not cost an action. 1 mana.",
         ),
         skill(
+            // Charge damage is a 50% modifier on the basic attack;
+            // resolve-side multiplier will land with the combat
+            // pipeline. Stored as null so it doesn't get auto-added
+            // to the bonus column today.
+            // Stable id must stay literal here so the FIGHTER list
+            // can initialize before [FIGHTER_CHARGE_ID] declares the
+            // constant version of this same string. The combat
+            // controller references the constant for safety.
             id = "fighter_charge", name = "Charge", level = 4,
             type = SkillCastType.ACTIVE, range = 2, mp = 1,
             desc = "Move party 2 squares ahead (not diagonal) toward enemy and deal 50% damage. " +
@@ -102,6 +127,7 @@ object SkillCatalog {
         skill(
             id = "fighter_thrust", name = "Thrust", level = 5,
             type = SkillCastType.ACTIVE, range = 1, mp = 0,
+            damage = 2, // 1d3 average
             desc = "Attack +1d3. 50% chance to also hit a target standing behind the current " +
                 "enemy. If no enemy behind and no wall, pushes the enemy back 1 square.",
         ),
@@ -160,6 +186,7 @@ object SkillCatalog {
             id = "thief_trick_attack", name = "Trick Attack", level = 4,
             type = SkillCastType.ACTIVE, range = 1, mp = 1,
             costsAction = false,
+            damage = 4, // 1d6 average rounded down (3.5 -> 4 in author table)
             desc = "Next attack deals +1d6 damage, and hate is added to another party member of " +
                 "your choice. 1 mana. Does not cost an action.",
         ),
@@ -178,6 +205,7 @@ object SkillCatalog {
         skill(
             id = "thief_sneak_attack", name = "Sneak Attack", level = 7,
             type = SkillCastType.ACTIVE, range = 1, mp = 2,
+            damage = 14, // 3d8 average (13.5 rounded up)
             desc = "Attack +3d8. On a successful hit, hate is set to 5. 2 mana.",
         ),
         skill(
@@ -190,6 +218,7 @@ object SkillCatalog {
         skill(
             id = "thief_double_strike", name = "Double Strike", level = 9,
             type = SkillCastType.PREPARE, range = 1, mp = 1,
+            damage = 7, // 2d6 average
             desc = "Next attack deals +2d6 damage. 1 mana.",
         ),
         skill(
@@ -234,14 +263,21 @@ object SkillCatalog {
                 "arrows. 2 mana. Does not cost an action.",
         ),
         skill(
+            // Elemental arrows are hybrid: normal arrow damage is
+            // melee-class (STR + weapon) plus an elemental rider.
+            // We model the rider here via `damage + element`; the
+            // combat resolver layers it on top of the basic attack
+            // when both are present. 1d6 ice / fire averaged.
             id = "archer_fire_arrow", name = "Fire Arrow", level = 6,
             type = SkillCastType.ACTIVE, range = 3, mp = 0,
+            damage = 4, element = Element.FIRE,
             desc = "Normal damage + 1d6 fire damage. Increased damage to Earth, reduced damage " +
                 "to Water.",
         ),
         skill(
             id = "archer_ice_arrow", name = "Ice Arrow", level = 7,
             type = SkillCastType.ACTIVE, range = 3, mp = 0,
+            damage = 4, element = Element.WATER, // ice resolves under WATER per the triangle
             desc = "Normal damage + 1d6 ice damage. Increased damage to Fire, reduced damage " +
                 "to Earth.",
         ),
@@ -294,6 +330,34 @@ object SkillCatalog {
     const val BASIC_ATTACK_ID: String = "basic_attack"
 
     /**
+     * Stable id of the universal basic Defend every hero knows.
+     * Pair-counterpart of [BASIC_ATTACK_ID]: Attack is the baseline
+     * option under ACT, Defend is the baseline option under GRD.
+     */
+    const val BASIC_DEFEND_ID: String = "basic_defend"
+
+    /** AC bonus granted by the universal Defend skill for one turn. */
+    const val BASIC_DEFEND_AC_BONUS: Int = 2
+
+    /**
+     * Stable id of the Fighter's "Charge" skill. The combat
+     * controller treats this id specially: instead of going
+     * through the regular swing-in-place flow it lunges the
+     * party up to [Skill.range] cells toward the target along a
+     * cardinal path and then strikes for
+     * [FIGHTER_CHARGE_DAMAGE_PCT]% of normal melee damage.
+     */
+    const val FIGHTER_CHARGE_ID: String = "fighter_charge"
+
+    /**
+     * Charge damage as a percentage of a normal basic-attack
+     * swing (STR + weapon). Authored at 50% per the design
+     * doc - the lower damage is the cost of paying 1 MP to also
+     * close a 2-cell gap.
+     */
+    const val FIGHTER_CHARGE_DAMAGE_PCT: Int = 50
+
+    /**
      * The default "Attack" action every hero has access to from
      * level 1, regardless of class. Lives outside the per-class
      * tables on purpose: it's not a level-up unlock and it shouldn't
@@ -316,6 +380,31 @@ object SkillCatalog {
             "No mana cost; uses the hero's main action.",
     )
 
+    /**
+     * The default "Defend" action every hero has access to from
+     * level 1, regardless of class. Mirrors [basicAttackFor] but
+     * lives under the GUARD button via [Skill.buttonOverride] -
+     * cast type is ACTIVE so it resolves on the same turn it's
+     * picked.
+     *
+     * Effect: +[BASIC_DEFEND_AC_BONUS] armor class for this turn.
+     * Consumes the hero's action (you can either swing or brace,
+     * not both), matching the chart's "uses up their action" note.
+     */
+    fun basicDefendFor(cls: HeroClass): Skill = Skill(
+        id = BASIC_DEFEND_ID,
+        displayName = "Defend",
+        heroClass = cls,
+        castType = SkillCastType.ACTIVE,
+        range = 0,
+        unlockLevel = 1,
+        mpCost = 0,
+        costsAction = true,
+        description = "Brace this turn for +$BASIC_DEFEND_AC_BONUS armor class. " +
+            "No mana cost; uses the hero's main action.",
+        buttonOverride = SkillButton.GUARD,
+    )
+
     /** Full skill list for [cls], in unlock order. */
     fun allSkillsFor(cls: HeroClass): List<Skill> = when (cls) {
         HeroClass.MAGE -> MAGE
@@ -328,13 +417,14 @@ object SkillCatalog {
      * Skills a level-[level] hero of [cls] currently knows (everything
      * with `unlockLevel <= level`).
      *
-     * The universal [basicAttackFor] is prepended so every hero - of
-     * every class, at every level - has an "Attack" option in the
-     * Actions section of the picker / skills viewer.
+     * Both universal baselines - [basicAttackFor] and [basicDefendFor] -
+     * are prepended so every hero, of every class, at every level,
+     * has an Attack option under ACT and a Defend option under GRD
+     * in the picker / skills viewer.
      */
     fun knownSkillsFor(cls: HeroClass, level: Int): List<Skill> {
         val classKnown = allSkillsFor(cls).filter { it.unlockLevel <= level }
-        return listOf(basicAttackFor(cls)) + classKnown
+        return listOf(basicAttackFor(cls), basicDefendFor(cls)) + classKnown
     }
 
     /**
@@ -355,14 +445,15 @@ object SkillCatalog {
     /**
      * Lookup by stable [Skill.id]; null if no such skill exists.
      *
-     * Recognises [BASIC_ATTACK_ID] explicitly because Attack lives
-     * outside the per-class tables; the returned instance is tagged
-     * to [HeroClass.FIGHTER] as a placeholder when no class context
-     * is available - callers needing the right class should prefer
-     * [basicAttackFor].
+     * Recognises [BASIC_ATTACK_ID] and [BASIC_DEFEND_ID] explicitly
+     * because both live outside the per-class tables; the returned
+     * instances are tagged to [HeroClass.FIGHTER] as a placeholder
+     * when no class context is available - callers needing the
+     * right class should prefer [basicAttackFor] / [basicDefendFor].
      */
     fun byId(id: String): Skill? {
         if (id == BASIC_ATTACK_ID) return basicAttackFor(HeroClass.FIGHTER)
+        if (id == BASIC_DEFEND_ID) return basicDefendFor(HeroClass.FIGHTER)
         return allSkillsFor(HeroClass.MAGE).firstOrNull { it.id == id }
             ?: allSkillsFor(HeroClass.FIGHTER).firstOrNull { it.id == id }
             ?: allSkillsFor(HeroClass.THIEF).firstOrNull { it.id == id }
@@ -380,6 +471,8 @@ object SkillCatalog {
         mp: Int = 0,
         costsAction: Boolean = true,
         desc: String = "",
+        damage: Int? = null,
+        element: Element? = null,
     ): Skill = Skill(
         id = id,
         displayName = name,
@@ -390,6 +483,8 @@ object SkillCatalog {
         mpCost = mp,
         costsAction = costsAction,
         description = desc,
+        damage = damage,
+        element = element,
     )
 
     private fun List<Skill>.forClass(cls: HeroClass): List<Skill> =

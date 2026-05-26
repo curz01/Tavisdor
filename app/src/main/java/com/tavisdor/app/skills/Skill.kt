@@ -1,5 +1,6 @@
 package com.tavisdor.app.skills
 
+import com.tavisdor.app.enemies.Element
 import com.tavisdor.app.party.HeroClass
 
 /**
@@ -19,10 +20,17 @@ enum class SkillCastType { ACTIVE, PREPARE, PASSIVE }
  * on top as those systems land. For now the canonical effect text lives
  * in [description].
  *
- * Bucketing rule (per design): mana cost trumps cast type.
- *   - [mpCost] > 0                      => [SkillButton.SPELLS]
+ * Bucketing rule (per design): collapse spells into ACTION, keep
+ * GUARD for prepared / passive / defensive skills.
+ *   - [buttonOverride] non-null         => exactly that bucket
  *   - else [castType] == ACTIVE         => [SkillButton.ACTION]
+ *     (covers basic Attack, every damage skill, and every spell -
+ *     mana cost no longer steers bucketing on its own)
  *   - else (PREPARE / PASSIVE)          => [SkillButton.GUARD]
+ *
+ * The override exists for skills that don't fit the cast-type
+ * heuristic: the universal Defend is ACTIVE (fires this turn) but
+ * lives under GUARD because it's defensive, not offensive.
  */
 data class Skill(
     /**
@@ -67,18 +75,59 @@ data class Skill(
      * fleshed out enough to consume them.
      */
     val description: String = "",
+    /**
+     * Optional explicit bucket. When non-null this skill ALWAYS
+     * surfaces under [buttonOverride] regardless of [castType] -
+     * use it for ACTIVE skills that should still live under GUARD
+     * (defensive moves like Defend) or PREPARE skills the designer
+     * wants surfaced as a direct ACTION. Leave null to let the
+     * cast-type heuristic decide.
+     */
+    val buttonOverride: SkillButton? = null,
+    /**
+     * Authored base damage. Interpretation depends on whether this
+     * skill is a spell:
+     *   - Spell ([element] != null): full spell damage before the
+     *     resist check + elemental multiplier. Caster INT is added
+     *     on top at resolve time (see CombatMath).
+     *   - Melee skill ([element] == null) with non-null [damage]:
+     *     ADDS to the basic-attack damage. e.g. Heavy Strike's
+     *     "+2d3" is authored as the average (4); resolution adds
+     *     that to STR + weapon damage.
+     *   - null: skill doesn't deal damage on its own
+     *     (Heal, buffs, passives, prepare-only setup moves).
+     */
+    val damage: Int? = null,
+    /**
+     * Elemental tag for spell damage. null means this skill is NOT
+     * an elemental spell - it resolves through the melee path
+     * (dodge check) even if it costs MP and reads like magic.
+     *
+     * Heal / utility / passive skills with no damage typically have
+     * [element] == null because they aren't subject to the resist
+     * or elemental triangle math.
+     */
+    val element: Element? = null,
 ) {
     /**
-     * Which hero-panel button surfaces this skill. Computed - never
-     * stored - so the rule lives in exactly one place.
+     * Which hero-panel button surfaces this skill. Computed from
+     * [buttonOverride] (when set) or [castType] (when null), so the
+     * rule lives in exactly one place.
      */
     val button: SkillButton
-        get() = when {
-            mpCost > 0 -> SkillButton.SPELLS
-            castType == SkillCastType.ACTIVE -> SkillButton.ACTION
-            else -> SkillButton.GUARD
+        get() = buttonOverride ?: when (castType) {
+            SkillCastType.ACTIVE -> SkillButton.ACTION
+            SkillCastType.PREPARE, SkillCastType.PASSIVE -> SkillButton.GUARD
         }
 
     /** Convenience for the UI: passives are listed under GUARD but don't behave like a prepared action. */
     val isPassive: Boolean get() = castType == SkillCastType.PASSIVE
+
+    /**
+     * True iff this skill resolves through the SPELL combat path
+     * (resist check on INT, elemental triangle multiplier). Driven
+     * by [element] - the catalog tags every spell with its element
+     * even when [mpCost] is 0 (e.g. arrow elementals).
+     */
+    val isSpell: Boolean get() = element != null
 }

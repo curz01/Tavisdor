@@ -11,7 +11,6 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.content.res.AppCompatResources
 import com.tavisdor.app.R
 import com.tavisdor.app.game.Game
@@ -22,8 +21,8 @@ import com.tavisdor.app.skills.SkillCastType
 import com.tavisdor.app.skills.SkillCatalog
 
 /**
- * Modal skill picker launched from the bottom hero panel's ACT / GRD /
- * SPL buttons.
+ * Modal skill picker launched from the bottom hero panel's ACT / GRD
+ * buttons.
  *
  * Unlike a vanilla [AlertDialog.Builder.setItems] list, tapping a row
  * here does NOT immediately fire the skill. Instead the chosen [Skill]
@@ -198,14 +197,10 @@ class SkillPickerDialog(
     // ---- Selection logic ----
 
     private fun onRowTapped(skill: Skill, row: View) {
-        if (skill.castType == SkillCastType.PASSIVE) {
-            Toast.makeText(
-                context,
-                R.string.skill_picker_passive_locked,
-                Toast.LENGTH_SHORT,
-            ).show()
-            return
-        }
+        // Passive skills can't be staged - the row's "passive" tag
+        // and the lack of selection feedback communicate that on
+        // its own; no toast needed.
+        if (skill.castType == SkillCastType.PASSIVE) return
 
         // Tapping the already-selected row reverts to the default
         // basic Attack (never to "nothing staged"). Tapping Attack
@@ -217,7 +212,8 @@ class SkillPickerDialog(
         }
 
         // Otherwise: clear the previously selected row's border and
-        // stage the new skill.
+        // stage the new skill. The new row's blinking border IS the
+        // feedback - no toast needed.
         currentSelectionId?.let { oldId ->
             rowsBySkillId[oldId]?.let { clearSelectionBackground(it) }
         }
@@ -225,11 +221,6 @@ class SkillPickerDialog(
         applySelectionBackground(row, skill)
         startBlink(skill.id)
         game.setSelectedSkill(slot, skill)
-        Toast.makeText(
-            context,
-            context.getString(R.string.skill_picker_toast_selected, skill.displayName, heroNameForSlot()),
-            Toast.LENGTH_SHORT,
-        ).show()
     }
 
     /**
@@ -254,19 +245,14 @@ class SkillPickerDialog(
 
         // If we're currently looking at the ACT bucket, the Attack
         // row lives in this dialog - light it up so the player sees
-        // exactly what's staged now.
+        // exactly what's staged now. That blink IS the feedback;
+        // no toast needed.
         if (newDefault != null) {
             rowsBySkillId[newDefault.id]?.let { row ->
                 applySelectionBackground(row, newDefault)
                 row.post { startBlink(newDefault.id) }
             }
         }
-
-        Toast.makeText(
-            context,
-            context.getString(R.string.skill_picker_toast_reverted, heroNameForSlot()),
-            Toast.LENGTH_SHORT,
-        ).show()
     }
 
     // ---- Background swap helpers ----
@@ -303,15 +289,11 @@ class SkillPickerDialog(
 
     // ---- Misc helpers ----
 
-    private fun heroNameForSlot(): String =
-        game.party?.heroes?.getOrNull(slot)?.name.orEmpty()
-
     private fun dp(value: Int): Int =
         (value * context.resources.displayMetrics.density).toInt()
 
     private fun titleResFor(button: SkillButton): Int = when (button) {
         SkillButton.ACTION -> R.string.hero_skill_popup_title_action
         SkillButton.GUARD -> R.string.hero_skill_popup_title_guard
-        SkillButton.SPELLS -> R.string.hero_skill_popup_title_spells
     }
 }

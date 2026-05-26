@@ -97,8 +97,8 @@ class HeroDetailScreen(
 
         bindSlot(slotHelmet, R.string.hero_detail_slot_helmet, hero.helmet)
         bindSlot(slotArmor, R.string.hero_detail_slot_armor, hero.armor)
-        bindSlot(slotWeapon1, R.string.hero_detail_slot_weapon1, hero.weapon1)
-        bindSlot(slotWeapon2, R.string.hero_detail_slot_weapon2, hero.weapon2)
+        bindSlot(slotWeapon1, R.string.hero_detail_slot_weapon1, hero.weapon1?.displayName)
+        bindSlot(slotWeapon2, R.string.hero_detail_slot_weapon2, hero.weapon2?.displayName)
         bindSlot(slotBoots, R.string.hero_detail_slot_boots, hero.boots)
 
         scroll.scrollTo(0, 0)

@@ -23,15 +23,30 @@ object Pathfinder {
     )
 
     /**
-     * Returns the cells the party walks through, INCLUDING [from] at index 0
+     * Returns the cells the actor walks through, INCLUDING [from] at index 0
      * and [to] at the last index. Returns an empty list when [to] is not
      * walkable or not reachable from [from]; returns `[from]` when
      * `from == to`.
+     *
+     * [blocked] is an optional set of cells the search must avoid -
+     * used by the combat AI to route enemies around each other so
+     * two goblins racing toward the party don't stack on the same
+     * tile. The cells in [blocked] are treated exactly like walls
+     * for THIS call; they aren't permanently marked anywhere. If
+     * [from] itself is in [blocked] the search still starts from it
+     * (you can't be in a wall, but you can be where you currently
+     * stand even if some caller flagged it).
      */
-    fun findPath(floor: Floor, from: Cell, to: Cell): List<Cell> {
+    fun findPath(
+        floor: Floor,
+        from: Cell,
+        to: Cell,
+        blocked: Set<Cell> = emptySet(),
+    ): List<Cell> {
         if (from == to) return listOf(from)
         if (to !in floor.floorCells) return emptyList()
         if (from !in floor.floorCells) return emptyList()
+        if (to in blocked) return emptyList()
 
         val cameFrom = HashMap<Cell, Cell>()
         val visited = HashSet<Cell>()
@@ -51,6 +66,11 @@ object Pathfinder {
                 val n = Cell(curr.x + dir.x, curr.y + dir.y)
                 if (n in visited) continue
                 if (n !in floor.floorCells) continue
+                // Skip cells the caller has flagged as obstacles
+                // (other enemies, claimed move targets, etc.). The
+                // destination itself was rejected above, so this
+                // only affects intermediate cells.
+                if (n in blocked && n != to) continue
                 visited += n
                 cameFrom[n] = curr
                 frontier.addLast(n)
@@ -58,7 +78,6 @@ object Pathfinder {
         }
         if (!found) return emptyList()
 
-        // Reconstruct from `to` back to `from`, then reverse.
         val reverse = ArrayList<Cell>()
         var curr = to
         while (curr != from) {

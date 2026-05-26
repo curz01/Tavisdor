@@ -4,7 +4,6 @@ import android.app.AlertDialog
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
@@ -14,12 +13,17 @@ import com.tavisdor.app.dungeon.Cell
 import com.tavisdor.app.game.Game
 import com.tavisdor.app.party.HeroDraft
 import com.tavisdor.app.save.SaveStore
+import com.tavisdor.app.combat.HealResolver
+import com.tavisdor.app.skills.Skill
 import com.tavisdor.app.skills.SkillButton
+import com.tavisdor.app.skills.SkillCatalog
 import com.tavisdor.app.ui.ClassSelectScreen
+import com.tavisdor.app.ui.HealTargetDialog
 import com.tavisdor.app.ui.HeroDetailScreen
 import com.tavisdor.app.ui.InGameMenuDialog
 import com.tavisdor.app.ui.SkillPickerDialog
 import com.tavisdor.app.ui.TitleScreen
+import com.tavisdor.app.ui.TurnOrderBarView
 
 /**
  * Hosts four sibling overlays in [R.layout.activity_main]:
@@ -49,6 +53,11 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var gameView: GameView
     private lateinit var heroPanel: HeroPanelView
+    private lateinit var turnOrderBar: TurnOrderBarView
+    private lateinit var combatLogView: com.tavisdor.app.ui.CombatLogView
+    private lateinit var combatLogContainer: View
+    private lateinit var btnCombatLogUp: MaterialButton
+    private lateinit var btnCombatLogDown: MaterialButton
 
     private lateinit var titleScreen: TitleScreen
     private lateinit var classSelectScreen: ClassSelectScreen
@@ -70,6 +79,10 @@ class MainActivity : AppCompatActivity() {
         // fires this callback; we open the use-key / pick-lock / force
         // dialog so the player can decide how to deal with it.
         game.onLockedDoorPrompt = { cell -> showLockedDoorDialog(cell) }
+        // Show / hide the top-of-screen turn-order strip based on
+        // whether a Combat is active; the strip rebinds itself to
+        // the new encounter so portraits reflect the fresh fight.
+        game.onCombatChanged = { combat -> onCombatChanged(combat) }
 
         gameRoot = findViewById(R.id.gameRoot)
         titleOverlay = findViewById(R.id.titleOverlay)
@@ -77,11 +90,44 @@ class MainActivity : AppCompatActivity() {
         heroDetailOverlay = findViewById(R.id.heroDetailOverlay)
         gameView = findViewById(R.id.gameView)
         heroPanel = findViewById(R.id.heroPanel)
+        turnOrderBar = findViewById(R.id.turnOrderBar)
+        combatLogContainer = findViewById(R.id.combatLogContainer)
+        combatLogView = findViewById(R.id.combatLog)
+        combatLogView.setLog(game.combatLog)
+        btnCombatLogUp = findViewById(R.id.btnCombatLogUp)
+        btnCombatLogDown = findViewById(R.id.btnCombatLogDown)
+        btnCombatLogUp.setOnClickListener { combatLogView.scrollUp() }
+        btnCombatLogDown.setOnClickListener { combatLogView.scrollDown() }
+        // Sync the up / down button enabled state with the log's
+        // current scroll position so disabled greys out at the
+        // boundaries.
+        combatLogView.onScrollStateChanged = { refreshCombatLogScrollButtons() }
+        refreshCombatLogScrollButtons()
         btnActionBarMenu = findViewById(R.id.btnActionBarMenu)
         btnActionBarAction = findViewById(R.id.btnActionBarAction)
         btnActionBarItems = findViewById(R.id.btnActionBarItems)
 
         gameView.attachGame(game)
+        // Keep the turn-order strip AND the hero panel in lockstep
+        // with the dungeon's frame loop while combat is on. The
+        // strip would otherwise only animate its leaver slot (via
+        // its own self-invalidate) and miss handoffs to the next
+        // actor; the panel needs to redraw whenever the controller
+        // advances `currentHeroSlot` so the "you're up" white
+        // border tracks the turn order in real time.
+        gameView.onFrameTick = { needsRedraw ->
+            // Hero portraits cycle their idle animation (and the
+            // hurt-blink) continuously, so the panel needs a redraw
+            // every frame whenever a party exists - not just during
+            // combat. The gameRoot is hidden on title / class-select
+            // so this is a no-op cost when no party is loaded.
+            if (game.party != null) {
+                heroPanel.invalidate()
+            }
+            if (needsRedraw && game.combat != null) {
+                turnOrderBar.invalidate()
+            }
+        }
         heroPanel.attachGame(game)
         heroPanel.onHeroPortraitTapped = { slot -> onHeroPortraitTapped(slot) }
         heroPanel.onHeroActionButtonTapped = { slot, button ->
@@ -160,40 +206,167 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Fires the staged skill of the currently active hero.
-     *
-     * Real combat resolution doesn't exist yet, so this is purely UX
-     * scaffolding: it surfaces a toast describing what *would* happen,
-     * then reverts the slot to the hero's basic Attack so the next
-     * tap on Action never silently no-ops.
+     * Fires the staged skill of the currently active hero. In
+     * combat, this commits the staged action against the active
+     * actor; out of combat, it just resets the slot to the hero's
+     * basic Attack (real exploration-mode fire targets aren't
+     * wired up yet). All paths are intentionally silent on failure
+     * - the combat log / UI state communicates outcomes.
      */
     private fun onActionBarActionTapped() {
-        val slot = game.activeHeroSlot
-        if (slot == null) {
-            toast(R.string.action_bar_action_no_hero)
+        if (game.combat != null) {
+            onActionBarActionTappedInCombat()
+        } else {
+            onActionBarActionTappedExploring()
+        }
+    }
+
+    /**
+     * Combat-mode Action: commit the staged skill (or basic Attack
+     * default) for whichever hero's turn the [CombatController] is
+     * waiting on. Rejections (not your turn, not enough MP, no
+     * target) silently no-op - the combat log surfaces hits / misses
+     * so the player still gets feedback when an action does fire.
+     */
+    private fun onActionBarActionTappedInCombat() {
+        val controller = game.combatController ?: return
+        if (!controller.awaitingHeroInput) return
+        val slot = controller.currentHeroSlot ?: return
+        val caster = game.party?.heroes?.getOrNull(slot) ?: return
+        val staged = game.selectedSkillFor(slot)
+
+        // Heal spells need an explicit target hero; pop the picker
+        // instead of going straight through commitHeroAction (which
+        // rejects heals outright). Caster's basic-attack fallback
+        // is never a heal so the elvis chain below is safe.
+        val resolved = staged ?: caster.basicAttackSkill
+        if (HealResolver.isHeal(resolved)) {
+            // Up-front MP check so we don't open a dialog the
+            // player can't actually commit. Silent no-op matches
+            // the rest of the action-bar contract.
+            if (resolved.mpCost > caster.mp) return
+            showHealTargetPicker(slot, resolved)
             return
         }
-        val hero = game.party?.heroes?.getOrNull(slot) ?: return
-        // With basic Attack as the default, this should never be null
-        // for a valid slot; treat null as "party not built yet" and
-        // bail rather than crash.
-        val staged = game.selectedSkillFor(slot) ?: return
-        Toast.makeText(
-            this,
-            getString(R.string.action_bar_action_fired, hero.name, staged.displayName),
-            Toast.LENGTH_SHORT,
-        ).show()
-        // Whatever fired, the slot returns to basic Attack so the hero
-        // always has a sensible default queued for the next press.
-        // Free-action skills also revert because we only model one
-        // staged slot per hero - if the player wants the same free
-        // skill again next turn, they re-stage it.
+
+        // Auto-fallback: if the player tapped Action with the
+        // default basic Attack staged but no enemy is within
+        // range / LOS, the hero braces with the universal Defend
+        // skill instead of swinging at empty air. Only fires for
+        // the AUTO-staged default - manually-picked melee skills
+        // still get the explicit "out of range" feedback so the
+        // player can choose to reposition or re-pick on purpose.
+        if (staged == null && !controller.anyEnemyReachable(resolved)) {
+            if (!controller.commitHeroDefend(slot, auto = true)) return
+            game.setSelectedSkill(slot, null)
+            gameView.invalidate()
+            heroPanel.invalidate()
+            turnOrderBar.invalidate()
+            return
+        }
+
+        // Player-selected enemy (or the auto-pick fallback that
+        // followed the most-recent KO) is the preferred target.
+        // The controller validates range + LOS before committing
+        // so an out-of-range tap returns false without consuming
+        // the turn, letting the player reposition or re-pick.
+        if (!controller.commitHeroAction(slot, staged, game.selectedEnemy)) return
+        // Reset stage so next turn defaults back to basic Attack.
+        game.setSelectedSkill(slot, null)
+        // The commit advanced the turn order and started the
+        // strip's leave animation; nudge the views so they don't
+        // wait an extra frame to reflect the new HP / highlight.
+        gameView.invalidate()
+        heroPanel.invalidate()
+        turnOrderBar.invalidate()
+    }
+
+    /**
+     * Pops the "Who should receive Heal X?" dialog and routes the
+     * pick back through [Game.commitHeroHealInCombat]. The Cancel
+     * path leaves the heal staged so the player can immediately
+     * re-tap Action (or open the skill picker to swap to a
+     * different spell).
+     */
+    private fun showHealTargetPicker(casterSlot: Int, skill: Skill) {
+        val party = game.party ?: return
+        // Filter to LIVING heroes - heals can't revive a corpse,
+        // and the dialog has no row-disable affordance to fall
+        // back on if a dead hero slipped through.
+        val targets = party.heroes.mapIndexedNotNull { idx, hero ->
+            if (hero.isAlive) HealTargetDialog.Target(slot = idx, hero = hero) else null
+        }
+        if (targets.isEmpty()) return
+
+        HealTargetDialog.show(
+            context = this,
+            skillDisplayName = skill.displayName,
+            targets = targets,
+            onTargetChosen = { targetSlot ->
+                if (game.commitHeroHealInCombat(casterSlot, skill, targetSlot)) {
+                    // Reset stage so next turn defaults back to basic Attack.
+                    game.setSelectedSkill(casterSlot, null)
+                    // Nudge views so the new HP / highlight reflect
+                    // immediately instead of waiting a frame.
+                    gameView.invalidate()
+                    heroPanel.invalidate()
+                    turnOrderBar.invalidate()
+                }
+            },
+        )
+    }
+
+    /**
+     * Exploration-mode Action: clears the staged skill for the
+     * active hero so the slot reverts to its basic Attack default.
+     * Real exploration-mode firing (e.g. interact with adjacent
+     * objects, scout-style skills) isn't wired up yet - until it
+     * is, the button is intentionally a silent no-op when nothing
+     * is staged.
+     */
+    private fun onActionBarActionTappedExploring() {
+        val slot = game.activeHeroSlot ?: return
+        if (game.selectedSkillFor(slot) == null) return
         game.setSelectedSkill(slot, null)
     }
 
     /** Stubbed until the inventory / loot system lands. */
     private fun onActionBarItemsTapped() {
-        toast(R.string.action_bar_items_unavailable)
+        // No-op until the inventory UI exists; silent on purpose.
+    }
+
+    // ---------------------------------------------------------------------
+    // Combat lifecycle
+    // ---------------------------------------------------------------------
+
+    /**
+     * Routed from [Game.onCombatChanged] when [Game.setCombat] fires.
+     * Toggles the turn-order strip's visibility and binds it to the
+     * fresh encounter so portraits reflect the current initiative.
+     */
+    private fun onCombatChanged(combat: com.tavisdor.app.combat.Combat?) {
+        turnOrderBar.setCombat(combat)
+        turnOrderBar.visibility = if (combat != null) View.VISIBLE else View.GONE
+        // Reveal the combat log the first time combat starts and
+        // leave it visible after the encounter ends - the player
+        // explicitly wants to be able to scroll back through what
+        // just happened, so we don't toggle this back to GONE.
+        if (combat != null) {
+            combatLogContainer.visibility = View.VISIBLE
+            refreshCombatLogScrollButtons()
+        }
+    }
+
+    /**
+     * Greys out the combat-log up / down buttons when the
+     * corresponding scroll direction would be a no-op (already at
+     * the head / tail). Driven both by direct button taps (via
+     * the view's [com.tavisdor.app.ui.CombatLogView.onScrollStateChanged])
+     * and by encounter lifecycle events.
+     */
+    private fun refreshCombatLogScrollButtons() {
+        btnCombatLogUp.isEnabled = combatLogView.canScrollUp
+        btnCombatLogDown.isEnabled = combatLogView.canScrollDown
     }
 
     /**
@@ -261,9 +434,8 @@ class MainActivity : AppCompatActivity() {
     /**
      * Opens the locked-door menu when the auto-mover stops in front of a
      * green-pixel door. Each button triggers one of the three Game-side
-     * actions; we surface the [Game.DoorOutcome] as a short toast and
-     * either redraw (door now visibly unlocked) or leave the dialog
-     * dismissed so the player can re-tap to try again.
+     * actions; success redraws and resumes the auto-move, while failure
+     * silently dismisses so the player can re-tap to try again.
      */
     private fun showLockedDoorDialog(cell: Cell) {
         val items = arrayOf(
@@ -288,27 +460,20 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun onDoorOutcome(outcome: Game.DoorOutcome, actionIndex: Int) {
+    private fun onDoorOutcome(outcome: Game.DoorOutcome, @Suppress("UNUSED_PARAMETER") actionIndex: Int) {
         when (outcome) {
             Game.DoorOutcome.OPENED, Game.DoorOutcome.ALREADY_UNLOCKED -> {
-                toast(R.string.door_result_opened)
                 gameView.invalidate()
                 // The auto-mover halted in front of the door and dropped the
                 // queued path; resume toward the original tap target so the
                 // player doesn't have to re-tap after unlocking.
                 game.continueMove()
             }
-            Game.DoorOutcome.FAILED -> {
-                val msg = if (actionIndex == 2) R.string.door_result_failed_force
-                else R.string.door_result_failed_pick
-                toast(msg)
-            }
-            Game.DoorOutcome.NO_DOOR -> Unit
+            // Failures (pick / force) and no-op closes: silent. The
+            // dialog dismissed itself; the player can re-tap the
+            // door to try again.
+            Game.DoorOutcome.FAILED, Game.DoorOutcome.NO_DOOR -> Unit
         }
-    }
-
-    private fun toast(stringRes: Int) {
-        Toast.makeText(this, stringRes, Toast.LENGTH_SHORT).show()
     }
 
     // Audio focus is acquired while Tavisdor is foreground-visible so any other

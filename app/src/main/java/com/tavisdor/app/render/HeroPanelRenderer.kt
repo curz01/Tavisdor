@@ -1,11 +1,20 @@
 package com.tavisdor.app.render
 
+import android.content.res.AssetManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.os.SystemClock
+import android.util.Log
+import com.tavisdor.app.combat.HateTracker
+import com.tavisdor.app.enemies.Enemy
 import com.tavisdor.app.game.Game
+import com.tavisdor.app.party.Gender
 import com.tavisdor.app.party.Hero
 import com.tavisdor.app.party.HeroClass
 import com.tavisdor.app.skills.SkillButton
@@ -17,16 +26,26 @@ import com.tavisdor.app.skills.SkillButton
  *
  * Each hero cell uses this layout:
  *
- *   +---------+--------------------------+
- *   |         | [ACT] [GRD] [SPL]        |   <- action buttons (yellow)
- *   |   PRT   | ======= HP =======       |   <- HP bar (green)
- *   |         | ======= MP =======       |   <- MP bar (blue)
- *   +---------+--------------------------+
+ *   +---------+---------------------------+
+ *   |         | [ACT] [GRD]               |   <- 2 same-size buttons
+ *   |   PRT   | ======= HP =======        |   <- HP bar (green)
+ *   |  [hate] | ======= MP =======        |   <- MP bar (blue)
+ *   +---------+---------------------------+
  *
- * Set [density] (px / dp) before calling [draw] so layout scales correctly on
- * any screen.
+ *   - ACT  : yellow button, taps open the action picker
+ *   - GRD  : yellow button, taps open the guard picker
+ *   - HATE : non-interactive readout, overlaid on the lower-right
+ *           corner of the portrait. When the player has an enemy
+ *           selected in combat, this draws the matching
+ *           `hate1..hate5` sprite for THIS hero's hate value from
+ *           that enemy. Hidden outside combat or before any
+ *           tap-to-select happens.
+ *
+ * Construct with an [AssetManager] so the 5 hate icons can be loaded
+ * once at startup (no per-frame decode); set [density] (px / dp)
+ * before calling [draw] so layout scales correctly on any screen.
  */
-class HeroPanelRenderer {
+class HeroPanelRenderer(private val assets: AssetManager) {
 
     /** px per dp. Pulled from the host View's resources. */
     var density: Float = 1f
@@ -134,6 +153,79 @@ class HeroPanelRenderer {
         strokeWidth = 3f
     }
 
+    /**
+     * Paint for the hate sprite blit. Anti-alias is OFF and bitmap
+     * filtering is OFF so the pixel-art `hate1..hate5` icons stay
+     * crisp when scaled up to button size. Keep this paint stateless
+     * across frames - the bitmap source / destination rects vary,
+     * but the paint itself never changes.
+     */
+    private val hateIconPaint = Paint().apply {
+        isAntiAlias = false
+        isFilterBitmap = false
+    }
+
+    /**
+     * Paint for blitting animated portrait frames. Bitmap filtering
+     * is OFF so the pixel-art portraits stay crisp when scaled to
+     * the portrait square; anti-alias is off for the same reason.
+     */
+    private val portraitBitmapPaint = Paint().apply {
+        isAntiAlias = false
+        isFilterBitmap = false
+    }
+
+    /**
+     * Lazy-decoded portrait sprite sets keyed by (class, gender).
+     * Each [PortraitSet] holds the idle cycle frames + the hurt
+     * frame; we decode on first draw rather than at construction
+     * because the player may pick any subset of the 8 (class x
+     * gender) combos in a given party.
+     */
+    private val portraitSets: MutableMap<PortraitKey, PortraitSet> = HashMap()
+
+    /**
+     * Per-slot snapshot of the hero whose portrait we're tracking
+     * and that hero's last-seen HP. Compared every frame to detect
+     * an HP DROP and kick off the hurt-blink animation. Identity
+     * (not equality) so swapping in a fresh Hero instance - e.g.
+     * starting a new run after load - resets the tracker without
+     * spuriously firing the blink.
+     */
+    private val lastSeenHero: Array<Hero?> = arrayOfNulls(MAX_SLOTS)
+    private val lastSeenHp: IntArray = IntArray(MAX_SLOTS) { -1 }
+
+    /**
+     * Wall-clock timestamp at which each slot's hurt-blink animation
+     * began. `0L` means no animation is in flight; the blink lasts
+     * [HURT_BLINK_TOTAL_MS] from this anchor, after which the
+     * portrait reverts to the normal idle cycle.
+     */
+    private val hurtBlinkStartMs: LongArray = LongArray(MAX_SLOTS) { 0L }
+
+    /**
+     * Pre-loaded hate icons keyed by hate value (1..5). null entries
+     * mean the asset is missing or failed to decode - we fall back
+     * to drawing the slot empty in that case so the panel still
+     * lays out cleanly.
+     *
+     * Pre-loaded (not lazy) because all 5 sprites get touched every
+     * time the player tabs through enemies; the cost is 5 small
+     * decodes at panel construction which is a one-shot per Game.
+     */
+    private val hateIcons: Array<Bitmap?> = Array(HATE_ICON_COUNT) { idx ->
+        tryLoadBitmap(assets, "sprites/hate${idx + 1}.png")
+    }
+
+    /**
+     * Cached source rects for [hateIcons] so we don't re-allocate a
+     * [Rect] on every frame. Mirrors the DungeonRenderer pattern.
+     */
+    private val hateIconSrcRects: Array<Rect> = Array(HATE_ICON_COUNT) { idx ->
+        val bmp = hateIcons[idx]
+        if (bmp != null) Rect(0, 0, bmp.width, bmp.height) else Rect(0, 0, 1, 1)
+    }
+
     // ----- Public draw entry point -----
 
     fun draw(canvas: Canvas, width: Int, height: Int, game: Game?) {
@@ -155,19 +247,29 @@ class HeroPanelRenderer {
         val layout = computeLayout(width, height)
         val party = game?.party
         val heroes = party?.heroes
-        val activeSlot = game?.activeHeroSlot
+        // Source of truth for the "you're up" white border. In
+        // combat this is whichever hero's turn it currently is
+        // (driven by the CombatController); out of combat it's
+        // the user-tapped active slot.
+        val highlightSlot = game?.spotlightHeroSlot
+
+        // Pre-resolve the hate context so each hero cell can look up
+        // the right hate1..hate5 sprite without having to re-derive
+        // (selected enemy, enemy index, hate tracker) from `game`
+        // every iteration.
+        val hateContext = resolveHateContext(game)
 
         for (slot in 0..3) {
             drawCellLabel(canvas, layout.labelXFor(slot), layout.labelYFor(slot), layout.labelH, heroes?.getOrNull(slot))
-            drawHeroCell(canvas, layout.cells[slot], heroes?.getOrNull(slot))
+            drawHeroCell(canvas, layout.cells[slot], slot, heroes?.getOrNull(slot), hateContext)
         }
 
-        // Active-hero overlay drawn LAST so it sits on top of cell +
-        // content. Only draw when the active hero exists in the
-        // current party - a stale activeSlot from a prior run would
+        // Highlight overlay drawn LAST so it sits on top of cell +
+        // content. Only draw when the highlighted hero exists in
+        // the current party - a stale slot from a prior run would
         // otherwise highlight an empty cell.
-        if (activeSlot != null && heroes?.getOrNull(activeSlot) != null) {
-            drawActiveBorder(canvas, layout.cells[activeSlot])
+        if (highlightSlot != null && heroes?.getOrNull(highlightSlot) != null) {
+            drawActiveBorder(canvas, layout.cells[highlightSlot])
         }
     }
 
@@ -233,21 +335,21 @@ class HeroPanelRenderer {
 
     /**
      * Result of [hitTestActionButton]: which hero slot's button was tapped
-     * and which of the three buttons (ACT / GRD / SPL).
+     * and which of the two buttons (ACT / GRD).
      */
     data class ActionButtonHit(val slot: Int, val button: SkillButton)
 
     /**
      * Returns the (slot, button) the point ([x], [y]) lands on for the
-     * 3-button strip in a hero cell, or null if the tap missed every
-     * button. Used by [com.tavisdor.app.HeroPanelView] to surface the
-     * ACT / GRD / SPL popup with the right hero's skill list.
+     * 2 ACT / GRD buttons in a hero cell, or null if the tap missed
+     * every button.
      */
     fun hitTestActionButton(x: Float, y: Float, width: Int, height: Int): ActionButtonHit? {
         val layout = computeLayout(width, height)
         for (slot in 0..3) {
-            val buttons = actionButtonRectsIn(layout.cells[slot])
-            buttons.forEachIndexed { i, rect ->
+            val slots = buttonRowRectsIn(layout.cells[slot])
+            for (i in slots.indices) {
+                val rect = slots[i]
                 if (x in rect.left..rect.right && y in rect.top..rect.bottom) {
                     return ActionButtonHit(slot, BUTTON_ORDER[i])
                 }
@@ -257,11 +359,20 @@ class HeroPanelRenderer {
     }
 
     /**
-     * Geometry of the 3 ACT / GRD / SPL buttons inside a hero cell.
-     * Mirrors the math in [drawHeroCell] + [drawButtonRow] so the
-     * hit-test stays in lock-step with the drawn buttons.
+     * Geometry of the 2 ACT / GRD slots inside a hero cell's
+     * button row. Buttons are no longer constrained to squares -
+     * the strip fills the entire right-column width so the two
+     * buttons + their gap span exactly the same horizontal extent
+     * as the HP and MP bars beneath them. Mirrors the math in
+     * [drawHeroCell] + [drawButtonRow] so the hit-test stays in
+     * lock-step with the drawn slots.
+     *
+     * Returns exactly [ACTION_BUTTON_COUNT] rects (or [emptyArray]
+     * when the cell is too small to fit any slot). The hate icon
+     * is overlaid on the portrait (see [drawHateOverlay]), not
+     * part of this strip.
      */
-    private fun actionButtonRectsIn(cell: RectF): Array<RectF> {
+    private fun buttonRowRectsIn(cell: RectF): Array<RectF> {
         val pad = dp(5f)
         val innerL = cell.left + pad
         val innerT = cell.top + pad
@@ -284,24 +395,22 @@ class HeroPanelRenderer {
         val btnRowTop = innerT + topSlack
 
         val btnGap = dp(5f)
-        val widthLimited = (rowW - btnGap * 2f) / 3f
-        val btnSize = minOf(widthLimited, buttonRowH)
-        if (btnSize <= 0f) return emptyArray()
-        val stripW = btnSize * 3f + btnGap * 2f
-        val startX = rightL + (rowW - stripW) / 2f
-        val startY = btnRowTop + (buttonRowH - btnSize) / 2f
+        // Each button takes half of (row width minus the single
+        // gap between them) - so the strip's outer extent matches
+        // the HP / MP bars below.
+        val btnWidth = (rowW - btnGap * (ACTION_BUTTON_COUNT - 1)) / ACTION_BUTTON_COUNT.toFloat()
+        if (btnWidth <= 0f) return emptyArray()
 
-        return Array(3) { i ->
-            val l = startX + i * (btnSize + btnGap)
-            RectF(l, startY, l + btnSize, startY + btnSize)
+        return Array(ACTION_BUTTON_COUNT) { i ->
+            val l = rightL + i * (btnWidth + btnGap)
+            RectF(l, btnRowTop, l + btnWidth, btnRowTop + buttonRowH)
         }
     }
 
-    /** Index -> button: ACT (0), GRD (1), SPL (2). Matches [buttonLabels]. */
+    /** Index -> button: ACT (0), GRD (1). */
     private val BUTTON_ORDER = arrayOf(
         SkillButton.ACTION,
         SkillButton.GUARD,
-        SkillButton.SPELLS,
     )
 
     // ----- Layout (shared by draw + hit-test so they stay in lock-step) -----
@@ -377,7 +486,13 @@ class HeroPanelRenderer {
 
     // ----- Per-hero cell -----
 
-    private fun drawHeroCell(canvas: Canvas, cell: RectF, hero: Hero?) {
+    private fun drawHeroCell(
+        canvas: Canvas,
+        cell: RectF,
+        heroSlot: Int,
+        hero: Hero?,
+        hateContext: HateRenderContext?,
+    ) {
         val cellRadius = dp(6f)
         canvas.drawRoundRect(cell, cellRadius, cellRadius, cellFillPaint)
         canvas.drawRoundRect(cell, cellRadius, cellRadius, cellBorderPaint)
@@ -392,7 +507,11 @@ class HeroPanelRenderer {
         // Portrait: square, full inner height, anchored left.
         val portraitSize = innerH
         val portrait = RectF(innerL, innerT, innerL + portraitSize, innerB)
-        drawPortrait(canvas, portrait, hero)
+        drawPortrait(canvas, portrait, heroSlot, hero)
+        // Hate icon overlay, painted AFTER the portrait so it
+        // visually sits on top of it in the upper-left corner.
+        // Hidden outside combat / before any enemy is selected.
+        drawHateOverlay(canvas, portrait, hero, heroSlot, hateContext)
 
         // Right column: starts after portrait + an inner gap, runs to right edge.
         val rightL = portrait.right + dp(6f)
@@ -418,7 +537,7 @@ class HeroPanelRenderer {
         val mpTop = hpBottom + gapV
         val mpBottom = mpTop + barH
 
-        drawButtonRow(canvas, RectF(rightL, btnRowTop, rightR, btnRowBottom), hero)
+        drawButtonRow(canvas, cell, hero)
         drawBar(
             canvas = canvas,
             rect = RectF(rightL, hpTop, rightR, hpBottom),
@@ -442,23 +561,153 @@ class HeroPanelRenderer {
 
     // ----- Portrait -----
 
-    private fun drawPortrait(canvas: Canvas, rect: RectF, hero: Hero?) {
+    /**
+     * Renders the portrait square for [hero] inside [rect]. Three
+     * distinct paths:
+     *   1. Empty slot      -> the original "(empty)" rounded square.
+     *   2. Hero with art   -> animated idle cycle, periodically
+     *                         interrupted by a hurt-blink whenever
+     *                         [hero]'s HP just dropped.
+     *   3. Hero w/o art    -> the legacy color-tint + first-letter
+     *                         fallback, so a missing sprite asset
+     *                         degrades gracefully.
+     *
+     * Hurt detection lives in [updateHurtTracker]; this method only
+     * picks which frame to draw on top of the colored background.
+     */
+    private fun drawPortrait(canvas: Canvas, rect: RectF, slot: Int, hero: Hero?) {
         val r = dp(4f)
         if (hero == null) {
+            // Empty slot also clears the per-slot HP tracker so we
+            // don't fire a phantom blink the moment a new party
+            // fills the cell.
+            lastSeenHero[slot] = null
+            lastSeenHp[slot] = -1
+            hurtBlinkStartMs[slot] = 0L
             canvas.drawRoundRect(rect, r, r, portraitEmptyPaint)
             canvas.drawRoundRect(rect, r, r, portraitBorderPaint)
             return
         }
+
+        // Refresh hp tracker BEFORE choosing the frame so an HP
+        // drop on this exact tick is already reflected in the
+        // blink decision.
+        updateHurtTracker(slot, hero)
+
+        // Background colored panel + border are drawn under the
+        // sprite so a sprite that's smaller than the portrait
+        // square still reads as the right class color.
         portraitFillPaint.color = portraitColorFor(hero.heroClass)
         canvas.drawRoundRect(rect, r, r, portraitFillPaint)
-        canvas.drawRoundRect(rect, r, r, portraitBorderPaint)
 
-        // First letter of class as a placeholder until real portrait sprites land.
-        val initial = hero.heroClass.name.first().toString()
-        val cx = (rect.left + rect.right) / 2f
-        val cy = (rect.top + rect.bottom) / 2f -
-            (portraitInitialPaint.descent() + portraitInitialPaint.ascent()) / 2f
-        canvas.drawText(initial, cx, cy, portraitInitialPaint)
+        val set = portraitSetFor(hero.heroClass, hero.gender)
+        val frame = chooseFrame(slot, set)
+        if (frame != null) {
+            canvas.drawBitmap(frame.bitmap, frame.src, rect, portraitBitmapPaint)
+        } else {
+            // Sprite decode failed - fall back to the legacy initial-glyph
+            // placeholder so the slot is still identifiable.
+            val initial = hero.heroClass.name.first().toString()
+            val cx = (rect.left + rect.right) / 2f
+            val cy = (rect.top + rect.bottom) / 2f -
+                (portraitInitialPaint.descent() + portraitInitialPaint.ascent()) / 2f
+            canvas.drawText(initial, cx, cy, portraitInitialPaint)
+        }
+
+        // Border painted LAST so it sits on top of both the sprite
+        // and any colored padding the sprite didn't cover.
+        canvas.drawRoundRect(rect, r, r, portraitBorderPaint)
+    }
+
+    /**
+     * Compares [hero]'s current HP to what we drew last frame and
+     * arms the hurt-blink timer whenever HP dropped. Three rules:
+     *   - Different Hero instance in this slot than last frame
+     *     (load / new run / KO-revive) -> snapshot HP, no blink.
+     *   - HP went DOWN -> snapshot the lower value, start blink.
+     *   - HP went UP / unchanged       -> snapshot, no blink (heals
+     *     and steady-state frames both pass through silently).
+     */
+    private fun updateHurtTracker(slot: Int, hero: Hero) {
+        val prev = lastSeenHero[slot]
+        val prevHp = lastSeenHp[slot]
+        if (prev !== hero) {
+            lastSeenHero[slot] = hero
+            lastSeenHp[slot] = hero.hp
+            hurtBlinkStartMs[slot] = 0L
+            return
+        }
+        if (hero.hp < prevHp) {
+            hurtBlinkStartMs[slot] = SystemClock.uptimeMillis()
+        }
+        lastSeenHp[slot] = hero.hp
+    }
+
+    /**
+     * Picks the bitmap+src-rect to blit for [slot]'s current frame.
+     * Returns null when even the idle cycle has no decoded frames
+     * (e.g. all assets failed to load); the caller then falls back
+     * to the colored-initial placeholder.
+     *
+     * Frame selection rules:
+     *   - Inside the hurt-blink window: alternate between the hurt
+     *     sprite and the current idle frame every
+     *     [HURT_BLINK_FLASH_MS] ms. With [HURT_BLINK_COUNT] = 3
+     *     and the alternating cadence, the player sees the hurt
+     *     sprite flash 3 times before the cycle resumes cleanly.
+     *   - Otherwise: pick the idle frame for this slot based on
+     *     wall-clock time, using a tiny per-slot phase so adjacent
+     *     heroes don't bob in lock-step.
+     */
+    private fun chooseFrame(slot: Int, set: PortraitSet): PortraitFrame? {
+        val now = SystemClock.uptimeMillis()
+        val cycle = set.cycle
+        val idleFrame = if (cycle.isNotEmpty()) {
+            val phase = slot * (CYCLE_FRAME_MS / MAX_SLOTS)
+            val idx = ((now + phase) / CYCLE_FRAME_MS).toInt().mod(cycle.size)
+            cycle[idx]
+        } else null
+
+        val blinkStart = hurtBlinkStartMs[slot]
+        if (blinkStart > 0L) {
+            val elapsed = now - blinkStart
+            if (elapsed < HURT_BLINK_TOTAL_MS) {
+                val flashIdx = (elapsed / HURT_BLINK_FLASH_MS).toInt()
+                // Even flashes show the hurt sprite; odd flashes
+                // show the normal cycle, so the eye sees a clean
+                // "ouch!" flicker.
+                val showHurt = flashIdx % 2 == 0
+                if (showHurt && set.hurt != null) return set.hurt
+                if (idleFrame != null) return idleFrame
+                if (set.hurt != null) return set.hurt
+            } else {
+                hurtBlinkStartMs[slot] = 0L
+            }
+        }
+        return idleFrame
+    }
+
+    /**
+     * Decodes and caches the [PortraitSet] for the (class, gender)
+     * pair. Decoded on first access then served from [portraitSets]
+     * - keeps the cold-start cost low when the party only uses 4
+     * of the 8 possible portrait sets.
+     */
+    private fun portraitSetFor(cls: HeroClass, gender: Gender): PortraitSet {
+        val key = PortraitKey(cls, gender)
+        return portraitSets.getOrPut(key) { loadPortraitSet(cls, gender) }
+    }
+
+    private fun loadPortraitSet(cls: HeroClass, gender: Gender): PortraitSet {
+        val spec = PortraitCatalog.specFor(cls, gender)
+        val cycle = spec.cycleAssets.mapNotNull { path ->
+            val bmp = tryLoadBitmap(assets, path) ?: return@mapNotNull null
+            PortraitFrame(bmp, Rect(0, 0, bmp.width, bmp.height))
+        }
+        val hurt = spec.hurtAsset
+            .let { tryLoadBitmap(assets, it) }
+            ?.let { bmp -> PortraitFrame(bmp, Rect(0, 0, bmp.width, bmp.height)) }
+        return PortraitSet(cycle = cycle, hurt = hurt)
     }
 
     private fun portraitColorFor(cls: HeroClass): Int = when (cls) {
@@ -468,31 +717,28 @@ class HeroPanelRenderer {
         HeroClass.ARCHER -> Color.parseColor("#FFA08232")
     }
 
-    // ----- Button row (ACT / GRD / SPL) -----
+    // ----- Button row (ACT / GRD) -----
 
-    private val buttonLabels = arrayOf("ACT", "GRD", "SPL")
+    private val buttonLabels = arrayOf("ACT", "GRD")
 
-    private fun drawButtonRow(canvas: Canvas, row: RectF, hero: Hero?) {
-        val rowW = row.width()
-        val rowH = row.height()
-        if (rowW <= 0f || rowH <= 0f) return
-
-        val btnGap = dp(5f)
-        // Buttons are squares. Width-limit (3 squares + 2 gaps) vs height-limit.
-        val widthLimited = (rowW - btnGap * 2f) / 3f
-        val btnSize = minOf(widthLimited, rowH)
-        if (btnSize <= 0f) return
-
-        // Center the 3-button strip both horizontally and vertically in the row.
-        val stripW = btnSize * 3f + btnGap * 2f
-        val startX = row.left + (rowW - stripW) / 2f
-        val startY = row.top + (rowH - btnSize) / 2f
+    /**
+     * Draws the 2-square ACT / GRD strip on the right side of a
+     * hero cell. The hate readout is no longer part of this strip;
+     * it's overlaid on the portrait via [drawHateOverlay].
+     */
+    private fun drawButtonRow(
+        canvas: Canvas,
+        cell: RectF,
+        hero: Hero?,
+    ) {
+        val slots = buttonRowRectsIn(cell)
+        if (slots.isEmpty()) return
 
         val labelOffsetY = -(buttonLabelPaint.descent() + buttonLabelPaint.ascent()) / 2f
         val radius = dp(3f)
-        for (i in 0..2) {
-            val l = startX + i * (btnSize + btnGap)
-            val btn = RectF(l, startY, l + btnSize, startY + btnSize)
+
+        for (i in slots.indices) {
+            val btn = slots[i]
             val fill = if (hero != null) buttonFillPaint else buttonEmptyPaint
             canvas.drawRoundRect(btn, radius, radius, fill)
             canvas.drawRoundRect(btn, radius, radius, buttonBorderPaint)
@@ -502,6 +748,61 @@ class HeroPanelRenderer {
                 canvas.drawText(buttonLabels[i], cx, cy, buttonLabelPaint)
             }
         }
+    }
+
+    /**
+     * Overlays the matching `hate1..hate5` sprite on the lower-right
+     * corner of the hero's portrait. Silent no-op outside combat,
+     * before any enemy is selected, when the hero slot is empty,
+     * or when the sprite asset failed to decode.
+     *
+     * Sized as a fraction of the portrait square so it scales with
+     * panel density / cell size; inset slightly from the portrait
+     * edge so the sprite doesn't crash into the portrait border.
+     */
+    private fun drawHateOverlay(
+        canvas: Canvas,
+        portrait: RectF,
+        hero: Hero?,
+        heroSlot: Int,
+        hateContext: HateRenderContext?,
+    ) {
+        if (hero == null || hateContext == null) return
+        val hateValue = hateContext.hate.hateFor(hateContext.enemyIdx, heroSlot)
+        val iconIdx = (hateValue - 1).coerceIn(0, HATE_ICON_COUNT - 1)
+        val bitmap = hateIcons[iconIdx] ?: return
+
+        val portraitSize = portrait.width()
+        val iconSize = portraitSize * HATE_OVERLAY_PORTRAIT_FRACTION
+        val inset = dp(2f)
+        val right = portrait.right - inset
+        val bottom = portrait.bottom - inset
+        val dst = RectF(right - iconSize, bottom - iconSize, right, bottom)
+        canvas.drawBitmap(bitmap, hateIconSrcRects[iconIdx], dst, hateIconPaint)
+    }
+
+    /**
+     * Snapshot of "which enemy's hate are we displaying right now,
+     * and where do we look up the numbers?" - resolved once per
+     * draw call so the per-cell hate loops don't have to repeat
+     * the (game -> combat -> enemy index) lookup four times.
+     *
+     * Returns null whenever there's nothing to display (no combat,
+     * no selection, selected enemy dead, etc.); the renderer then
+     * leaves every hate slot empty.
+     */
+    private data class HateRenderContext(
+        val enemyIdx: Int,
+        val hate: HateTracker,
+    )
+
+    private fun resolveHateContext(game: Game?): HateRenderContext? {
+        val combat = game?.combat ?: return null
+        val selected: Enemy = game.selectedEnemy ?: return null
+        if (!selected.isAlive) return null
+        val enemyIdx = combat.enemies.indexOf(selected)
+        if (enemyIdx < 0) return null
+        return HateRenderContext(enemyIdx = enemyIdx, hate = combat.hate)
     }
 
     // ----- Bars (HP / MP) -----
@@ -547,6 +848,93 @@ class HeroPanelRenderer {
                 (barTextPaint.descent() + barTextPaint.ascent()) / 2f
             canvas.drawText(label, cx, cy, barTextHaloPaint)
             canvas.drawText(label, cx, cy, barTextPaint)
+        }
+    }
+
+    /**
+     * Cached source rect + bitmap pair so the per-frame blit
+     * doesn't allocate a new [Rect] every time we draw. Created
+     * once per decoded sprite in [loadPortraitSet].
+     */
+    private data class PortraitFrame(val bitmap: Bitmap, val src: Rect)
+
+    /**
+     * Holds the decoded idle cycle + hurt sprite for a single
+     * (class, gender) portrait set. [cycle] may be empty if every
+     * asset failed to decode; the renderer falls back to the
+     * initial-glyph placeholder in that case.
+     */
+    private data class PortraitSet(val cycle: List<PortraitFrame>, val hurt: PortraitFrame?)
+
+    /** Map key for [portraitSets]; pure value type, safe to use as a HashMap key. */
+    private data class PortraitKey(val cls: HeroClass, val gender: Gender)
+
+    companion object {
+        private const val TAG = "HeroPanelRenderer"
+
+        /** Always 4 hero slots; cached so the per-slot state arrays stay sized correctly. */
+        private const val MAX_SLOTS: Int = 4
+
+        /**
+         * Milliseconds each idle portrait frame stays on screen
+         * before the cycle advances. 500ms gives a 1s loop for the
+         * 2-frame fighter / thief / archer and a 2s loop for the
+         * 4-frame mage - both read as a calm, breathing idle.
+         */
+        private const val CYCLE_FRAME_MS: Long = 500L
+
+        /**
+         * Milliseconds between hurt-blink flashes (one hurt frame +
+         * one idle frame = two consecutive flash slots). Combined
+         * with [HURT_BLINK_COUNT] this controls the "ouch" pacing:
+         * 3 blinks x (100ms hurt + 100ms idle) = 600ms total.
+         */
+        private const val HURT_BLINK_FLASH_MS: Long = 100L
+
+        /** Number of times the hurt sprite flashes before the cycle resumes. */
+        private const val HURT_BLINK_COUNT: Int = 3
+
+        /**
+         * Total length of the hurt-blink animation window. After
+         * this elapses [hurtBlinkStartMs] resets to 0L and the
+         * portrait reverts to its normal cycle until the next
+         * HP drop.
+         */
+        private const val HURT_BLINK_TOTAL_MS: Long = HURT_BLINK_FLASH_MS * HURT_BLINK_COUNT * 2L
+
+        /**
+         * Number of interactive buttons in the hero cell's
+         * right-side strip: ACT + GRD = 2.
+         */
+        private const val ACTION_BUTTON_COUNT: Int = 2
+
+        /**
+         * Number of hate sprite tiers. Matches the design brief's
+         * 1..5 scale and the asset filenames `hate1.png..hate5.png`.
+         */
+        private const val HATE_ICON_COUNT: Int = 5
+
+        /**
+         * Side length of the hate overlay sprite expressed as a
+         * fraction of the portrait's edge length. 0.36 leaves the
+         * sprite large enough to read at a glance but small enough
+         * that it doesn't smother the portrait underneath.
+         */
+        private const val HATE_OVERLAY_PORTRAIT_FRACTION: Float = 0.36f
+
+        /**
+         * Asset-decode helper. Mirrors the one in [DungeonRenderer] -
+         * intentionally duplicated rather than shared so the two
+         * renderers can be reasoned about independently. Returns
+         * null + logs a warning when the asset is missing; the
+         * caller falls back to drawing the slot empty.
+         */
+        private fun tryLoadBitmap(assets: AssetManager, path: String): Bitmap? {
+            return runCatching {
+                assets.open(path).use { BitmapFactory.decodeStream(it) }
+            }.onFailure {
+                Log.w(TAG, "Failed to load sprite $path: ${it.message}")
+            }.getOrNull()
         }
     }
 }

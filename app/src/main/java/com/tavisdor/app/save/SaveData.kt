@@ -1,5 +1,6 @@
 package com.tavisdor.app.save
 
+import com.tavisdor.app.party.Gender
 import com.tavisdor.app.party.HeroClass
 
 /**
@@ -22,14 +23,17 @@ data class SaveData(
          * Bump whenever the on-disk shape of a save changes.
          *  v1 - initial scaffold (class, level, xp, maxHp, hp, dexterity).
          *  v2 - adds [HeroSaveData.name].
+         *  v3 - adds [HeroSaveData.gender]. v1 / v2 saves default to MALE
+         *       so the portrait renderer still has a sprite set to draw.
          */
-        const val CURRENT_SCHEMA = 2
+        const val CURRENT_SCHEMA = 3
     }
 }
 
 data class HeroSaveData(
     val name: String,
     val heroClass: HeroClass,
+    val gender: Gender,
     val level: Int,
     val xp: Int,
     val maxHp: Int,

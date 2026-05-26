@@ -9,6 +9,7 @@ import android.widget.FrameLayout
 import com.google.android.material.button.MaterialButton
 import com.tavisdor.app.MainActivity
 import com.tavisdor.app.R
+import com.tavisdor.app.party.Gender
 import com.tavisdor.app.party.HeroClass
 import com.tavisdor.app.party.HeroDraft
 import com.tavisdor.app.party.NameGenerator
@@ -19,9 +20,12 @@ import com.tavisdor.app.party.NameGenerator
  * "Start Adventure" enables once every slot is filled.
  *
  * Each slot is also auto-assigned a short (<= 6 char) placeholder name the first
- * time a class is dropped into it. The name persists across class changes within
- * the same slot (reassigning Mage -> Fighter keeps "Bob"), and the 4 names are
- * guaranteed unique per party - a fresh pool is shuffled on every [reset].
+ * time a class is dropped into it. The name is drawn from the male or female
+ * pool to match the slot's current gender pick; flipping a slot's gender
+ * re-rolls the name from the matching pool UNLESS the player has manually
+ * renamed the slot (manual renames are sticky across both class and gender
+ * changes). The 4 names are guaranteed unique per party - a fresh pool is
+ * shuffled on every [reset].
  *
  * Slot indices match the in-game [com.tavisdor.app.HeroPanelView] layout:
  *   0 = Front Line - left
@@ -49,13 +53,27 @@ class ClassSelectScreen(
         HeroClass.ARCHER to root.findViewById(R.id.btnPickArcher),
     )
 
+    private val genderPickButtons: Map<Gender, MaterialButton> = mapOf(
+        Gender.MALE to root.findViewById(R.id.btnPickMale),
+        Gender.FEMALE to root.findViewById(R.id.btnPickFemale),
+    )
+
     private val btnBack: MaterialButton = root.findViewById(R.id.btnClassSelectBack)
     private val btnStart: MaterialButton = root.findViewById(R.id.btnClassSelectStart)
     private val btnRename: MaterialButton = root.findViewById(R.id.btnRenameHero)
 
     private val slots: Array<HeroClass?> = arrayOfNulls(4)
     private val names: Array<String?> = arrayOfNulls(4)
-    private var nameQueue: ArrayDeque<String> = ArrayDeque()
+    private val genders: Array<Gender> = Array(4) { Gender.MALE }
+
+    /**
+     * Tracks whether each slot's name was authored by the player
+     * (via [showRenameDialog]) vs. auto-generated. Manual names are
+     * preserved across class / gender flips; auto-generated names
+     * are re-rolled when gender changes.
+     */
+    private val nameIsManual: BooleanArray = BooleanArray(4) { false }
+
     private var selectedSlot: Int = 0
 
     init {
@@ -63,13 +81,16 @@ class ClassSelectScreen(
         classPickButtons.forEach { (klass, btn) ->
             btn.setOnClickListener { assignClassToSelectedSlot(klass) }
         }
+        genderPickButtons.forEach { (gender, btn) ->
+            btn.setOnClickListener { assignGenderToSelectedSlot(gender) }
+        }
         btnBack.setOnClickListener { onBack() }
         btnRename.setOnClickListener { showRenameDialog(selectedSlot) }
         btnStart.setOnClickListener {
             val drafts = (0 until 4).mapNotNull { i ->
                 val klass = slots[i] ?: return@mapNotNull null
                 val name = names[i] ?: NameGenerator.fallback(i)
-                HeroDraft(name = name, heroClass = klass)
+                HeroDraft(name = name, heroClass = klass, gender = genders[i])
             }
             if (drafts.size == 4) onStartAdventure(drafts)
         }
@@ -80,10 +101,11 @@ class ClassSelectScreen(
         for (i in slots.indices) {
             slots[i] = null
             names[i] = null
+            genders[i] = Gender.MALE
+            nameIsManual[i] = false
         }
-        // Fresh pool of 4 unique names per party.
-        nameQueue = ArrayDeque(NameGenerator.pickUnique(4))
         refreshAllSlotLabels()
+        refreshGenderButtonHighlight()
         selectSlot(0)
         refreshStartButton()
     }
@@ -94,19 +116,49 @@ class ClassSelectScreen(
             btn.isSelected = (i == index)
             btn.strokeWidth = if (i == index) 6 else 2
         }
+        refreshGenderButtonHighlight()
     }
 
     private fun assignClassToSelectedSlot(klass: HeroClass) {
         slots[selectedSlot] = klass
         // Assign a name the first time this slot is filled; keep it across class swaps.
+        // The pool draws from the slot's current gender pick so the
+        // name matches the portrait the player is about to see.
         if (names[selectedSlot] == null) {
-            names[selectedSlot] = nameQueue.removeFirstOrNull() ?: NameGenerator.fallback(selectedSlot)
+            names[selectedSlot] = drawNameFor(selectedSlot, genders[selectedSlot])
+            nameIsManual[selectedSlot] = false
         }
         refreshSlotLabel(selectedSlot)
         // Auto-advance to the next empty slot to speed up assignment.
         val nextEmpty = slots.indices.firstOrNull { slots[it] == null }
         if (nextEmpty != null) selectSlot(nextEmpty)
         refreshStartButton()
+    }
+
+    /**
+     * Flips the currently-selected slot's gender. If the slot's
+     * name was auto-generated, re-roll it from the new gender's
+     * pool so the label matches the picked portrait. Manual
+     * renames stay put.
+     */
+    private fun assignGenderToSelectedSlot(gender: Gender) {
+        if (genders[selectedSlot] == gender) return
+        genders[selectedSlot] = gender
+        if (!nameIsManual[selectedSlot] && names[selectedSlot] != null) {
+            names[selectedSlot] = drawNameFor(selectedSlot, gender)
+        }
+        refreshSlotLabel(selectedSlot)
+        refreshGenderButtonHighlight()
+    }
+
+    /**
+     * Pulls a single random name from [gender]'s pool, excluding
+     * the names already in use in OTHER slots so the party never
+     * has two heroes sharing a name.
+     */
+    private fun drawNameFor(slotIndex: Int, gender: Gender): String {
+        val taken = names.mapIndexedNotNull { i, n -> if (i != slotIndex) n else null }.toSet()
+        return NameGenerator.pickFor(gender = gender, exclude = taken, slotIndex = slotIndex)
     }
 
     private fun refreshAllSlotLabels() {
@@ -120,6 +172,20 @@ class ClassSelectScreen(
             "$name - ${activity.getString(classLabel(klass))}"
         } else {
             activity.getString(R.string.class_select_slot_empty)
+        }
+    }
+
+    /**
+     * Visually highlights whichever gender matches the currently-
+     * selected slot. Mirrors the slot-button selected-state stroke
+     * width so the picker reads as a toggle group.
+     */
+    private fun refreshGenderButtonHighlight() {
+        val current = genders[selectedSlot]
+        genderPickButtons.forEach { (gender, btn) ->
+            val active = gender == current
+            btn.isSelected = active
+            btn.strokeWidth = if (active) 6 else 2
         }
     }
 
@@ -139,7 +205,8 @@ class ClassSelectScreen(
      * overwrite the auto-generated name for [slotIndex]. Blank/whitespace input
      * is silently dropped (the existing name is kept). Renaming an unassigned
      * slot is allowed - the typed name is stored and shown once a class is
-     * dropped into that slot later.
+     * dropped into that slot later. A successful rename also marks the slot's
+     * name as MANUAL so a later gender flip doesn't overwrite it.
      */
     private fun showRenameDialog(slotIndex: Int) {
         val ctx = activity
@@ -173,6 +240,7 @@ class ClassSelectScreen(
                 val typed = edit.text.toString().trim()
                 if (typed.isNotEmpty()) {
                     names[slotIndex] = typed
+                    nameIsManual[slotIndex] = true
                     refreshSlotLabel(slotIndex)
                 }
                 dialog.dismiss()

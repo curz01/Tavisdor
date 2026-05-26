@@ -21,12 +21,82 @@
         android:orientation="vertical"
         android:visibility="gone">
 
+        <!--
+          Turn-order strip. Visible only during COMBAT (MainActivity
+          toggles via setCombat()). Renders portraits left-to-right
+          in initiative order; the acting slot animates off-screen
+          when its action resolves.
+        -->
+        <com.tavisdor.app.ui.TurnOrderBarView
+            android:id="@+id/turnOrderBar"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/turn_order_bar_height"
+            android:layout_marginTop="@dimen/turn_order_bar_top_margin"
+            android:visibility="gone" />
+
         <!-- Dungeon view: fills available space above the action bar + hero panel. -->
         <com.tavisdor.app.GameView
             android:id="@+id/gameView"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1" />
+
+        <!--
+          Combat log: rolling 4-line window over the last ~10
+          resolved actions (attacks, dodges, spells, KOs). Set
+          visible the first time combat starts; stays visible
+          afterward so the player can scroll the history back
+          even between encounters. The text view is wrapped in
+          a horizontal container so two scroll buttons can sit
+          flush against its right edge.
+        -->
+        <LinearLayout
+            android:id="@+id/combatLogContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <com.tavisdor.app.ui.CombatLogView
+                android:id="@+id/combatLog"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnCombatLogUp"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="@dimen/combat_log_scroll_button_width"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="0dp"
+                    android:paddingHorizontal="0dp"
+                    android:paddingVertical="0dp"
+                    android:text="@string/combat_log_scroll_up"
+                    android:textSize="14sp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnCombatLogDown"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="@dimen/combat_log_scroll_button_width"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="0dp"
+                    android:paddingHorizontal="0dp"
+                    android:paddingVertical="0dp"
+                    android:text="@string/combat_log_scroll_down"
+                    android:textSize="14sp" />
+            </LinearLayout>
+        </LinearLayout>
 
         <!--
           Action bar: Menu / Action / Items in a horizontal row, sitting
@@ -259,17 +329,65 @@
                 android:textSize="@dimen/class_select_slot_label_text_size" />
         </LinearLayout>
 
+        <!--
+          Gender picker for the currently-selected slot. Cosmetic
+          only: the toggle re-rolls that slot's auto-name from the
+          matching pool (unless the player has manually renamed
+          it) and picks which portrait sprite set the panel uses.
+        -->
         <TextView
-            android:id="@+id/tvClassPickPrompt"
+            android:id="@+id/tvGenderPrompt"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="36dp"
-            android:text="@string/class_select_pick_class_prompt"
+            android:layout_marginTop="24dp"
+            android:text="@string/class_select_gender_prompt"
             android:textColor="@color/title_subtitle_text"
             android:textSize="14sp"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/classSelectBackRow" />
+
+        <LinearLayout
+            android:id="@+id/genderPickerRow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center"
+            android:orientation="horizontal"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/tvGenderPrompt">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnPickMale"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/class_select_gender_male" />
+
+            <Space
+                android:layout_width="8dp"
+                android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnPickFemale"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/class_select_gender_female" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvClassPickPrompt"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/class_select_pick_class_prompt"
+            android:textColor="@color/title_subtitle_text"
+            android:textSize="14sp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/genderPickerRow" />
 
         <!-- Class picker buttons (tap one to fill the highlighted slot). -->
         <LinearLayout

@@ -12,6 +12,30 @@
     <dimen name="class_select_slot_v_gap">12dp</dimen>
     <dimen name="class_select_slot_label_text_size">14sp</dimen>
 
+    <!--
+      Turn-order strip across the top of the dungeon view during
+      COMBAT. Height accommodates a roughly 48dp portrait + a 6dp
+      vertical pad on each side (see STRIP_PADDING_VERTICAL_DP in
+      TurnOrderBarView).
+    -->
+    <dimen name="turn_order_bar_height">60dp</dimen>
+    <!--
+      Top offset that pushes the turn-order strip below the
+      system status bar / camera cutout. Activity content is
+      drawn edge-to-edge on modern Android, so without this
+      gap the portraits can sit underneath the notch. ~32dp
+      clears a standard status bar (24dp) plus a small bezel
+      buffer.
+    -->
+    <dimen name="turn_order_bar_top_margin">32dp</dimen>
+
+    <!--
+      Width of the up / down scroll buttons that flank the right
+      edge of the combat log. Narrow enough not to crowd the text
+      column but wide enough to read as an obvious touch target.
+    -->
+    <dimen name="combat_log_scroll_button_width">36dp</dimen>
+
     <!-- Action bar sits above the hero panel: Menu / Action / Items. -->
     <dimen name="action_bar_height">56dp</dimen>
     <dimen name="action_bar_padding_horizontal">10dp</dimen>

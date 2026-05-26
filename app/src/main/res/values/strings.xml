@@ -34,6 +34,14 @@
     <string name="class_fighter">Fighter</string>
     <string name="class_archer">Archer</string>
 
+    <!--
+      Gender picker on the class-select screen. Cosmetic only: drives
+      portrait sprite set + auto-name pool, nothing mechanical.
+    -->
+    <string name="class_select_gender_prompt">Gender:</string>
+    <string name="class_select_gender_male">Male</string>
+    <string name="class_select_gender_female">Female</string>
+
     <!-- In-game placeholder labels -->
     <string name="game_floor_label">Tavisdor - Floor %1$d</string>
     <string name="hero_slot_label_format">Slot %1$d</string>
@@ -43,9 +51,19 @@
     <string name="action_bar_action">Action</string>
     <string name="action_bar_items">Items</string>
 
+    <!--
+      Glyphs on the combat-log scroll buttons. Kept as strings
+      (rather than vector drawables) so they pick up the same
+      Material 3 tonal-button styling as the action bar.
+    -->
+    <string name="combat_log_scroll_up">\u25B2</string>
+    <string name="combat_log_scroll_down">\u25BC</string>
+
     <!-- Action button feedback / errors. -->
     <string name="action_bar_action_no_hero">Tap a hero\'s ACT / GRD / SPL first.</string>
     <string name="action_bar_action_fired">%1$s used %2$s. (combat not implemented yet)</string>
+    <string name="action_bar_action_combat_not_your_turn">Wait for your turn.</string>
+    <string name="action_bar_action_combat_invalid">Action refused (not enough MP, no target, or not your turn).</string>
     <string name="action_bar_items_unavailable">Items - coming soon.</string>
 
     <!-- In-game menu dialog (opened from the action bar). -->
@@ -79,7 +97,6 @@
     <string name="hero_detail_skills_dialog_title">%1$s - Skills &amp; Spells</string>
     <string name="hero_detail_skills_section_action">Actions</string>
     <string name="hero_detail_skills_section_guard">Guard</string>
-    <string name="hero_detail_skills_section_spells">Spells</string>
     <string name="hero_detail_skills_none">(no skills unlocked)</string>
     <string name="hero_skill_row_format">%1$s\u00A0\u00A0R%2$d</string>
     <string name="hero_skill_row_mp_suffix">\u00A0\u00A0%1$d MP</string>
@@ -87,7 +104,6 @@
     <string name="hero_skill_prepare_tag">prepare</string>
     <string name="hero_skill_popup_title_action">%1$s - Actions</string>
     <string name="hero_skill_popup_title_guard">%1$s - Guard</string>
-    <string name="hero_skill_popup_title_spells">%1$s - Spells</string>
     <string name="hero_skill_popup_empty">No skills here yet.</string>
     <string name="hero_skill_popup_close">Close</string>
 
@@ -99,6 +115,12 @@
     <string name="skill_picker_passive_locked">Always active - cannot be staged.</string>
     <string name="skill_picker_toast_selected">%1$s staged for %2$s.</string>
     <string name="skill_picker_toast_reverted">%1$s will use a basic Attack.</string>
+
+    <!-- Heal target picker (Action button in combat with a Heal skill
+         staged). %1$s is the skill display name (e.g. "Heal II"). -->
+    <string name="heal_picker_title">Who should receive %1$s?</string>
+    <string name="heal_picker_row_format">%1$s - %2$s\u00A0\u00A0HP %3$d / %4$d</string>
+    <string name="heal_picker_cancel">Cancel</string>
 
     <!-- Locked door dialog -->
     <string name="door_locked_title">Locked Door</string>

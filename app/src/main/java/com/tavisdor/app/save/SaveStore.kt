@@ -2,6 +2,7 @@ package com.tavisdor.app.save
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.tavisdor.app.party.Gender
 import com.tavisdor.app.party.HeroClass
 import com.tavisdor.app.party.NameGenerator
 
@@ -31,12 +32,20 @@ class SaveStore(context: Context) {
             val nameKey = "$KEY_HERO_PREFIX${slot}_name"
             val storedName = prefs.getString(nameKey, null)
             val name = storedName ?: NameGenerator.fallback(slot)
+            // Gender was added in schema v3; v1 / v2 saves silently
+            // fall back to MALE so legacy parties still load with
+            // a valid portrait sprite set instead of crashing on
+            // an unknown enum name.
+            val storedGender = prefs.getString("$KEY_HERO_PREFIX${slot}_gender", null)
+            val gender = storedGender?.let { runCatching { Gender.valueOf(it) }.getOrNull() }
+                ?: Gender.MALE
             HeroSaveData(
                 name = name,
                 heroClass = HeroClass.valueOf(
                     prefs.getString("$KEY_HERO_PREFIX${slot}_class", HeroClass.FIGHTER.name)
                         ?: HeroClass.FIGHTER.name
                 ),
+                gender = gender,
                 level = prefs.getInt("$KEY_HERO_PREFIX${slot}_level", 1),
                 xp = prefs.getInt("$KEY_HERO_PREFIX${slot}_xp", 0),
                 maxHp = prefs.getInt("$KEY_HERO_PREFIX${slot}_maxhp", 10),
@@ -56,6 +65,7 @@ class SaveStore(context: Context) {
             data.heroes.forEachIndexed { slot, h ->
                 putString("$KEY_HERO_PREFIX${slot}_name", h.name)
                 putString("$KEY_HERO_PREFIX${slot}_class", h.heroClass.name)
+                putString("$KEY_HERO_PREFIX${slot}_gender", h.gender.name)
                 putInt("$KEY_HERO_PREFIX${slot}_level", h.level)
                 putInt("$KEY_HERO_PREFIX${slot}_xp", h.xp)
                 putInt("$KEY_HERO_PREFIX${slot}_maxhp", h.maxHp)

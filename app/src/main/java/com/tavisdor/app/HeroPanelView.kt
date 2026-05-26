@@ -27,7 +27,7 @@ class HeroPanelView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     private var game: Game? = null
-    private val renderer = HeroPanelRenderer().also {
+    private val renderer = HeroPanelRenderer(context.assets).also {
         it.density = resources.displayMetrics.density
     }
 
@@ -51,6 +51,11 @@ class HeroPanelView @JvmOverloads constructor(
         // changes so the white border appears/disappears immediately
         // instead of waiting for the next animation tick.
         g.onActiveHeroSlotChanged = { invalidate() }
+        // Hate-icon slot tracks the player's currently-selected
+        // enemy: redraw immediately when the selection changes so
+        // the column updates the same frame the player taps a new
+        // goblin, instead of waiting for the next animation tick.
+        g.onSelectedEnemyChanged = { invalidate() }
         invalidate()
     }
 
