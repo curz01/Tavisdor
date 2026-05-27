@@ -10,6 +10,8 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.SystemClock
+import android.text.TextPaint
+import android.text.TextUtils
 import android.util.Log
 import com.tavisdor.app.combat.HateTracker
 import com.tavisdor.app.enemies.Enemy
@@ -27,23 +29,21 @@ import com.tavisdor.app.skills.SkillButton
  * Each hero cell uses this layout:
  *
  *   +---------+---------------------------+
+ *   Name - Class          Threat Level: N   <- label row (combat)
+ *   +---------+---------------------------+
  *   |         | [ACT] [GRD]               |   <- 2 same-size buttons
  *   |   PRT   | ======= HP =======        |   <- HP bar (green)
- *   |  [hate] | ======= MP =======        |   <- MP bar (blue)
+ *   |         | ======= MP =======        |   <- MP bar (blue)
  *   +---------+---------------------------+
  *
  *   - ACT  : yellow button, taps open the action picker
  *   - GRD  : yellow button, taps open the guard picker
- *   - HATE : non-interactive readout, overlaid on the lower-right
- *           corner of the portrait. When the player has an enemy
- *           selected in combat, this draws the matching
- *           `hate1..hate5` sprite for THIS hero's hate value from
- *           that enemy. Hidden outside combat or before any
- *           tap-to-select happens.
+ *   - Threat level: right-aligned text on the name row when the
+ *           player has an enemy selected in combat; hidden outside
+ *           combat or before tap-to-select.
  *
- * Construct with an [AssetManager] so the 5 hate icons can be loaded
- * once at startup (no per-frame decode); set [density] (px / dp)
- * before calling [draw] so layout scales correctly on any screen.
+ * Construct with an [AssetManager] for portrait sprites; set [density]
+ * (px / dp) before calling [draw] so layout scales correctly on any screen.
  */
 class HeroPanelRenderer(private val assets: AssetManager) {
 
@@ -122,6 +122,16 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         textAlign = Paint.Align.LEFT
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
     }
+    /**
+     * Right-aligned half of the label row: "Threat Level: N".
+     * Shares color / size with [cellLabelPaint]; only the alignment
+     * differs so the threat readout hugs the cell's right edge.
+     */
+    private val cellLabelThreatPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FFE6D9B6")
+        textAlign = Paint.Align.RIGHT
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
 
     /**
      * White "current / max" overlay centred on each HP / MP bar. Drawn
@@ -151,18 +161,6 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         color = Color.WHITE
         style = Paint.Style.STROKE
         strokeWidth = 3f
-    }
-
-    /**
-     * Paint for the hate sprite blit. Anti-alias is OFF and bitmap
-     * filtering is OFF so the pixel-art `hate1..hate5` icons stay
-     * crisp when scaled up to button size. Keep this paint stateless
-     * across frames - the bitmap source / destination rects vary,
-     * but the paint itself never changes.
-     */
-    private val hateIconPaint = Paint().apply {
-        isAntiAlias = false
-        isFilterBitmap = false
     }
 
     /**
@@ -203,29 +201,6 @@ class HeroPanelRenderer(private val assets: AssetManager) {
      */
     private val hurtBlinkStartMs: LongArray = LongArray(MAX_SLOTS) { 0L }
 
-    /**
-     * Pre-loaded hate icons keyed by hate value (1..5). null entries
-     * mean the asset is missing or failed to decode - we fall back
-     * to drawing the slot empty in that case so the panel still
-     * lays out cleanly.
-     *
-     * Pre-loaded (not lazy) because all 5 sprites get touched every
-     * time the player tabs through enemies; the cost is 5 small
-     * decodes at panel construction which is a one-shot per Game.
-     */
-    private val hateIcons: Array<Bitmap?> = Array(HATE_ICON_COUNT) { idx ->
-        tryLoadBitmap(assets, "sprites/hate${idx + 1}.png")
-    }
-
-    /**
-     * Cached source rects for [hateIcons] so we don't re-allocate a
-     * [Rect] on every frame. Mirrors the DungeonRenderer pattern.
-     */
-    private val hateIconSrcRects: Array<Rect> = Array(HATE_ICON_COUNT) { idx ->
-        val bmp = hateIcons[idx]
-        if (bmp != null) Rect(0, 0, bmp.width, bmp.height) else Rect(0, 0, 1, 1)
-    }
-
     // ----- Public draw entry point -----
 
     fun draw(canvas: Canvas, width: Int, height: Int, game: Game?) {
@@ -234,6 +209,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         // Text sizes depend on density, set every frame (cheap).
         cellLabelPaint.textSize = dp(11f)
         cellLabelDimPaint.textSize = dp(11f)
+        cellLabelThreatPaint.textSize = dp(11f)
         portraitInitialPaint.textSize = dp(22f)
         buttonLabelPaint.textSize = dp(9f)
         activeBorderPaint.strokeWidth = dp(2.5f)
@@ -253,15 +229,22 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         // the user-tapped active slot.
         val highlightSlot = game?.spotlightHeroSlot
 
-        // Pre-resolve the hate context so each hero cell can look up
-        // the right hate1..hate5 sprite without having to re-derive
-        // (selected enemy, enemy index, hate tracker) from `game`
-        // every iteration.
+        // Pre-resolve the hate context so each label row can show
+        // "Threat Level: N" without re-deriving (selected enemy,
+        // enemy index, hate tracker) from `game` every iteration.
         val hateContext = resolveHateContext(game)
 
         for (slot in 0..3) {
-            drawCellLabel(canvas, layout.labelXFor(slot), layout.labelYFor(slot), layout.labelH, heroes?.getOrNull(slot))
-            drawHeroCell(canvas, layout.cells[slot], slot, heroes?.getOrNull(slot), hateContext)
+            drawCellLabel(
+                canvas = canvas,
+                cell = layout.cells[slot],
+                labelY = layout.labelYFor(slot),
+                labelH = layout.labelH,
+                heroSlot = slot,
+                hero = heroes?.getOrNull(slot),
+                hateContext = hateContext,
+            )
+            drawHeroCell(canvas, layout.cells[slot], slot, heroes?.getOrNull(slot))
         }
 
         // Highlight overlay drawn LAST so it sits on top of cell +
@@ -368,9 +351,8 @@ class HeroPanelRenderer(private val assets: AssetManager) {
      * lock-step with the drawn slots.
      *
      * Returns exactly [ACTION_BUTTON_COUNT] rects (or [emptyArray]
-     * when the cell is too small to fit any slot). The hate icon
-     * is overlaid on the portrait (see [drawHateOverlay]), not
-     * part of this strip.
+     * when the cell is too small to fit any slot). Threat level is
+     * drawn on the label row (see [drawCellLabel]), not part of this strip.
      */
     private fun buttonRowRectsIn(cell: RectF): Array<RectF> {
         val pad = dp(5f)
@@ -426,7 +408,6 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         /** 4 cell rects in slot order: 0,1 = front line; 2,3 = back line. */
         val cells: Array<RectF>,
     ) {
-        fun labelXFor(slot: Int): Float = cells[slot].left
         fun labelYFor(slot: Int): Float = cells[slot].top - labelToCellGap - labelH
     }
 
@@ -466,19 +447,54 @@ class HeroPanelRenderer(private val assets: AssetManager) {
     }
 
     /**
-     * Draws a hero's "Name - Class" header above the cell. Renders a dim
-     * "(Empty)" italic when no hero is in the slot.
+     * Draws a hero's label row above the cell:
+     *   - Left:  "Name - Class"
+     *   - Right: "Threat Level: N" (combat only, when an enemy is
+     *            selected and [hateContext] is non-null)
+     *
+     * The name is ellipsized when the two strings would overlap so
+     * the right-aligned threat readout always wins horizontal space.
+     * Renders a dim "(Empty)" italic when no hero is in the slot.
      */
-    private fun drawCellLabel(canvas: Canvas, x: Float, y: Float, labelH: Float, hero: Hero?) {
-        val paint = if (hero != null) cellLabelPaint else cellLabelDimPaint
-        val text = if (hero != null) {
-            "${hero.name} - ${classDisplayName(hero.heroClass)}"
-        } else {
-            "(Empty)"
+    private fun drawCellLabel(
+        canvas: Canvas,
+        cell: RectF,
+        labelY: Float,
+        labelH: Float,
+        heroSlot: Int,
+        hero: Hero?,
+        hateContext: HateRenderContext?,
+    ) {
+        val baseline = labelBaseline(labelY, labelH, cellLabelPaint)
+        if (hero == null) {
+            canvas.drawText("(Empty)", cell.left, baseline, cellLabelDimPaint)
+            return
         }
-        // Center text vertically inside the label band.
-        val baseline = y + labelH - (paint.descent() + paint.ascent()) / 2f - labelH / 2f
-        canvas.drawText(text, x, baseline, paint)
+
+        val nameText = "${hero.name} - ${classDisplayName(hero.heroClass)}"
+        if (hateContext == null) {
+            canvas.drawText(nameText, cell.left, baseline, cellLabelPaint)
+            return
+        }
+
+        val hateValue = hateContext.hate.hateFor(hateContext.enemyIdx, heroSlot)
+        val threatText = "Threat Level: $hateValue"
+        canvas.drawText(threatText, cell.right, baseline, cellLabelThreatPaint)
+
+        val threatW = cellLabelThreatPaint.measureText(threatText)
+        val maxNameW = (cell.width() - threatW - dp(4f)).coerceAtLeast(0f)
+        val displayName = TextUtils.ellipsize(
+            nameText,
+            TextPaint(cellLabelPaint),
+            maxNameW,
+            TextUtils.TruncateAt.END,
+        ).toString()
+        canvas.drawText(displayName, cell.left, baseline, cellLabelPaint)
+    }
+
+    /** Shared vertical centering for the 14dp label band. */
+    private fun labelBaseline(labelY: Float, labelH: Float, paint: Paint): Float {
+        return labelY + labelH - (paint.descent() + paint.ascent()) / 2f - labelH / 2f
     }
 
     private fun classDisplayName(cls: HeroClass): String =
@@ -491,7 +507,6 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         cell: RectF,
         heroSlot: Int,
         hero: Hero?,
-        hateContext: HateRenderContext?,
     ) {
         val cellRadius = dp(6f)
         canvas.drawRoundRect(cell, cellRadius, cellRadius, cellFillPaint)
@@ -508,10 +523,6 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         val portraitSize = innerH
         val portrait = RectF(innerL, innerT, innerL + portraitSize, innerB)
         drawPortrait(canvas, portrait, heroSlot, hero)
-        // Hate icon overlay, painted AFTER the portrait so it
-        // visually sits on top of it in the upper-left corner.
-        // Hidden outside combat / before any enemy is selected.
-        drawHateOverlay(canvas, portrait, hero, heroSlot, hateContext)
 
         // Right column: starts after portrait + an inner gap, runs to right edge.
         val rightL = portrait.right + dp(6f)
@@ -723,8 +734,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
 
     /**
      * Draws the 2-square ACT / GRD strip on the right side of a
-     * hero cell. The hate readout is no longer part of this strip;
-     * it's overlaid on the portrait via [drawHateOverlay].
+     * hero cell. Threat level is on the label row via [drawCellLabel].
      */
     private fun drawButtonRow(
         canvas: Canvas,
@@ -748,37 +758,6 @@ class HeroPanelRenderer(private val assets: AssetManager) {
                 canvas.drawText(buttonLabels[i], cx, cy, buttonLabelPaint)
             }
         }
-    }
-
-    /**
-     * Overlays the matching `hate1..hate5` sprite on the lower-right
-     * corner of the hero's portrait. Silent no-op outside combat,
-     * before any enemy is selected, when the hero slot is empty,
-     * or when the sprite asset failed to decode.
-     *
-     * Sized as a fraction of the portrait square so it scales with
-     * panel density / cell size; inset slightly from the portrait
-     * edge so the sprite doesn't crash into the portrait border.
-     */
-    private fun drawHateOverlay(
-        canvas: Canvas,
-        portrait: RectF,
-        hero: Hero?,
-        heroSlot: Int,
-        hateContext: HateRenderContext?,
-    ) {
-        if (hero == null || hateContext == null) return
-        val hateValue = hateContext.hate.hateFor(hateContext.enemyIdx, heroSlot)
-        val iconIdx = (hateValue - 1).coerceIn(0, HATE_ICON_COUNT - 1)
-        val bitmap = hateIcons[iconIdx] ?: return
-
-        val portraitSize = portrait.width()
-        val iconSize = portraitSize * HATE_OVERLAY_PORTRAIT_FRACTION
-        val inset = dp(2f)
-        val right = portrait.right - inset
-        val bottom = portrait.bottom - inset
-        val dst = RectF(right - iconSize, bottom - iconSize, right, bottom)
-        canvas.drawBitmap(bitmap, hateIconSrcRects[iconIdx], dst, hateIconPaint)
     }
 
     /**
@@ -907,20 +886,6 @@ class HeroPanelRenderer(private val assets: AssetManager) {
          * right-side strip: ACT + GRD = 2.
          */
         private const val ACTION_BUTTON_COUNT: Int = 2
-
-        /**
-         * Number of hate sprite tiers. Matches the design brief's
-         * 1..5 scale and the asset filenames `hate1.png..hate5.png`.
-         */
-        private const val HATE_ICON_COUNT: Int = 5
-
-        /**
-         * Side length of the hate overlay sprite expressed as a
-         * fraction of the portrait's edge length. 0.36 leaves the
-         * sprite large enough to read at a glance but small enough
-         * that it doesn't smother the portrait underneath.
-         */
-        private const val HATE_OVERLAY_PORTRAIT_FRACTION: Float = 0.36f
 
         /**
          * Asset-decode helper. Mirrors the one in [DungeonRenderer] -

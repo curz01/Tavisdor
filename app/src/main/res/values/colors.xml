@@ -2,6 +2,7 @@
 <resources>
     <!-- Solid black behind everything; same edge color the dungeon view paints around the playfield. -->
     <color name="dungeon_bg">#FF000000</color>
+    <color name="floor_label_text">#FFB8AE92</color>
 
     <!-- Title screen text. -->
     <color name="title_text">#FFEFE7D0</color>
@@ -31,4 +32,17 @@
     <color name="skill_picker_row_desc">#FFC9BC97</color>
     <color name="skill_picker_free_tag">#FFE6C12C</color>
     <color name="skill_picker_passive_tag">#FF8C7A52</color>
+
+    <!-- Items panel: shares the scrim + parchment palette with the
+         hero detail overlay so the two modals read as the same
+         family. Gold counter uses a warmer hue to stand out from
+         body text. -->
+    <color name="items_panel_scrim">#CC000000</color>
+    <color name="items_panel_value">#FFEFE7D0</color>
+    <color name="items_panel_label_dim">#FFB8AE92</color>
+    <color name="items_panel_section_header">#FFE6C12C</color>
+    <color name="items_panel_row_empty">#FF6B6450</color>
+    <color name="items_panel_gold">#FFE6C12C</color>
+    <color name="items_panel_hint">#FFC9BC97</color>
+    <color name="items_panel_row_text">#FFEFE7D0</color>
 </resources>

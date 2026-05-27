@@ -1,5 +1,7 @@
 package com.tavisdor.app.enemies
 
+import com.tavisdor.app.items.WeaponType
+
 /**
  * Authoring record for one enemy type. Mirrors the design chart
  * 1:1; one [EnemyTemplate] is added to [EnemyCatalog] per distinct
@@ -53,6 +55,11 @@ data class EnemyTemplate(
      * 0 means the enemy is rooted (stationary spell-caster).
      */
     val movementSquares: Int,
+    /**
+     * Optional authored weapon for attack FX (and future enemy
+     * combat math tuning). Null means unarmed / no dedicated art.
+     */
+    val weaponType: WeaponType? = null,
 
     /**
      * Authored STR / DEX / INT. Drive damage rolls, dodge, and the
@@ -139,6 +146,14 @@ data class EnemyTemplate(
      * monsters, push above 1000ms for slow ones.
      */
     val walkFrameDurationMs: Int = 500,
+
+    /**
+     * How many dungeon cells tall/wide the walk sprite may occupy
+     * when drawn (aspect ratio preserved). `1f` fits inside a single
+     * cell; `1.5f` / `2f` gives boss-sized art more footprint so
+     * the HP bar above the sprite scales with the larger silhouette.
+     */
+    val spriteDisplayScale: Float = 1f,
 ) {
 
     init {
@@ -157,6 +172,9 @@ data class EnemyTemplate(
         }
         require(walkFrameDurationMs > 0) {
             "$id: walkFrameDurationMs must be > 0, got $walkFrameDurationMs."
+        }
+        require(spriteDisplayScale > 0f) {
+            "$id: spriteDisplayScale must be > 0, got $spriteDisplayScale."
         }
     }
 }

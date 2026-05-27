@@ -76,6 +76,14 @@ sealed class CombatLogEntry {
     object Victory : CombatLogEntry()
 
     /**
+     * Summarises the gold scooped up from every defeated enemy
+     * on victory. Posted as a single line ("Looted N gold.")
+     * rather than one entry per corpse so the log stays
+     * scrollable on big mob fights.
+     */
+    data class GoldAwarded(val amount: Int) : CombatLogEntry()
+
+    /**
      * Per-hero XP credit posted after a victory. [amount] is the
      * scaled value the hero actually banked (post party-INT
      * multiplier), so the log line matches what the hero detail

@@ -11,7 +11,9 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.AttributeSet
 import android.util.Log
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import com.tavisdor.app.combat.Combat
 import com.tavisdor.app.combat.CombatRound
 import com.tavisdor.app.combat.InitiativeEntry
@@ -96,7 +98,39 @@ class TurnOrderBarView @JvmOverloads constructor(
     private val tmpSlotRect = RectF()
     private val tmpSrcRect = Rect()
 
+    // ----- Hit-test cache populated each draw -----
+    //
+    // Each entry is the [InitiativeEntry] currently rendered plus
+    // the rect it lives in. onTouchEvent walks this list to map a
+    // tap (x, y) back to the entry that was hit. We rebuild it
+    // every draw so the rects always match what's on screen,
+    // including in-flight slide / shift animations.
+    //
+    // The pooled RectF instances are reused across frames to keep
+    // allocation off the per-frame hot path; the list grows lazily
+    // up to the largest initiative seen so far.
+    private val hitRectPool: MutableList<RectF> = mutableListOf()
+    private val hitEntries: MutableList<InitiativeEntry> = mutableListOf()
+    private var hitCount: Int = 0
+
     // ----- Public hooks called by the activity / game loop -----
+
+    /**
+     * Fires when the player taps a portrait in the strip. The
+     * argument is the [InitiativeEntry] whose slot was hit; the
+     * activity branches on [InitiativeEntry.kind] to either
+     * select the hero (white spotlight border) or center the
+     * camera on the enemy. Defeated / mid-leaver portraits are
+     * intentionally NOT tappable - the cache only includes
+     * entries the player can act on.
+     */
+    var onPortraitTapped: ((InitiativeEntry) -> Unit)? = null
+
+    // ----- Touch state -----
+
+    private var downX: Float = 0f
+    private var downY: Float = 0f
+    private var tracking: Boolean = false
 
     /**
      * Bind the combat whose turn order this view should display.
@@ -137,12 +171,47 @@ class TurnOrderBarView @JvmOverloads constructor(
     }
 
     private fun drawPortraits(canvas: Canvas, combat: Combat) {
+        // Reset the hit-test cache up front so a frame that ends
+        // up rendering no portraits (e.g. round just resolved)
+        // leaves an empty hit set.
+        hitCount = 0
+
         val slot = portraitSlotSize().coerceAtLeast(1f)
         val gap = dp(SLOT_GAP_DP)
-        val leftMargin = dp(STRIP_PADDING_DP)
         val topMargin = (height - slot) / 2f
         val round = combat.round
         val stride = slot + gap
+
+        // ----- First pass: compute the visible group's settled
+        //       footprint so we can center it horizontally in the
+        //       strip.
+        //
+        // We use the SETTLED slot index (renderedSlot before any
+        // lerp / leaver translation) so the group's center stays
+        // put while a leaver slides off or a survivor shifts to
+        // close a defeat gap - portraits slide into a stable
+        // layout instead of the layout sliding under them. Once
+        // a slot is permanently past (acted + no animation) or
+        // removed, it drops out of the footprint on the next
+        // frame and the group recenters into its new bounds.
+        var minSlot = Int.MAX_VALUE
+        var maxSlot = Int.MIN_VALUE
+        combat.initiative.forEachIndexed { initIdx, entry ->
+            if (entry in round.removedEntries) return@forEachIndexed
+            val midAnim = round.leavers.any { it.entry === entry }
+            if (isSlotPast(initIdx, round) && !midAnim) return@forEachIndexed
+            val s = round.displayedSlotOf(entry).coerceAtLeast(0)
+            if (s < minSlot) minSlot = s
+            if (s > maxSlot) maxSlot = s
+        }
+        if (minSlot == Int.MAX_VALUE) return
+        val groupWidth = (maxSlot - minSlot) * stride + slot
+        // leftMargin is the X coordinate that displayedSlotOf == 0
+        // would land at. By offsetting from the centered group
+        // anchor we avoid having to thread the centering math into
+        // every per-portrait shift / leaver formula below; they
+        // all keep using `leftMargin + renderedSlot * stride`.
+        val leftMargin = (width - groupWidth) / 2f - minSlot * stride
 
         combat.initiative.forEachIndexed { initIdx, entry ->
             // Permanently removed entries don't render at all -
@@ -208,6 +277,18 @@ class TurnOrderBarView @JvmOverloads constructor(
                 baseTop + slot + translateY,
             )
 
+            // Record this slot for hit testing. We exclude
+            // entries with a leaver in flight - a portrait
+            // sliding off / fading out shouldn't be tappable
+            // because the entry is either past-acted (the action
+            // already resolved) or about to be removed (corpse).
+            // The settled portraits remain pickable through any
+            // shift animation, since the shift just relocates a
+            // slot whose owner is still a valid target.
+            if (turnEndLeaver == null && defeatLeaver == null) {
+                recordHitRect(entry, tmpSlotRect)
+            }
+
             // Active slot border only on the actor who's "up" -
             // the entry at actingIndex with no leavers on it.
             val isActive = initIdx == round.actingIndex &&
@@ -222,6 +303,75 @@ class TurnOrderBarView @JvmOverloads constructor(
                 isActive = isActive,
                 alpha = alpha,
             )
+        }
+    }
+
+    /**
+     * Appends one hit-test entry, recycling a pooled [RectF] when
+     * possible so the per-frame allocation stays at zero once
+     * the pool has grown to the encounter's max simultaneously
+     * rendered slot count.
+     */
+    private fun recordHitRect(entry: InitiativeEntry, rect: RectF) {
+        if (hitCount < hitRectPool.size) {
+            hitRectPool[hitCount].set(rect)
+            hitEntries[hitCount] = entry
+        } else {
+            hitRectPool.add(RectF(rect))
+            hitEntries.add(entry)
+        }
+        hitCount++
+    }
+
+    /**
+     * Returns the topmost [InitiativeEntry] whose recorded hit
+     * rect contains ([x], [y]), or null when the tap falls in
+     * the gap between portraits / on empty backdrop. Walks the
+     * cache front-to-back; with at most ~8 entries per round
+     * the linear scan is cheap.
+     */
+    private fun hitTestPortrait(x: Float, y: Float): InitiativeEntry? {
+        for (i in 0 until hitCount) {
+            if (hitRectPool[i].contains(x, y)) return hitEntries[i]
+        }
+        return null
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        return when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                // Reject the gesture early when there's nothing to
+                // tap on - empty strip means the activity probably
+                // wants the touch to fall through to whatever is
+                // behind the bar (today it sits over the dungeon
+                // edge, but the strip is gone in exploration mode
+                // anyway).
+                if (hitCount == 0) return false
+                downX = event.x
+                downY = event.y
+                tracking = true
+                true
+            }
+            MotionEvent.ACTION_UP -> {
+                if (!tracking) return false
+                tracking = false
+                // Touch-slop check so a small finger drag doesn't
+                // count as a tap - mirrors the same gate used by
+                // HeroPanelView.
+                val slop = ViewConfiguration.get(context).scaledTouchSlop
+                val dx = event.x - downX
+                val dy = event.y - downY
+                if (dx * dx + dy * dy > slop.toFloat() * slop) return false
+
+                val hit = hitTestPortrait(event.x, event.y) ?: return false
+                onPortraitTapped?.invoke(hit)
+                true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                tracking = false
+                false
+            }
+            else -> false
         }
     }
 
@@ -361,7 +511,10 @@ class TurnOrderBarView @JvmOverloads constructor(
         private const val DEFEAT_DROP_FACTOR = 1.5f
 
         private const val SLOT_GAP_DP = 6f
-        private const val STRIP_PADDING_DP = 12f
+        // STRIP_PADDING_DP (left-margin anchor) was removed when
+        // the strip was switched to centering the group inside the
+        // bar's width. The vertical padding stays - it's still the
+        // safe-area between the portrait and the backdrop top/bottom.
         private const val STRIP_PADDING_VERTICAL_DP = 6f
 
         private val COLOR_BACKDROP = Color.parseColor("#CC0F0E0B")

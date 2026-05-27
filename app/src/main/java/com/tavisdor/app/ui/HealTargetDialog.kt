@@ -8,7 +8,8 @@ import com.tavisdor.app.party.HeroClass
 
 /**
  * Modal prompt that fires when the player taps the action-bar
- * Action button with a Heal I/II/III skill staged. The Mage gets
+ * Top Action bar with a Heal I/II/III skill staged (picked from GRD).
+ * The Mage gets
  * to pick which living hero receives the heal; dead heroes are
  * excluded from the list (the heal rule explicitly forbids
  * reviving KO'd party members).

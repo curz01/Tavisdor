@@ -44,6 +44,7 @@
 
     <!-- In-game placeholder labels -->
     <string name="game_floor_label">Tavisdor - Floor %1$d</string>
+    <string name="game_floor_label_short">Floor %1$d</string>
     <string name="hero_slot_label_format">Slot %1$d</string>
 
     <!-- Action bar (between dungeon view and hero panel). -->
@@ -98,10 +99,10 @@
     <string name="hero_detail_skills_section_action">Actions</string>
     <string name="hero_detail_skills_section_guard">Guard</string>
     <string name="hero_detail_skills_none">(no skills unlocked)</string>
-    <string name="hero_skill_row_format">%1$s\u00A0\u00A0R%2$d</string>
+    <string name="hero_skill_row_format">%1$s\u00A0\u00A0Range: %2$d</string>
     <string name="hero_skill_row_mp_suffix">\u00A0\u00A0%1$d MP</string>
     <string name="hero_skill_passive_tag">passive</string>
-    <string name="hero_skill_prepare_tag">prepare</string>
+    <string name="hero_skill_range_suffix">\u00A0\u00A0Range: %1$d</string>
     <string name="hero_skill_popup_title_action">%1$s - Actions</string>
     <string name="hero_skill_popup_title_guard">%1$s - Guard</string>
     <string name="hero_skill_popup_empty">No skills here yet.</string>
@@ -110,7 +111,7 @@
     <!-- Skill picker dialog (the version with persistent selection +
          green / yellow blinking border). Distinct strings from the
          detail-panel skill list so wording can diverge later. -->
-    <string name="skill_picker_free_tag">FREE</string>
+    <string name="skill_picker_free_tag">No action</string>
     <string name="skill_picker_selected_label">Selected</string>
     <string name="skill_picker_passive_locked">Always active - cannot be staged.</string>
     <string name="skill_picker_toast_selected">%1$s staged for %2$s.</string>
@@ -132,4 +133,28 @@
     <string name="door_result_opened">The door swings open.</string>
     <string name="door_result_failed_pick">The lock holds firm.</string>
     <string name="door_result_failed_force">The door won\'t budge.</string>
+
+    <!-- Combat-mode party-move confirmation. Fired when a tap on
+         a legal move target would forfeit the other heroes' turns
+         this round. -->
+    <string name="combat_move_confirm_title">Move the Party?</string>
+    <string name="combat_move_confirm_message">If the party moves, no one else can perform actions this turn.</string>
+    <string name="combat_move_confirm_yes">Move</string>
+    <string name="combat_move_confirm_no">Cancel</string>
+
+    <!-- Items panel: opened by the action-bar Items button and
+         auto-opened after victory / chest interactions. The three
+         sections (equipment, ingredients, pickup) and the gold
+         counter share this resource block. -->
+    <string name="items_panel_title">Items</string>
+    <string name="items_panel_gold_format">Gold: %1$d</string>
+    <string name="items_panel_section_equipment">Equipment &amp; Weapons</string>
+    <string name="items_panel_section_ingredients">Ingredients</string>
+    <string name="items_panel_section_pickup">Pickup / Discard</string>
+    <string name="items_panel_section_empty">(empty)</string>
+    <string name="items_panel_pickup_hint">Tap a row to keep it. Anything left here is discarded when you close.</string>
+    <string name="items_panel_pickup_all">Pick Up All</string>
+    <string name="items_panel_close">Close</string>
+    <string name="items_panel_toast_picked_up">Picked up %1$s.</string>
+    <string name="items_panel_toast_discarded">Discarded %1$d item(s).</string>
 </resources>

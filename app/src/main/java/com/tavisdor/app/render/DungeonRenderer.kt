@@ -12,6 +12,7 @@ import android.graphics.Typeface
 import android.os.SystemClock
 import android.util.Log
 import kotlin.math.PI
+import kotlin.math.min
 import kotlin.math.sin
 import com.tavisdor.app.dungeon.Cell
 import com.tavisdor.app.dungeon.Door
@@ -48,6 +49,8 @@ class DungeonRenderer(private val assets: AssetManager) {
 
     /** px per dp. Set by [com.tavisdor.app.GameView] before the first draw. */
     var density: Float = 1f
+
+    private fun dp(v: Float): Float = v * density
 
     /**
      * Lazy cache for enemy sprites. Eagerly pre-loading every enemy's
@@ -118,10 +121,49 @@ class DungeonRenderer(private val assets: AssetManager) {
             ?: Rect(0, 0, 1, 1)
     }
 
+    /**
+     * Wall-clock anchor for the selected-enemy arrow intro. Reset
+     * whenever [selectionMarkerTarget] changes so each new tap
+     * replays the faster frame cycle + three vertical bounces,
+     * then the marker hides for the rest of that selection.
+     */
+    private var selectionMarkerTarget: Enemy? = null
+    private var selectionMarkerStartMs: Long = 0L
+
     private val partyIcon: Bitmap? = tryLoadBitmap(assets, "sprites/party_icon.png")
     private val partyIconSrc: Rect = partyIcon
         ?.let { Rect(0, 0, it.width, it.height) }
         ?: Rect(0, 0, 1, 1)
+
+    /**
+     * Party-token hop animation state. We observe [Floor.partyCell]
+     * directly here (rather than wiring a callback through Game ->
+     * CombatController -> exploration mover) so every movement
+     * code path - exploration auto-walk, in-combat one-cell step,
+     * Charge teleport - picks up the lift-and-drop visual for free.
+     *
+     * [lastSeenPartyCell] anchors change detection. When the cell
+     * flips between frames, we capture the previous cell into
+     * [partyStepFromCell] and stamp [partyStepStartMs] so the
+     * draw routine can interpolate from old -> new over the next
+     * [PARTY_HOP_DURATION_MS_*] window. Resetting these to (cell,
+     * null, 0) on floor change keeps the spawn from firing a
+     * phantom hop the first frame after `descend`.
+     */
+    private var lastSeenPartyCell: Cell? = null
+    private var partyStepFromCell: Cell? = null
+    private var partyStepStartMs: Long = 0L
+
+    /**
+     * Soft drop-shadow underneath the party token while it's
+     * airborne mid-hop. Alpha is patched at draw time so the
+     * shadow fades a touch at peak lift (reads as "piece is
+     * higher off the board") and disappears entirely once the
+     * piece settles back onto its cell.
+     */
+    private val partyShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK
+    }
 
     // ----- Paints -----
 
@@ -217,12 +259,6 @@ class DungeonRenderer(private val assets: AssetManager) {
         color = Color.parseColor("#FF8C7A52")
     }
 
-    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FFB8AE92")
-        textAlign = Paint.Align.CENTER
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-    }
-
     private val drawBitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val dstRect = RectF()
 
@@ -241,19 +277,37 @@ class DungeonRenderer(private val assets: AssetManager) {
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
 
+    private val enemyHpBarTrackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FF0F0C08")
+    }
+    private val enemyHpBarFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FFC03030")
+    }
+    private val enemyHpBarBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FF1A0F05")
+        style = Paint.Style.STROKE
+        strokeWidth = 1f
+    }
+
     fun draw(canvas: Canvas, width: Int, height: Int, game: Game) {
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
+        enemyHpBarBorderPaint.strokeWidth = dp(1f)
 
-        labelPaint.textSize = 14f * density
         val floor = game.floor
         if (floor == null) {
-            labelPaint.textSize = 18f * density
-            canvas.drawText("Tavisdor - Floor ${game.floorDepth}", width / 2f, 60f * density, labelPaint)
             return
         }
         if (floor.seed != lastLoggedFloorSeed) {
             lastLoggedFloorSeed = floor.seed
             loggedConnectorsForFloor = false
+            // New floor: the party "teleports" to its spawn cell.
+            // Reset the hop tracker so the first frame doesn't try
+            // to arc the icon from the OLD floor's last cell into
+            // the NEW floor's spawn (which would also pick a bogus
+            // shadow position halfway between two unrelated grids).
+            lastSeenPartyCell = floor.partyCell
+            partyStepFromCell = null
+            partyStepStartMs = 0L
         }
 
         val camera = game.camera
@@ -387,7 +441,8 @@ class DungeonRenderer(private val assets: AssetManager) {
             val ec = enemy.cell
             if (ec.x < minCx || ec.x > maxCx || ec.y < minCy || ec.y > maxCy) continue
             if (!floor.isRevealed(ec)) continue
-            drawEnemy(canvas, enemy, cx, cy, cellPx, viewCx, viewCy)
+            val spriteRect = drawEnemy(canvas, game, enemy, cx, cy, cellPx, viewCx, viewCy)
+            drawEnemyHealthBar(canvas, spriteRect, enemy.hp, enemy.maxHp)
         }
 
         // ----- Selected-enemy marker -----
@@ -399,16 +454,67 @@ class DungeonRenderer(private val assets: AssetManager) {
         if (selected != null && selected.isAlive) {
             val sc = selected.cell
             if (sc.x in minCx..maxCx && sc.y in minCy..maxCy && floor.isRevealed(sc)) {
-                drawSelectionMarker(canvas, sc, cx, cy, cellPx, viewCx, viewCy)
+                syncSelectionMarkerClock(selected)
+                if (isSelectionMarkerAnimating()) {
+                    drawSelectionMarker(canvas, sc, cx, cy, cellPx, viewCx, viewCy)
+                }
             }
+        } else {
+            clearSelectionMarkerClock()
         }
 
         // ----- Party token -----
-        drawPartyToken(canvas, floor.partyCell, cx, cy, cellPx, viewCx, viewCy)
+        val partyCell = floor.partyCell
+        val lunge = game.partyLungeVisualCell()
+        if (lunge != null) {
+            // Charge lunge: render the party at its tweened position
+            // so multi-cell lunges don't read as teleports.
+            drawPartyTokenAt(canvas, game, lunge.first, lunge.second, cx, cy, cellPx, viewCx, viewCy)
+        } else {
+            drawPartyToken(canvas, game, partyCell, cx, cy, cellPx, viewCx, viewCy)
+        }
 
-        // Floor label, still useful while we have no proper HUD.
-        labelPaint.textSize = 14f * density
-        canvas.drawText("Floor ${game.floorDepth}", width / 2f, 24f * density, labelPaint)
+        // ----- Weapon attack FX (above party + enemies) -----
+        game.drawWeaponAttackFx(canvas, cx, cy, cellPx, viewCx, viewCy)
+    }
+
+    private fun drawPartyTokenAt(
+        canvas: Canvas,
+        game: Game,
+        visualCellX: Float,
+        visualCellY: Float,
+        camCx: Float,
+        camCy: Float,
+        cellPx: Float,
+        viewCx: Float,
+        viewCy: Float,
+    ) {
+        val visualScreenX = (visualCellX - camCx) * cellPx + viewCx
+        val visualScreenY = (visualCellY - camCy) * cellPx + viewCy
+
+        val baseOffsetPx = cellPx * PARTY_ICON_BASE_OFFSET_FRACTION
+        val restingBaseY = visualScreenY + cellPx - baseOffsetPx
+
+        val iconWidth = cellPx * PARTY_ICON_WIDTH_FRACTION
+        val iconHeight = cellPx * PARTY_ICON_HEIGHT_FRACTION
+
+        val footprintCx = visualScreenX + cellPx / 2f
+        val iconLeft = footprintCx - iconWidth / 2f
+        val iconRight = footprintCx + iconWidth / 2f
+        val iconBottom = restingBaseY
+        val iconTop = iconBottom - iconHeight
+
+        val sprite = partyIcon
+        if (sprite != null) {
+            dstRect.set(iconLeft, iconTop, iconRight, iconBottom)
+            canvas.drawBitmap(sprite, partyIconSrc, dstRect, drawBitmapPaint)
+        } else {
+            val sx = footprintCx
+            val sy = iconTop + iconHeight / 2f
+            val outer = iconWidth * 0.38f
+            canvas.drawCircle(sx, sy, outer, partyRingPaint)
+            canvas.drawCircle(sx, sy, outer * 0.62f, partyInnerPaint)
+        }
     }
 
     /**
@@ -559,51 +665,132 @@ class DungeonRenderer(private val assets: AssetManager) {
     }
 
     /**
-     * Renders one [Enemy] at its cell. Picks the current walk-cycle
-     * frame from [EnemyTemplate.walkSpriteAssets] using wall-clock
-     * time (modulo the frame duration), with a small per-cell
-     * phase offset so neighboring enemies don't animate in lockstep.
+     * Renders one [Enemy] at its visual grid position. During combat
+     * move tweens the position comes from [CombatController.visualPositionFor]
+     * so the sprite + HP bar slide with the cinematic step.
+     *
+     * Returns the screen-space bounds of the drawn sprite so the
+     * HP bar can match its width and sit just above it.
      *
      * Fallback chain:
      *   1. Current walk-cycle frame (lazy-loaded into [enemySpriteCache]).
      *   2. Generic [enemyPlaceholder] (pre-loaded at construction).
-     *   3. Procedural diamond + first-letter glyph - never crashes
+     *   3. Procedural disc + first-letter glyph - never crashes
      *      even if every PNG is missing.
      */
     private fun drawEnemy(
         canvas: Canvas,
+        game: Game,
         enemy: Enemy,
         camCx: Float, camCy: Float,
         cellPx: Float,
         viewCx: Float, viewCy: Float,
-    ) {
-        val cell = enemy.cell
-        val topLeftX = (cell.x - camCx) * cellPx + viewCx
-        val topLeftY = (cell.y - camCy) * cellPx + viewCy
-        dstRect.set(topLeftX, topLeftY, topLeftX + cellPx, topLeftY + cellPx)
+    ): RectF {
+        val (vx, vy) = enemyVisualPosition(game, enemy)
+        val cellTopLeftX = (vx - camCx) * cellPx + viewCx
+        val cellTopLeftY = (vy - camCy) * cellPx + viewCy
+        val spriteRect = computeEnemySpriteRect(enemy, cellTopLeftX, cellTopLeftY, cellPx)
 
         val sprite = currentWalkSprite(enemy)
         if (sprite != null) {
             tmpEnemySrc.set(0, 0, sprite.width, sprite.height)
-            canvas.drawBitmap(sprite, tmpEnemySrc, dstRect, drawBitmapPaint)
-            return
+            canvas.drawBitmap(sprite, tmpEnemySrc, spriteRect, drawBitmapPaint)
+            return spriteRect
         }
         if (enemyPlaceholder != null) {
-            canvas.drawBitmap(enemyPlaceholder, enemyPlaceholderSrc, dstRect, drawBitmapPaint)
-            return
+            canvas.drawBitmap(enemyPlaceholder, enemyPlaceholderSrc, spriteRect, drawBitmapPaint)
+            return spriteRect
         }
 
-        // Truly nothing loaded - draw a procedural marker so the
-        // enemy is at least visible (helps spot art-loading regressions).
-        val cx = topLeftX + cellPx / 2f
-        val cy = topLeftY + cellPx / 2f
-        val r = cellPx * 0.35f
+        val cx = (spriteRect.left + spriteRect.right) / 2f
+        val cy = (spriteRect.top + spriteRect.bottom) / 2f
+        val r = spriteRect.width() * 0.35f
         enemyFallbackPaint.color = Color.parseColor("#FFB23A3A")
         canvas.drawCircle(cx, cy, r, enemyFallbackPaint)
-        enemyFallbackLetterPaint.textSize = cellPx * 0.5f
+        enemyFallbackLetterPaint.textSize = spriteRect.height() * 0.5f
         val letter = enemy.name.firstOrNull()?.toString() ?: "?"
         val fm = enemyFallbackLetterPaint.fontMetrics
         canvas.drawText(letter, cx, cy - (fm.ascent + fm.descent) / 2f, enemyFallbackLetterPaint)
+        return spriteRect
+    }
+
+    /**
+     * Fractional grid position used for drawing [enemy]. During
+     * [EnemyStep.Move] tweens this lerps between cells; otherwise
+     * it's the enemy's logical [Enemy.cell].
+     */
+    private fun enemyVisualPosition(game: Game, enemy: Enemy): Pair<Float, Float> {
+        val controller = game.combatController
+        if (controller != null) return controller.visualPositionFor(enemy)
+        return enemy.cell.x.toFloat() to enemy.cell.y.toFloat()
+    }
+
+    /**
+     * Screen-space sprite bounds for [enemy], preserving bitmap
+     * aspect ratio and honoring [EnemyTemplate.spriteDisplayScale]
+     * so larger monsters get wider/taller art AND a matching HP bar.
+     * Feet anchor to the bottom-center of the occupied footprint.
+     */
+    private fun computeEnemySpriteRect(
+        enemy: Enemy,
+        cellTopLeftX: Float,
+        cellTopLeftY: Float,
+        cellPx: Float,
+    ): RectF {
+        val maxDim = cellPx * enemy.template.spriteDisplayScale
+        val footprintCx = cellTopLeftX + cellPx / 2f
+        val footprintBottom = cellTopLeftY + cellPx
+
+        val sprite = currentWalkSprite(enemy) ?: enemyPlaceholder
+        if (sprite != null && sprite.width > 0 && sprite.height > 0) {
+            val bmpW = sprite.width.toFloat()
+            val bmpH = sprite.height.toFloat()
+            val scale = min(maxDim / bmpW, maxDim / bmpH)
+            val drawW = bmpW * scale
+            val drawH = bmpH * scale
+            val left = footprintCx - drawW / 2f
+            val top = footprintBottom - drawH
+            return RectF(left, top, left + drawW, footprintBottom)
+        }
+
+        val half = maxDim / 2f
+        return RectF(
+            footprintCx - half,
+            footprintBottom - maxDim,
+            footprintCx + half,
+            footprintBottom,
+        )
+    }
+
+    /**
+     * HP bar drawn just above [spriteRect], matching its width so
+     * it scales with the enemy silhouette. May extend slightly
+     * above the tile when [spriteDisplayScale] > 1.
+     */
+    private fun drawEnemyHealthBar(
+        canvas: Canvas,
+        spriteRect: RectF,
+        hp: Int,
+        maxHp: Int,
+    ) {
+        if (maxHp <= 0) return
+        val barH = dp(Companion.ENEMY_HP_BAR_HEIGHT_DP)
+        val gap = dp(Companion.ENEMY_HP_BAR_GAP_DP)
+        val barW = (spriteRect.width() * ENEMY_HP_BAR_WIDTH_FRACTION)
+            .coerceAtLeast(dp(12f))
+        val cx = (spriteRect.left + spriteRect.right) / 2f
+        val left = cx - barW / 2f
+        val top = spriteRect.top - gap - barH
+        val rect = RectF(left, top, left + barW, top + barH)
+        val radius = dp(1f)
+        val ratio = (hp.toFloat() / maxHp.toFloat()).coerceIn(0f, 1f)
+
+        canvas.drawRoundRect(rect, radius, radius, enemyHpBarTrackPaint)
+        if (ratio > 0f) {
+            val fill = RectF(rect.left, rect.top, rect.left + rect.width() * ratio, rect.bottom)
+            canvas.drawRoundRect(fill, radius, radius, enemyHpBarFillPaint)
+        }
+        canvas.drawRoundRect(rect, radius, radius, enemyHpBarBorderPaint)
     }
 
     /**
@@ -625,17 +812,40 @@ class DungeonRenderer(private val assets: AssetManager) {
     private fun loadEnemySprite(path: String): Bitmap? =
         enemySpriteCache.getOrPut(path) { tryLoadBitmap(assets, path) }
 
+    private fun syncSelectionMarkerClock(selected: Enemy) {
+        if (selectionMarkerTarget !== selected) {
+            selectionMarkerTarget = selected
+            selectionMarkerStartMs = SystemClock.uptimeMillis()
+        }
+    }
+
+    private fun clearSelectionMarkerClock() {
+        selectionMarkerTarget = null
+        selectionMarkerStartMs = 0L
+    }
+
+    private fun selectionMarkerElapsedMs(): Long =
+        (SystemClock.uptimeMillis() - selectionMarkerStartMs).coerceAtLeast(0L)
+
+    /** True while the intro bounce + frame cycle should still play. */
+    private fun isSelectionMarkerAnimating(): Boolean =
+        selectionMarkerElapsedMs() < SELECTION_MARKER_ANIM_TOTAL_MS
+
     /**
-     * Paints the bobbing "look here" arrow above [cell] using the
+     * Paints the "look here" arrow above [cell] using the
      * pre-loaded [selectionMarkerFrames]. The arrow points down,
      * so the marker is anchored so its bottom edge meets the
      * top of the target cell - the tip just kisses the goblin
      * underneath.
      *
-     * Animation: cycles through the 4 frames at
-     * [SELECTION_MARKER_FRAME_MS] each (`loc1 -> loc1b -> loc2 ->
-     * loc2b -> loc1 ...`). Driven by wall-clock time so the
-     * animation runs independently of combat tick cadence.
+     * Animation (one shot per enemy selection):
+     *   - Cycles `loc1 -> loc1b -> loc2 -> loc2b` at
+     *     [SELECTION_MARKER_FRAME_MS] (25% faster than the prior
+     *     352ms cadence).
+     *   - Bobs vertically [SELECTION_MARKER_BOUNCE_COUNT] times
+     *     via a sine wave over [SELECTION_MARKER_ANIM_TOTAL_MS].
+     *   - After that window elapses the marker is not drawn again
+     *     until the player selects a different enemy.
      *
      * Silent no-op when every sprite failed to decode - no
      * fallback glyph because the marker is purely a UX hint,
@@ -648,51 +858,155 @@ class DungeonRenderer(private val assets: AssetManager) {
         cellPx: Float,
         viewCx: Float, viewCy: Float,
     ) {
+        val elapsedMs = selectionMarkerElapsedMs()
         val frameIdx = (
-            SystemClock.uptimeMillis() / SELECTION_MARKER_FRAME_MS
+            elapsedMs / SELECTION_MARKER_FRAME_MS
             ).toInt().mod(selectionMarkerFrames.size)
         val sprite = selectionMarkerFrames[frameIdx] ?: return
 
         val topLeftX = (cell.x - camCx) * cellPx + viewCx
         val topLeftY = (cell.y - camCy) * cellPx + viewCy
-        // Marker is sized to [SELECTION_MARKER_CELL_FRACTION] of
-        // a cell on each side, then centered horizontally above
-        // the enemy cell so the arrow's tip kisses the top of
-        // the enemy sprite without crowding the cells around it.
         val size = cellPx * SELECTION_MARKER_CELL_FRACTION
         val cx = topLeftX + cellPx / 2f
         val left = cx - size / 2f
         val right = cx + size / 2f
-        val bottom = topLeftY
-        val top = bottom - size
-        dstRect.set(left, top, right, bottom)
+        val restingBottom = topLeftY
+        val restingTop = restingBottom - size
+
+        // Three full up-down bounces over the intro window; fade
+        // out is implicit (we stop drawing entirely after the window).
+        val bounceT = elapsedMs.toDouble() / SELECTION_MARKER_ANIM_TOTAL_MS.toDouble()
+        val bounceOffset = sin(
+            2.0 * PI * SELECTION_MARKER_BOUNCE_COUNT.toDouble() * bounceT,
+        ).toFloat() * cellPx * SELECTION_MARKER_BOUNCE_AMP_FRACTION
+
+        dstRect.set(left, restingTop - bounceOffset, right, restingBottom - bounceOffset)
         canvas.drawBitmap(sprite, selectionMarkerSrcRects[frameIdx], dstRect, drawBitmapPaint)
     }
 
     private fun drawPartyToken(
         canvas: Canvas,
+        game: Game,
         cell: Cell,
         camCx: Float, camCy: Float,
         cellPx: Float,
         viewCx: Float, viewCy: Float,
     ) {
-        val topLeftX = (cell.x - camCx) * cellPx + viewCx
-        val topLeftY = (cell.y - camCy) * cellPx + viewCy
+        // ----- Hop animation bookkeeping -----
+        // Detect a cell change since the last draw. The very first
+        // frame after attachGame has lastSeenPartyCell == null, in
+        // which case we just snap (no animation) - same idea the
+        // floor-change reset uses.
+        val previousCell = lastSeenPartyCell
+        if (previousCell == null) {
+            lastSeenPartyCell = cell
+        } else if (previousCell != cell) {
+            partyStepFromCell = previousCell
+            partyStepStartMs = SystemClock.uptimeMillis()
+            lastSeenPartyCell = cell
+        }
+
+        // Hop duration is tuned per game mode:
+        //   - Exploration: ~MOVE_STEP_SEC so consecutive auto-walk
+        //     steps land just as the next one lifts off (no visible
+        //     "snap to ground mid-air" glitch on multi-cell paths).
+        //   - Combat: a touch longer so a one-shot disengage / free
+        //     step reads as a deliberate reposition.
+        val inCombat = game.mode == Game.Mode.COMBAT
+        val hopDurationMs = if (inCombat) PARTY_HOP_DURATION_MS_COMBAT
+            else PARTY_HOP_DURATION_MS_EXPLORATION
+        val liftFraction = if (inCombat) PARTY_HOP_LIFT_FRACTION_COMBAT
+            else PARTY_HOP_LIFT_FRACTION_EXPLORATION
+
+        // Lift progress: 0 = piece on board, 1 = hop complete.
+        // sin(pi * t) gives a clean up-and-down arc with peak at
+        // t=0.5 - same easing the exit-mark "!" bounce already
+        // uses below for visual consistency.
+        val fromCell = partyStepFromCell
+        val elapsedMs = SystemClock.uptimeMillis() - partyStepStartMs
+        val hopRaw = if (fromCell != null && hopDurationMs > 0L) {
+            (elapsedMs.toFloat() / hopDurationMs.toFloat()).coerceIn(0f, 1f)
+        } else 1f
+        val isAirborne = fromCell != null && hopRaw < 1f
+        if (!isAirborne) partyStepFromCell = null
+
+        // Interpolated cell-space position. When the hop is done
+        // (or never started), this collapses to the target cell.
+        val origin = fromCell ?: cell
+        val visualCellX = origin.x + (cell.x - origin.x) * hopRaw
+        val visualCellY = origin.y + (cell.y - origin.y) * hopRaw
+        val visualScreenX = (visualCellX - camCx) * cellPx + viewCx
+        val visualScreenY = (visualCellY - camCy) * cellPx + viewCy
+
+        // Resting baseline Y (where the icon's base sits when
+        // not airborne). Cached up-front so the shadow and the
+        // icon-anchor math agree on the same ground line.
+        val baseOffsetPx = cellPx * PARTY_ICON_BASE_OFFSET_FRACTION
+        val restingBaseY = visualScreenY + cellPx - baseOffsetPx
+
+        // ----- Shadow under the airborne piece -----
+        // Drawn BEFORE the icon so the icon overlaps it. Width and
+        // alpha shrink with lift to mimic an overhead-ish light:
+        // higher piece -> smaller, softer shadow underneath. We
+        // skip drawing entirely once the piece has settled so a
+        // stationary party doesn't sport a permanent black smudge.
+        if (isAirborne) {
+            val lift01 = sin(PI * hopRaw.toDouble()).toFloat().coerceIn(0f, 1f)
+            val shadowScale = 1f - PARTY_SHADOW_SHRINK_FRACTION * lift01
+            val shadowW = cellPx * PARTY_SHADOW_W_FRACTION * shadowScale
+            val shadowH = cellPx * PARTY_SHADOW_H_FRACTION * shadowScale
+            val shadowCx = visualScreenX + cellPx / 2f
+            // Shadow CENTER sits right under the piece's resting
+            // base - NOT at the literal tile bottom. That keeps
+            // the shadow visually attached to the piece's feet
+            // even though the piece itself now floats a little
+            // above the tile's south edge for composition.
+            val shadowCy = restingBaseY
+            val alpha = (PARTY_SHADOW_BASE_ALPHA - (PARTY_SHADOW_BASE_ALPHA - PARTY_SHADOW_PEAK_ALPHA) * lift01)
+                .toInt()
+                .coerceIn(0, 255)
+            partyShadowPaint.alpha = alpha
+            dstRect.set(
+                shadowCx - shadowW / 2f,
+                shadowCy - shadowH / 2f,
+                shadowCx + shadowW / 2f,
+                shadowCy + shadowH / 2f,
+            )
+            canvas.drawOval(dstRect, partyShadowPaint)
+        }
+
+        // ----- Party token sprite -----
+        // Icon is rendered slightly taller than a cell and
+        // anchored to a baseline that sits PARTY_ICON_BASE_OFFSET_FRACTION
+        // above the tile bottom (so the piece reads as standing
+        // in the middle of the square, not glued to its south
+        // edge). The lift offset is applied as a negative Y so
+        // the icon arcs up and back down to that same baseline.
+        val iconWidth = cellPx * PARTY_ICON_WIDTH_FRACTION
+        val iconHeight = cellPx * PARTY_ICON_HEIGHT_FRACTION
+        val liftPx = if (isAirborne) {
+            sin(PI * hopRaw.toDouble()).toFloat() * cellPx * liftFraction
+        } else 0f
+
+        val footprintCx = visualScreenX + cellPx / 2f
+        val iconLeft = footprintCx - iconWidth / 2f
+        val iconRight = footprintCx + iconWidth / 2f
+        val iconBottom = restingBaseY - liftPx
+        val iconTop = iconBottom - iconHeight
+
         val sprite = partyIcon
         if (sprite != null) {
-            // Fill the whole cell so the icon visually anchors to the
-            // grid - same approach as tile_floor / tile_door /
-            // tile_stairs_*. Tightly-cropped art reads fine; loose art
-            // can be padded with transparency in the source PNG.
-            dstRect.set(topLeftX, topLeftY, topLeftX + cellPx, topLeftY + cellPx)
+            dstRect.set(iconLeft, iconTop, iconRight, iconBottom)
             canvas.drawBitmap(sprite, partyIconSrc, dstRect, drawBitmapPaint)
         } else {
             // Fallback for the (unlikely) case where party_icon.png
             // failed to decode at startup; keeps the old procedural
-            // ring so the party is at least visible.
-            val sx = topLeftX + cellPx / 2f
-            val sy = topLeftY + cellPx / 2f
-            val outer = cellPx * 0.38f
+            // ring so the party is at least visible. Centered on
+            // the icon's bounding box so the lift+shadow effect
+            // still applies to the fallback.
+            val sx = footprintCx
+            val sy = iconTop + iconHeight / 2f
+            val outer = iconWidth * 0.38f
             canvas.drawCircle(sx, sy, outer, partyRingPaint)
             canvas.drawCircle(sx, sy, outer * 0.62f, partyInnerPaint)
         }
@@ -707,6 +1021,96 @@ class DungeonRenderer(private val assets: AssetManager) {
          * without each owning a duplicate constant.
          */
         const val BASE_CELL_PX_DP = 60.375f
+
+        // -------- Party token sizing & hop animation tunables --------
+
+        /**
+         * Party-token render height as a multiple of a cell's
+         * size. Width still matches the cell exactly (so the
+         * silhouette doesn't drift sideways off its tile) but the
+         * icon is rendered taller than a cell (see
+         * [PARTY_ICON_HEIGHT_FRACTION]), anchored to the cell's
+         * BOTTOM edge. Width uses [PARTY_ICON_WIDTH_FRACTION] and
+         * is centered on the tile so a wider silhouette doesn't
+         * drift off the cell. Both fractions were bumped 10% from
+         * the prior 1.0 / 1.18 baselines.
+         */
+        private const val PARTY_ICON_WIDTH_FRACTION: Float = 1.1f
+        private const val PARTY_ICON_HEIGHT_FRACTION: Float = 1.298f
+
+        /**
+         * Vertical anchor offset for the party icon's base,
+         * measured as a fraction of cellPx UPWARD from the
+         * cell's bottom edge. At 0f the base touches the tile's
+         * south line; at 0.18f the base sits 18% above the tile
+         * bottom (visually closer to the tile's center, which
+         * reads as "piece standing in the middle of the square"
+         * rather than "piece glued to the back wall"). The
+         * airborne shadow's ground line is derived from this
+         * same offset so the shadow always lands right beneath
+         * the resting base, not at the literal tile floor.
+         */
+        private const val PARTY_ICON_BASE_OFFSET_FRACTION: Float = 0.18f
+
+        /**
+         * Duration of one lift-glide-land hop while the party is
+         * auto-walking outside of combat. Matched to
+         * [Game.MOVE_STEP_SEC] (120ms) so a multi-cell path
+         * lands each step exactly as the next step lifts off -
+         * no visible "snap to ground mid-air" between cells.
+         */
+        private const val PARTY_HOP_DURATION_MS_EXPLORATION: Long = 120L
+
+        /**
+         * Duration of the hop for a single-shot in-combat move
+         * (free step, disengage success, etc.). Longer than the
+         * exploration cadence because there's no follow-up step
+         * to chain into - the player has time to read the lift
+         * as a deliberate reposition.
+         */
+        private const val PARTY_HOP_DURATION_MS_COMBAT: Long = 230L
+
+        /**
+         * Peak hop height as a fraction of cellPx, exploration.
+         * Bumped to 35% so the chess-piece arc reads even at the
+         * fast 120ms auto-walk cadence; on a long multi-cell
+         * path consecutive hops still chain cleanly because the
+         * land of step N coincides with the lift of step N+1.
+         */
+        private const val PARTY_HOP_LIFT_FRACTION_EXPLORATION: Float = 0.35f
+
+        /**
+         * Peak hop height as a fraction of cellPx, combat. The
+         * 230ms single-shot timing gives the arc room to breathe,
+         * so we double down (60%) to make a deliberate combat
+         * reposition feel like a real "pick up + place" gesture.
+         */
+        private const val PARTY_HOP_LIFT_FRACTION_COMBAT: Float = 0.60f
+
+        /**
+         * Width / height of the airborne-piece drop shadow, as a
+         * fraction of cellPx. The 4:1 width-to-height ratio reads
+         * as "ellipse on a flat floor" rather than "circle on a
+         * pedestal".
+         */
+        private const val PARTY_SHADOW_W_FRACTION: Float = 0.52f
+        private const val PARTY_SHADOW_H_FRACTION: Float = 0.14f
+
+        /**
+         * Shadow alpha at ground (t=0 or t=1) and at peak lift
+         * (t=0.5). Peak alpha is intentionally LOWER so the
+         * shadow softens as the piece rises, reinforcing the
+         * "off the board" read. Range 0..255.
+         */
+        private const val PARTY_SHADOW_BASE_ALPHA: Float = 140f
+        private const val PARTY_SHADOW_PEAK_ALPHA: Float = 70f
+
+        /**
+         * How much the shadow ellipse shrinks at peak lift,
+         * fraction of base size. 18% shrink reads as "object is
+         * higher" without making the shadow vanish.
+         */
+        private const val PARTY_SHADOW_SHRINK_FRACTION: Float = 0.18f
 
         /**
          * Idle-bounce timing for the "!" exit markers, ported from
@@ -724,12 +1128,32 @@ class DungeonRenderer(private val assets: AssetManager) {
         /**
          * Milliseconds each frame of the selected-enemy arrow
          * (`loc1 / loc1b / loc2 / loc2b`) stays on screen before
-         * the cycle advances. 352ms gives a roughly 1.4-second
-         * full loop - 25% faster than the prior 440ms / 1.75-s
-         * pacing, so the bob reads as a bit more alert without
-         * crossing into frantic.
+         * advancing. 264ms is 25% faster than the prior 352ms
+         * cadence (352 * 0.75).
          */
-        private const val SELECTION_MARKER_FRAME_MS: Long = 352L
+        private const val SELECTION_MARKER_FRAME_MS: Long = 264L
+
+        /**
+         * How many full vertical bounces play during the intro,
+         * then the marker disappears for the rest of that selection.
+         */
+        private const val SELECTION_MARKER_BOUNCE_COUNT: Int = 3
+
+        /**
+         * Total wall-clock window for the intro (frame cycle +
+         * bounces). Three bounces at [SELECTION_MARKER_BOUNCE_CYCLE_MS]
+         * each = 660ms, which also fits ~2.5 sprite cycles at the
+         * faster frame cadence.
+         */
+        private const val SELECTION_MARKER_BOUNCE_CYCLE_MS: Long = 220L
+        private const val SELECTION_MARKER_ANIM_TOTAL_MS: Long =
+            SELECTION_MARKER_BOUNCE_CYCLE_MS * SELECTION_MARKER_BOUNCE_COUNT
+
+        /**
+         * Peak vertical bounce as a fraction of cellPx. Applied as
+         * a negative Y offset so the arrow lifts above the enemy.
+         */
+        private const val SELECTION_MARKER_BOUNCE_AMP_FRACTION: Float = 0.14f
 
         /**
          * Side length of the selected-enemy marker expressed as a
@@ -738,6 +1162,17 @@ class DungeonRenderer(private val assets: AssetManager) {
          * phone screens while letting adjacent tiles breathe.
          */
         private const val SELECTION_MARKER_CELL_FRACTION: Float = 0.425f
+
+        /** Enemy overhead HP bar geometry (in dp). */
+        private const val ENEMY_HP_BAR_HEIGHT_DP: Float = 5.5f
+        private const val ENEMY_HP_BAR_GAP_DP: Float = 3f
+
+        /**
+         * HP bar width as a fraction of the sprite width. 0.81 keeps
+         * the bar noticeably narrower than the silhouette so it reads
+         * as an overlay rather than a second sprite edge.
+         */
+        private const val ENEMY_HP_BAR_WIDTH_FRACTION: Float = 0.81f
 
         /**
          * Unit step vectors checked when looking for outward neighbors

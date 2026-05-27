@@ -129,7 +129,7 @@ data class Hero(
      * Every skill / spell this hero currently knows, in unlock
      * order. The universal basic Attack is patched in with the
      * weapon-aware range (see [basicAttackSkill]) so the skill
-     * picker and the hero detail panel both show "R2" for an
+     * picker and the hero detail panel both show "Range: 2" for an
      * Archer with a bow.
      */
     val knownSkills: List<Skill> get() = applyBasicAttackRange(

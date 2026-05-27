@@ -275,6 +275,11 @@ class CombatLogView @JvmOverloads constructor(
             CombatLogEntry.Victory -> {
                 advantageSeg(out, "Enemies defeated.")
             }
+            is CombatLogEntry.GoldAwarded -> {
+                whiteSeg(out, "The party loots ")
+                xpSeg(out, "${entry.amount}")
+                whiteSeg(out, " gold.")
+            }
             CombatLogEntry.PartyWipe -> {
                 critSeg(out, "The party is wiped out!")
             }

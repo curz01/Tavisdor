@@ -29,6 +29,10 @@
     -->
     <dimen name="turn_order_bar_top_margin">32dp</dimen>
 
+    <!-- Fixed band for the in-game "Floor N" label (below turn-order strip). -->
+    <dimen name="floor_label_band_height">24dp</dimen>
+    <dimen name="floor_label_text_size">14sp</dimen>
+
     <!--
       Width of the up / down scroll buttons that flank the right
       edge of the combat log. Narrow enough not to crowd the text
@@ -53,4 +57,11 @@
     <dimen name="hero_detail_panel_padding">16dp</dimen>
     <dimen name="hero_detail_equip_slot_size">64dp</dimen>
     <dimen name="hero_detail_equip_grid_gap">8dp</dimen>
+
+    <!-- Items panel (modal: action-bar Items button + post-combat auto-open). -->
+    <dimen name="items_panel_width">320dp</dimen>
+    <dimen name="items_panel_padding">16dp</dimen>
+    <dimen name="items_panel_section_gap">14dp</dimen>
+    <dimen name="items_panel_row_v_gap">2dp</dimen>
+    <dimen name="items_panel_row_padding">6dp</dimen>
 </resources>

@@ -1,5 +1,8 @@
 package com.tavisdor.app.save
 
+import com.tavisdor.app.items.Ingredient
+import com.tavisdor.app.items.LootTier
+import com.tavisdor.app.items.WeaponType
 import com.tavisdor.app.party.Gender
 import com.tavisdor.app.party.HeroClass
 
@@ -17,6 +20,9 @@ data class SaveData(
     val heroes: List<HeroSaveData>,
     val currentFloor: Int,
     val floorSeed: Long,
+    val partyGold: Int = 0,
+    val inventoryWeapons: List<WeaponSaveData> = emptyList(),
+    val inventoryIngredients: List<Ingredient> = emptyList(),
 ) {
     companion object {
         /**
@@ -25,8 +31,11 @@ data class SaveData(
          *  v2 - adds [HeroSaveData.name].
          *  v3 - adds [HeroSaveData.gender]. v1 / v2 saves default to MALE
          *       so the portrait renderer still has a sprite set to draw.
+         *  v4 - adds [SaveData.partyGold], [SaveData.inventoryWeapons],
+         *       and [SaveData.inventoryIngredients]. Older saves default
+         *       to 0 gold and an empty inventory.
          */
-        const val CURRENT_SCHEMA = 3
+        const val CURRENT_SCHEMA = 4
     }
 }
 
@@ -39,4 +48,22 @@ data class HeroSaveData(
     val maxHp: Int,
     val hp: Int,
     val dexterity: Int,
+)
+
+/**
+ * Serializable record of one inventory weapon. The runtime
+ * [com.tavisdor.app.items.Weapon] is reconstructed from
+ * (type, tier, attackBonus, range) - the display name is recomposed
+ * from the tier so a future rename of [LootTier.meleePrefix] doesn't
+ * pin saved weapons to the old wording.
+ *
+ * [tier] is nullable to preserve the "crude starter" sentinel even
+ * though crude weapons live on heroes today, not the bag - keeps
+ * the format symmetric with [com.tavisdor.app.items.Weapon].
+ */
+data class WeaponSaveData(
+    val type: WeaponType,
+    val tier: LootTier?,
+    val attackBonus: Int,
+    val range: Int,
 )

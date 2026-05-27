@@ -134,11 +134,11 @@ class HeroSkillsDialog(private val context: Context) {
 
     /**
      * Leading line of a skill row, e.g.
-     *   "Fire I   R1   1 MP"
-     *   "Aim Shot   R4   prepare"
-     *   "Close-Range   R0   passive"
-     * Cast-type tag is appended only when noteworthy (passive or
-     * prepare). MP cost appended when nonzero.
+     *   "Fire I   Range: 1   1 MP"
+     *   "Cover   Range: 1   [No action]"
+     *   "Close-Range   Range: 0   passive"
+     * Tags: passive, or [No action] when the skill does not
+     * consume the hero's turn. MP cost appended when nonzero.
      */
     private fun formatSkillHeader(skill: Skill): String {
         val sb = StringBuilder()
@@ -146,10 +146,11 @@ class HeroSkillsDialog(private val context: Context) {
         if (skill.mpCost > 0) {
             sb.append(context.getString(R.string.hero_skill_row_mp_suffix, skill.mpCost))
         }
-        when (skill.castType) {
-            SkillCastType.PASSIVE -> sb.append("  ").append(context.getString(R.string.hero_skill_passive_tag))
-            SkillCastType.PREPARE -> sb.append("  ").append(context.getString(R.string.hero_skill_prepare_tag))
-            SkillCastType.ACTIVE -> Unit
+        when {
+            skill.castType == SkillCastType.PASSIVE ->
+                sb.append("  ").append(context.getString(R.string.hero_skill_passive_tag))
+            !skill.costsAction ->
+                sb.append("  [").append(context.getString(R.string.skill_picker_free_tag)).append("]")
         }
         return sb.toString()
     }

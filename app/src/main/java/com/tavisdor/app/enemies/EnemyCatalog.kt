@@ -1,5 +1,7 @@
 package com.tavisdor.app.enemies
 
+import com.tavisdor.app.items.WeaponType
+
 /**
  * Central registry of every authored [EnemyTemplate], keyed by
  * [EnemyTemplate.id]. The single source of truth that
@@ -29,6 +31,7 @@ object EnemyCatalog {
             level = 1,
             element = Element.NEUTRAL,
             movementSquares = 1,
+            weaponType = WeaponType.SPEAR,
             strength = 3,
             dexterity = 2,
             intelligence = 1,

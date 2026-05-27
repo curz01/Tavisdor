@@ -179,7 +179,7 @@ class SkillPickerDialog(
     private fun formatNameLine(skill: Skill): CharSequence {
         val sb = StringBuilder()
         sb.append(skill.displayName)
-        sb.append("   R").append(skill.range)
+        sb.append(context.getString(R.string.hero_skill_range_suffix, skill.range))
         if (skill.mpCost > 0) {
             sb.append("   ").append(skill.mpCost).append(" MP")
         }
@@ -188,8 +188,6 @@ class SkillPickerDialog(
                 sb.append("   [").append(context.getString(R.string.hero_skill_passive_tag)).append("]")
             !skill.costsAction ->
                 sb.append("   [").append(context.getString(R.string.skill_picker_free_tag)).append("]")
-            skill.castType == SkillCastType.PREPARE ->
-                sb.append("   [").append(context.getString(R.string.hero_skill_prepare_tag)).append("]")
         }
         return sb.toString()
     }

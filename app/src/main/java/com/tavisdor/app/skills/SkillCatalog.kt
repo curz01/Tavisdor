@@ -27,10 +27,12 @@ object SkillCatalog {
         skill(
             // Heal is not an attack - element stays null so combat
             // math routes it through a future heal resolver rather
-            // than the damage / resist pipeline.
+            // than the damage / resist pipeline. ACTIVE but listed
+            // under GRD (like Defend) because it's support, not offense.
             id = "mage_heal_1", name = "Heal I", level = 2,
             type = SkillCastType.ACTIVE, range = 1, mp = 1,
             desc = "Heal one target 3 HP, 1 mana. Cannot heal dead (someone at 0 HP).",
+            button = SkillButton.GUARD,
         ),
         skill(
             id = "mage_make_potion_1", name = "Make Potion I", level = 3,
@@ -55,6 +57,7 @@ object SkillCatalog {
             id = "mage_heal_2", name = "Heal II", level = 6,
             type = SkillCastType.ACTIVE, range = 1, mp = 3,
             desc = "Heal one target 10 HP, 3 mana. Cannot heal dead.",
+            button = SkillButton.GUARD,
         ),
         skill(
             id = "mage_earth_2", name = "Earth II", level = 7,
@@ -81,6 +84,7 @@ object SkillCatalog {
             type = SkillCastType.ACTIVE, range = 1, mp = 5,
             desc = "Heal one target 20 HP, 5 mana. Residual heal of 5 HP next turn (does not " +
                 "stack but can be refreshed). Cannot heal dead.",
+            button = SkillButton.GUARD,
         ),
     ).forClass(HeroClass.MAGE)
 
@@ -216,10 +220,13 @@ object SkillCatalog {
                 "performing this skill has no more actions this turn.",
         ),
         skill(
+            // PREPARE effect ("next attack +2d6") but surfaced under
+            // ACT so it sits with Sneak Attack / other offensive picks.
             id = "thief_double_strike", name = "Double Strike", level = 9,
             type = SkillCastType.PREPARE, range = 1, mp = 1,
             damage = 7, // 2d6 average
             desc = "Next attack deals +2d6 damage. 1 mana.",
+            button = SkillButton.ACTION,
         ),
         skill(
             id = "thief_hide", name = "Hide", level = 10,
@@ -473,6 +480,7 @@ object SkillCatalog {
         desc: String = "",
         damage: Int? = null,
         element: Element? = null,
+        button: SkillButton? = null,
     ): Skill = Skill(
         id = id,
         displayName = name,
@@ -485,6 +493,7 @@ object SkillCatalog {
         description = desc,
         damage = damage,
         element = element,
+        buttonOverride = button,
     )
 
     private fun List<Skill>.forClass(cls: HeroClass): List<Skill> =

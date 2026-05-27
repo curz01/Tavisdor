@@ -22,17 +22,32 @@
         android:visibility="gone">
 
         <!--
-          Turn-order strip. Visible only during COMBAT (MainActivity
-          toggles via setCombat()). Renders portraits left-to-right
-          in initiative order; the acting slot animates off-screen
-          when its action resolves.
+          Turn-order strip. Visible only during COMBAT; uses
+          INVISIBLE (not GONE) between fights so this band always
+          reserves the same vertical space and the floor label
+          below it never jumps.
         -->
         <com.tavisdor.app.ui.TurnOrderBarView
             android:id="@+id/turnOrderBar"
             android:layout_width="match_parent"
             android:layout_height="@dimen/turn_order_bar_height"
             android:layout_marginTop="@dimen/turn_order_bar_top_margin"
-            android:visibility="gone" />
+            android:visibility="invisible" />
+
+        <!--
+          Floor depth readout. Lives in XML (not on the dungeon
+          canvas) so it stays at a fixed screen position: below the
+          turn-order band and clear of the camera cutout / notch.
+        -->
+        <TextView
+            android:id="@+id/tvFloorLabel"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/floor_label_band_height"
+            android:gravity="center"
+            android:textColor="@color/floor_label_text"
+            android:textSize="@dimen/floor_label_text_size"
+            android:textStyle="bold"
+            tools:text="Floor 1" />
 
         <!-- Dungeon view: fills available space above the action bar + hero panel. -->
         <com.tavisdor.app.GameView
@@ -763,6 +778,148 @@
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintTop_toBottomOf="@id/btnHeroDetailSkills" />
         </androidx.constraintlayout.widget.ConstraintLayout>
+        </ScrollView>
+    </FrameLayout>
+
+    <!--
+      ============== Items overlay (modal, hidden by default) ==============
+      Opened by the action-bar "Items" button and auto-opened after victory
+      (and later when searching containers / opening chests). Mirrors the
+      heroDetailOverlay scrim + centered panel idiom, but the panel content
+      is a vertical ScrollView with three section containers populated
+      programmatically by ItemsScreen.
+
+      Layout summary:
+        - Top row: gold counter (left) + Close (right).
+        - Section 1 header + container: Equipment & Weapons.
+        - Section 2 header + container: Ingredients.
+        - Section 3 header + hint + container + Pick Up All: Pickup / Discard.
+    -->
+    <FrameLayout
+        android:id="@+id/itemsOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/items_panel_scrim"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <ScrollView
+            android:id="@+id/itemsPanelScroll"
+            android:layout_width="@dimen/items_panel_width"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginVertical="24dp"
+            android:background="@drawable/bg_hero_detail_panel"
+            android:clipToOutline="true"
+            android:fillViewport="false"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/itemsPanel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:clickable="true"
+                android:focusable="true"
+                android:orientation="vertical"
+                android:padding="@dimen/items_panel_padding">
+
+                <!-- Top row: gold counter (left) + Close (right). -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/tvItemsGold"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:textColor="@color/items_panel_gold"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        tools:text="Gold: 42" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnItemsClose"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="0dp"
+                        android:minWidth="0dp"
+                        android:paddingHorizontal="14dp"
+                        android:text="@string/items_panel_close" />
+                </LinearLayout>
+
+                <!-- Section 1: Equipment & Weapons. -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/items_panel_section_gap"
+                    android:text="@string/items_panel_section_equipment"
+                    android:textColor="@color/items_panel_section_header"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:id="@+id/itemsEquipmentList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingTop="4dp" />
+
+                <!-- Section 2: Ingredients. -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/items_panel_section_gap"
+                    android:text="@string/items_panel_section_ingredients"
+                    android:textColor="@color/items_panel_section_header"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:id="@+id/itemsIngredientList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingTop="4dp" />
+
+                <!-- Section 3: Pickup / Discard. -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/items_panel_section_gap"
+                    android:text="@string/items_panel_section_pickup"
+                    android:textColor="@color/items_panel_section_header"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvItemsPickupHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="@string/items_panel_pickup_hint"
+                    android:textColor="@color/items_panel_hint"
+                    android:textSize="11sp" />
+
+                <LinearLayout
+                    android:id="@+id/itemsPickupList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingTop="4dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnItemsPickUpAll"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/items_panel_pickup_all" />
+            </LinearLayout>
         </ScrollView>
     </FrameLayout>
 </FrameLayout>

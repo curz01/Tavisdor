@@ -2,6 +2,9 @@ package com.tavisdor.app.save
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.tavisdor.app.items.Ingredient
+import com.tavisdor.app.items.LootTier
+import com.tavisdor.app.items.WeaponType
 import com.tavisdor.app.party.Gender
 import com.tavisdor.app.party.HeroClass
 import com.tavisdor.app.party.NameGenerator
@@ -53,7 +56,21 @@ class SaveStore(context: Context) {
                 dexterity = prefs.getInt("$KEY_HERO_PREFIX${slot}_dex", 10),
             )
         }
-        return SaveData(schema, heroes, floor, seed)
+        // Schema v4 adds party-level gold + inventory. Older saves
+        // default to 0 gold and empty inventory lists so a hero that
+        // was farming on v3 doesn't crash on first load.
+        val gold = prefs.getInt(KEY_PARTY_GOLD, 0)
+        val weapons = decodeWeapons(prefs.getString(KEY_INV_WEAPONS, null))
+        val ingredients = decodeIngredients(prefs.getString(KEY_INV_INGREDIENTS, null))
+        return SaveData(
+            schemaVersion = schema,
+            heroes = heroes,
+            currentFloor = floor,
+            floorSeed = seed,
+            partyGold = gold,
+            inventoryWeapons = weapons,
+            inventoryIngredients = ingredients,
+        )
     }
 
     fun save(data: SaveData) {
@@ -72,7 +89,66 @@ class SaveStore(context: Context) {
                 putInt("$KEY_HERO_PREFIX${slot}_hp", h.hp)
                 putInt("$KEY_HERO_PREFIX${slot}_dex", h.dexterity)
             }
+            putInt(KEY_PARTY_GOLD, data.partyGold)
+            putString(KEY_INV_WEAPONS, encodeWeapons(data.inventoryWeapons))
+            putString(KEY_INV_INGREDIENTS, encodeIngredients(data.inventoryIngredients))
             apply()
+        }
+    }
+
+    /**
+     * Encodes a list of weapons as one row per weapon separated by
+     * [WEAPON_ROW_SEPARATOR], with intra-row fields separated by
+     * [WEAPON_FIELD_SEPARATOR]. Format:
+     *
+     *   `WeaponType.name | tierOrNull | attackBonus | range`
+     *
+     * The pipe character is reserved for the field separator;
+     * [WeaponType] / [LootTier] enum names never contain it, and
+     * [Weapon.displayName] is intentionally NOT serialized because
+     * the load path recomposes it from the tier so a future
+     * material-name rename retro-actively applies.
+     */
+    private fun encodeWeapons(list: List<WeaponSaveData>): String =
+        if (list.isEmpty()) "" else list.joinToString(WEAPON_ROW_SEPARATOR) { w ->
+            listOf(
+                w.type.name,
+                w.tier?.name ?: WEAPON_TIER_NONE,
+                w.attackBonus.toString(),
+                w.range.toString(),
+            ).joinToString(WEAPON_FIELD_SEPARATOR)
+        }
+
+    private fun decodeWeapons(raw: String?): List<WeaponSaveData> {
+        if (raw.isNullOrEmpty()) return emptyList()
+        return raw.split(WEAPON_ROW_SEPARATOR).mapNotNull { row ->
+            val parts = row.split(WEAPON_FIELD_SEPARATOR)
+            if (parts.size != 4) return@mapNotNull null
+            val type = runCatching { WeaponType.valueOf(parts[0]) }.getOrNull() ?: return@mapNotNull null
+            val tier = if (parts[1] == WEAPON_TIER_NONE) {
+                null
+            } else {
+                runCatching { LootTier.valueOf(parts[1]) }.getOrNull() ?: return@mapNotNull null
+            }
+            val atk = parts[2].toIntOrNull() ?: return@mapNotNull null
+            val rng = parts[3].toIntOrNull() ?: return@mapNotNull null
+            WeaponSaveData(type, tier, atk, rng)
+        }
+    }
+
+    /**
+     * Comma-separated [Ingredient.name]s. Order is preserved (the
+     * panel renders them in pickup order). Unknown names are
+     * dropped silently so a rename of an [Ingredient] enum doesn't
+     * crash older saves - the player just loses that line.
+     */
+    private fun encodeIngredients(list: List<Ingredient>): String =
+        if (list.isEmpty()) "" else list.joinToString(INGREDIENT_SEPARATOR) { it.name }
+
+    private fun decodeIngredients(raw: String?): List<Ingredient> {
+        if (raw.isNullOrEmpty()) return emptyList()
+        return raw.split(INGREDIENT_SEPARATOR).mapNotNull {
+            runCatching { Ingredient.valueOf(it) }.getOrNull()
         }
     }
 
@@ -87,5 +163,18 @@ class SaveStore(context: Context) {
         private const val KEY_CURRENT_FLOOR = "current_floor"
         private const val KEY_FLOOR_SEED = "floor_seed"
         private const val KEY_HERO_PREFIX = "hero_"
+
+        // Schema v4 fields.
+        private const val KEY_PARTY_GOLD = "party_gold"
+        private const val KEY_INV_WEAPONS = "inv_weapons"
+        private const val KEY_INV_INGREDIENTS = "inv_ingredients"
+
+        // Inventory serialization separators. Chosen so the
+        // characters never appear in enum names (which are the
+        // only payload we serialize today).
+        private const val WEAPON_ROW_SEPARATOR = ";"
+        private const val WEAPON_FIELD_SEPARATOR = "|"
+        private const val WEAPON_TIER_NONE = "_"
+        private const val INGREDIENT_SEPARATOR = ","
     }
 }

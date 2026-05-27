@@ -4,8 +4,12 @@ import android.app.AlertDialog
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
+import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.button.MaterialButton
 import com.tavisdor.app.audio.AudioFocusGate
 import com.tavisdor.app.audio.AudioSettings
@@ -20,6 +24,7 @@ import com.tavisdor.app.skills.SkillCatalog
 import com.tavisdor.app.ui.ClassSelectScreen
 import com.tavisdor.app.ui.HealTargetDialog
 import com.tavisdor.app.ui.HeroDetailScreen
+import com.tavisdor.app.ui.ItemsScreen
 import com.tavisdor.app.ui.InGameMenuDialog
 import com.tavisdor.app.ui.SkillPickerDialog
 import com.tavisdor.app.ui.TitleScreen
@@ -50,10 +55,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var titleOverlay: View
     private lateinit var classSelectOverlay: View
     private lateinit var heroDetailOverlay: ViewGroup
+    private lateinit var itemsOverlay: ViewGroup
 
     private lateinit var gameView: GameView
     private lateinit var heroPanel: HeroPanelView
     private lateinit var turnOrderBar: TurnOrderBarView
+    private lateinit var tvFloorLabel: TextView
     private lateinit var combatLogView: com.tavisdor.app.ui.CombatLogView
     private lateinit var combatLogContainer: View
     private lateinit var btnCombatLogUp: MaterialButton
@@ -62,6 +69,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var titleScreen: TitleScreen
     private lateinit var classSelectScreen: ClassSelectScreen
     private lateinit var heroDetailScreen: HeroDetailScreen
+    private lateinit var itemsScreen: ItemsScreen
 
     // Action bar (Menu / Action / Items) sits above the hero panel.
     private lateinit var btnActionBarMenu: MaterialButton
@@ -70,6 +78,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Edge-to-edge + status-bar hidden for a clean game canvas.
+        // We tell the window not to fit system bars so the dungeon
+        // view can paint behind them, then explicitly hide just the
+        // top status bar (time / battery / signal). The nav bar at
+        // the bottom is left visible so the player still has Back /
+        // Home / Recents without having to remember an edge swipe.
+        // Behavior = SHOW_TRANSIENT_BARS_BY_SWIPE so a swipe from
+        // the top edge peeks the bar back briefly (notifications)
+        // and it auto-hides again - matches the immersive-game
+        // norm on Android.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        applyImmersiveMode()
         setContentView(R.layout.activity_main)
 
         saveStore = SaveStore(applicationContext)
@@ -83,14 +103,17 @@ class MainActivity : AppCompatActivity() {
         // whether a Combat is active; the strip rebinds itself to
         // the new encounter so portraits reflect the fresh fight.
         game.onCombatChanged = { combat -> onCombatChanged(combat) }
+        game.onFloorDepthChanged = { refreshFloorLabel() }
 
         gameRoot = findViewById(R.id.gameRoot)
         titleOverlay = findViewById(R.id.titleOverlay)
         classSelectOverlay = findViewById(R.id.classSelectOverlay)
         heroDetailOverlay = findViewById(R.id.heroDetailOverlay)
+        itemsOverlay = findViewById(R.id.itemsOverlay)
         gameView = findViewById(R.id.gameView)
         heroPanel = findViewById(R.id.heroPanel)
         turnOrderBar = findViewById(R.id.turnOrderBar)
+        tvFloorLabel = findViewById(R.id.tvFloorLabel)
         combatLogContainer = findViewById(R.id.combatLogContainer)
         combatLogView = findViewById(R.id.combatLog)
         combatLogView.setLog(game.combatLog)
@@ -153,12 +176,47 @@ class MainActivity : AppCompatActivity() {
         )
 
         heroDetailScreen = HeroDetailScreen(root = heroDetailOverlay)
+        itemsScreen = ItemsScreen(root = itemsOverlay)
+
+        // Turn-order strip taps:
+        //   - Hero portrait -> mark that hero active, mirroring a
+        //     hero-panel portrait tap. The white spotlight border
+        //     follows because spotlightHeroSlot reads activeHeroSlot.
+        //   - Enemy portrait -> select the enemy (drives hate icons
+        //     + the animated down-arrow marker) AND smoothly pan
+        //     the camera to its cell so the player can find it on
+        //     a busy map.
+        turnOrderBar.onPortraitTapped = { entry -> onTurnOrderPortraitTapped(entry) }
+
+        // Combat-mode party-move confirmation. A tap on a legal
+        // move cell that would forfeit other heroes' turns lands
+        // here instead of going straight through to attemptPartyMove,
+        // so the player can opt out before burning the round.
+        gameView.onCombatMoveNeedsConfirm = { target -> showCombatMoveConfirmation(target) }
+
+        // The items panel auto-opens on victory so the player sees
+        // their haul. The hook fires AFTER setCombat(null), so
+        // hero panels / strip have already cleaned up - the items
+        // overlay layers on top of a quiet UI. Party-wipe does
+        // NOT fire this (success = false is filtered upstream).
+        game.onCombatVictory = {
+            val party = game.party
+            if (party != null && !itemsScreen.isVisible) {
+                itemsScreen.bind(party)
+                itemsScreen.show()
+            }
+        }
 
         showTitle()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
+                    // Items panel closes before hero detail because
+                    // both can be open at once in theory (items
+                    // overlays the dungeon, hero detail overlays
+                    // both) - close the topmost first.
+                    itemsScreen.isVisible -> itemsScreen.hide()
                     heroDetailScreen.isVisible -> heroDetailScreen.hide()
                     classSelectOverlay.visibility == View.VISIBLE -> showTitle()
                     titleOverlay.visibility == View.VISIBLE -> finish()
@@ -330,9 +388,79 @@ class MainActivity : AppCompatActivity() {
         game.setSelectedSkill(slot, null)
     }
 
-    /** Stubbed until the inventory / loot system lands. */
+    /**
+     * Opens the items panel modal. Requires an active party (the
+     * panel renders party-scoped state) - silently no-ops on the
+     * title screen so the button doesn't crash if it's ever
+     * tapped before [Game.startNewRun] / [Game.resumeFromSave]
+     * has produced a party.
+     */
     private fun onActionBarItemsTapped() {
-        // No-op until the inventory UI exists; silent on purpose.
+        val party = game.party ?: return
+        itemsScreen.bind(party)
+        itemsScreen.show()
+    }
+
+    /**
+     * Routes a tap on a [com.tavisdor.app.ui.TurnOrderBarView]
+     * portrait to the right Game write:
+     *   - HERO  -> [Game.setActiveHeroSlot] (white spotlight
+     *              border moves to that hero's panel slot) AND
+     *              a smooth camera pan back to the party token.
+     *              The pan exists because after tapping an enemy
+     *              portrait (which yanked the camera to the enemy)
+     *              the player needs a one-tap way to get back to
+     *              "where am I fighting from" without scrolling
+     *              the map manually.
+     *   - ENEMY -> [Game.setSelectedEnemy] AND a smooth camera
+     *              pan to the enemy's cell. The selection drives
+     *              the hate icons + the animated down-arrow
+     *              marker, matching the on-map enemy-tap path.
+     *
+     * Dead heroes / enemies are silently rejected; the strip
+     * already filters out mid-fade portraits so this guard only
+     * fires for the rare race where the data shifts between draw
+     * and tap.
+     */
+    private fun onTurnOrderPortraitTapped(entry: com.tavisdor.app.combat.InitiativeEntry) {
+        val combat = game.combat ?: return
+        when (entry.kind) {
+            com.tavisdor.app.combat.InitiativeEntry.Kind.HERO -> {
+                val hero = combat.party.heroes.getOrNull(entry.index) ?: return
+                if (!hero.isAlive) return
+                game.setActiveHeroSlot(entry.index)
+                // Pan back to the party token's cell so the player
+                // doesn't have to hunt the map after an enemy-portrait
+                // detour. Uses the same easing window enemy taps use
+                // for symmetry. Floor is null only in the same race
+                // where combat would also be null (already guarded);
+                // belt-and-suspenders check kept just in case.
+                val floor = game.floor
+                if (floor != null) {
+                    val partyCell = floor.partyCell
+                    game.camera.panTo(
+                        cellX = partyCell.x.toFloat(),
+                        cellY = partyCell.y.toFloat(),
+                        durationMs = TURN_ORDER_TAP_PAN_MS,
+                    )
+                    gameView.invalidate()
+                }
+            }
+            com.tavisdor.app.combat.InitiativeEntry.Kind.ENEMY -> {
+                val enemy = combat.enemies.getOrNull(entry.index) ?: return
+                if (!enemy.isAlive) return
+                game.setSelectedEnemy(enemy)
+                game.camera.panTo(
+                    cellX = enemy.cell.x.toFloat(),
+                    cellY = enemy.cell.y.toFloat(),
+                    durationMs = TURN_ORDER_TAP_PAN_MS,
+                )
+                // The pan animates over multiple frames; nudge
+                // the dungeon view to start redrawing immediately
+                // rather than waiting for the next animation tick.
+                gameView.invalidate()
+            }
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -346,7 +474,9 @@ class MainActivity : AppCompatActivity() {
      */
     private fun onCombatChanged(combat: com.tavisdor.app.combat.Combat?) {
         turnOrderBar.setCombat(combat)
-        turnOrderBar.visibility = if (combat != null) View.VISIBLE else View.GONE
+        // INVISIBLE (not GONE) between fights so the header band
+        // height stays fixed and the floor label never jumps.
+        turnOrderBar.visibility = if (combat != null) View.VISIBLE else View.INVISIBLE
         // Reveal the combat log the first time combat starts and
         // leave it visible after the encounter ends - the player
         // explicitly wants to be able to scroll back through what
@@ -354,6 +484,12 @@ class MainActivity : AppCompatActivity() {
         if (combat != null) {
             combatLogContainer.visibility = View.VISIBLE
             refreshCombatLogScrollButtons()
+            // Defensive: if the player somehow left the items
+            // overlay open when combat starts, drop it. The modal
+            // would otherwise eat dungeon taps and block the
+            // first turn. Also intentionally discards any
+            // unpicked-up drops from a prior victory.
+            if (itemsScreen.isVisible) itemsScreen.hide()
         }
     }
 
@@ -382,6 +518,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showTitle() {
         heroDetailScreen.hide()
+        itemsScreen.hide()
         titleOverlay.visibility = View.VISIBLE
         classSelectOverlay.visibility = View.GONE
         gameRoot.visibility = View.GONE
@@ -390,6 +527,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showClassSelect() {
         heroDetailScreen.hide()
+        itemsScreen.hide()
         titleOverlay.visibility = View.GONE
         classSelectOverlay.visibility = View.VISIBLE
         gameRoot.visibility = View.GONE
@@ -398,11 +536,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun showGame() {
         heroDetailScreen.hide()
+        itemsScreen.hide()
         titleOverlay.visibility = View.GONE
         classSelectOverlay.visibility = View.GONE
         gameRoot.visibility = View.VISIBLE
+        refreshFloorLabel()
         gameView.invalidate()
         heroPanel.invalidate()
+    }
+
+    private fun refreshFloorLabel() {
+        tvFloorLabel.text = getString(R.string.game_floor_label_short, game.floorDepth)
     }
 
     private fun onStartNewGameRequested() {
@@ -460,6 +604,35 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    /**
+     * Driven by [GameView.onCombatMoveNeedsConfirm]: shown when a
+     * combat-mode tap on a legal move cell would forfeit other
+     * heroes' turns this round. The dialog mirrors the spec
+     * exactly ("if party moves no one else can perform actions
+     * this turn") so the player isn't surprised when the strip
+     * fast-forwards through the rest of the hero portraits.
+     *
+     * On accept we route the SAME [target] back through
+     * [Game.attemptPartyMoveInCombat]. The controller still
+     * runs every preflight (in case the world changed between
+     * the tap and the confirmation - e.g. an enemy walked into
+     * the target cell during enemy turns animating in the
+     * background) so a stale dialog can't punch the party
+     * through an invalid move.
+     */
+    private fun showCombatMoveConfirmation(target: Cell) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.combat_move_confirm_title)
+            .setMessage(R.string.combat_move_confirm_message)
+            .setCancelable(true)
+            .setNegativeButton(R.string.combat_move_confirm_no) { d, _ -> d.dismiss() }
+            .setPositiveButton(R.string.combat_move_confirm_yes) { d, _ ->
+                d.dismiss()
+                game.attemptPartyMoveInCombat(target)
+            }
+            .show()
+    }
+
     private fun onDoorOutcome(outcome: Game.DoorOutcome, @Suppress("UNUSED_PARAMETER") actionIndex: Int) {
         when (outcome) {
             Game.DoorOutcome.OPENED, Game.DoorOutcome.ALREADY_UNLOCKED -> {
@@ -488,5 +661,42 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         audioFocus.release()
         super.onStop()
+    }
+
+    /**
+     * Re-applies immersive mode whenever the window regains focus.
+     * Notification-shade pulls, system dialogs, and recent-apps
+     * previews can each transiently restore the status bar; this
+     * hook puts it back the moment Tavisdor is foreground again
+     * so the player never lands on a half-hidden HUD.
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) applyImmersiveMode()
+    }
+
+    /**
+     * Hides the top status bar (time / battery / signal) and
+     * arms the swipe-from-edge "peek then auto-hide" behavior.
+     * The bottom navigation bar stays visible. Safe to call
+     * repeatedly - the controller is idempotent.
+     */
+    private fun applyImmersiveMode() {
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.hide(WindowInsetsCompat.Type.statusBars())
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
+
+    companion object {
+        /**
+         * Pan duration (ms) when the player taps an enemy portrait
+         * in the turn-order strip and the camera glides to that
+         * enemy's cell. Tuned to feel responsive without snapping -
+         * a fraction of the enemy-turn cinematic pan
+         * ([CombatController.PAN_TO_ENEMY_MS]-style cadence)
+         * so the player perceives it as a quick "look here".
+         */
+        private const val TURN_ORDER_TAP_PAN_MS: Float = 280f
     }
 }

@@ -8,6 +8,11 @@ import com.tavisdor.app.items.LootTier
 import com.tavisdor.app.party.ClassStats
 import com.tavisdor.app.party.Hero
 import com.tavisdor.app.render.Camera
+import com.tavisdor.app.render.PartyLungeGateway
+import com.tavisdor.app.render.WeaponFxCatalog
+import com.tavisdor.app.render.WeaponFxGateway
+import com.tavisdor.app.render.WeaponFxKind
+import com.tavisdor.app.render.WeaponFxRequest
 import com.tavisdor.app.skills.Skill
 import com.tavisdor.app.skills.SkillCatalog
 import kotlin.random.Random
@@ -106,6 +111,22 @@ class CombatController(
      * panel never references a corpse.
      */
     private val onEnemyDefeated: (Enemy) -> Unit = {},
+    /**
+     * Fired the moment [currentHeroSlot] changes - on hero-turn
+     * start (non-null), enemy-turn start (null), and end-of-combat
+     * cleanup (null). The host wires this to
+     * [com.tavisdor.app.game.Game.setActiveHeroSlot] so the hero
+     * panel's "you're up" white border auto-tracks the actor
+     * unless the player manually overrides via a portrait tap.
+     */
+    private val onActorChanged: (Int?) -> Unit = {},
+    /**
+     * Host-owned weapon attack animations. When playback starts,
+     * damage resolution is deferred until the FX completes.
+     */
+    private val weaponFx: WeaponFxGateway,
+    /** Host-owned party lunge tween (used by Fighter Charge). */
+    private val partyLunge: PartyLungeGateway,
 ) {
 
     /**
@@ -125,6 +146,41 @@ class CombatController(
     private val enemyScript: ArrayDeque<EnemyStep> = ArrayDeque()
 
     /**
+     * Active cinematic slide for [EnemyStep.Move]. While
+     * [enemyStepRemainingMs] counts down the renderer lerps the
+     * enemy sprite (and its HP bar) from [EnemyMoveAnim.from] to
+     * [EnemyMoveAnim.to] even though [Enemy.cell] already snapped
+     * to the destination for gameplay logic.
+     */
+    private var enemyMoveAnim: EnemyMoveAnim? = null
+
+    /**
+     * True while a weapon attack animation is playing and combat
+     * resolution for that swing is still pending.
+     */
+    private var attackFxPending: Boolean = false
+
+    /** Duration for the *next* Charge lunge, consumed by the Charge FX request. */
+    private var pendingChargeLungeMs: Long? = null
+
+    /**
+     * Fractional grid coordinates for drawing [enemy] this frame.
+     * During a move tween returns a lerp between cells; otherwise
+     * returns the enemy's logical [Enemy.cell].
+     */
+    fun visualPositionFor(enemy: Enemy): Pair<Float, Float> {
+        val anim = enemyMoveAnim
+        if (anim != null && anim.enemy === enemy && enemyStepRemainingMs > 0L) {
+            val duration = anim.durationMs.toFloat().coerceAtLeast(1f)
+            val t = 1f - (enemyStepRemainingMs.toFloat() / duration).coerceIn(0f, 1f)
+            val x = anim.from.x + (anim.to.x - anim.from.x) * t
+            val y = anim.from.y + (anim.to.y - anim.from.y) * t
+            return x to y
+        }
+        return enemy.cell.x.toFloat() to enemy.cell.y.toFloat()
+    }
+
+    /**
      * True while the strip's leaver animation is in flight after a
      * commit. The controller waits for it to finish before queuing
      * the next actor so the visual handoff stays readable.
@@ -135,9 +191,20 @@ class CombatController(
     var awaitingHeroInput: Boolean = false
         private set
 
-    /** Slot index (0..3) of the hero whose turn it currently is, or null. */
+    /**
+     * Slot index (0..3) of the hero whose turn it currently is,
+     * or null when an enemy is acting / combat is between turns.
+     * Writes are gated by a custom setter so [onActorChanged]
+     * fires on every transition - including no-op assignments
+     * being filtered out, so the hero-panel listener doesn't
+     * thrash on identical writes.
+     */
     var currentHeroSlot: Int? = null
-        private set
+        private set(value) {
+            if (field == value) return
+            field = value
+            onActorChanged(value)
+        }
 
     /**
      * One-time end-of-combat latch so victory / wipe handling only
@@ -173,6 +240,8 @@ class CombatController(
         // resolve at a steady cadence.
         if (camera.tick(deltaMs)) redraw = true
 
+        if (weaponFx.isPlaying || attackFxPending) redraw = true
+
         // Drive the strip's leave / defeat / shift animations.
         // The view reads CombatRound state for rendering but does
         // NOT advance it - keeping the single advance call here
@@ -206,7 +275,7 @@ class CombatController(
         // soft-locks the moment any enemy completes a full turn
         // without dying first.
         val enemyTurnInFlight = enemyScript.isNotEmpty() || enemyStepRemainingMs > 0L
-        if (!awaitingLeaver && !awaitingHeroInput && enemyTurnInFlight) {
+        if (!awaitingLeaver && !awaitingHeroInput && enemyTurnInFlight && !attackFxPending) {
             advanceEnemyScript(deltaMs)
             redraw = true
         }
@@ -239,8 +308,14 @@ class CombatController(
 
         /**
          * No adjacent enemies; the party stepped freely. The
-         * initiating hero's turn ended, but other heroes still get
-         * their actions this round.
+         * initiating hero's turn ends AND all remaining hero
+         * turns this round are auto-skipped via
+         * [CombatRound.lockHeroActionsThisRound] - the cost of
+         * relocating the whole party is that the rest of the
+         * roster forfeits this round's action. The host is
+         * expected to prompt the player for confirmation BEFORE
+         * calling [attemptPartyMove] when [wouldLockOthersOnMove]
+         * returns true, so the lockout is never a surprise.
          */
         MOVED_FREE,
 
@@ -270,8 +345,12 @@ class CombatController(
      *     [Floor.partyCell], walkable, not enemy-occupied, not a
      *     locked door.
      *   - If zero enemies are touching the party, the move is
-     *     free; this hero's turn ends so they can't swing on the
-     *     same beat. Other party turns this round continue.
+     *     free; this hero's turn ends AND every remaining hero
+     *     turn this round is locked - relocating the whole party
+     *     burns the rest of the roster's action economy, same as
+     *     a disengage. Host should call [wouldLockOthersOnMove]
+     *     first and prompt the player for confirmation so this
+     *     cost isn't a surprise.
      *   - If 1-3 enemies are touching, one disengage check is
      *     rolled per enemy (see [CombatMath.resolveDisengage]).
      *     ALL must pass; if so, party steps and remaining hero
@@ -299,12 +378,17 @@ class CombatController(
             return PartyMoveResult.SURROUNDED
         }
 
-        // No enemies in melee: free step, hero loses their action
-        // this turn but other heroes still act this round.
+        // No enemies in melee: free step. Relocating the party
+        // costs the current hero's action AND locks every
+        // remaining hero turn this round - same cost a successful
+        // disengage pays. The host is expected to have already
+        // asked the player to confirm this via the dialog driven
+        // by [wouldLockOthersOnMove] before reaching here.
         if (adjacentEnemies.isEmpty()) {
             floor.partyCell = target
             floor.recordVisited(target)
             log.append(CombatLogEntry.PartyMoved)
+            combat.round.lockHeroActionsThisRound()
             finishCurrentAction()
             return PartyMoveResult.MOVED_FREE
         }
@@ -346,6 +430,75 @@ class CombatController(
         return PartyMoveResult.DISENGAGE_FAILED
     }
 
+    /**
+     * Returns true when [target] is a legal one-cell move that
+     * would also lock at least one OTHER hero's turn out of the
+     * round. The host calls this BEFORE [attemptPartyMove] to
+     * decide whether to prompt the player for confirmation.
+     *
+     * Conditions, all must hold:
+     *   - It's a hero's turn and the active hero is alive.
+     *   - [target] passes the same basic-validity gate as
+     *     [attemptPartyMove] (adjacent, walkable, not enemy-
+     *     occupied, not a locked door). We DON'T roll the
+     *     disengage dice here - even a risky move warrants the
+     *     warning so the player can opt out before the dice fall.
+     *   - The party isn't fully surrounded (a SURROUNDED tap is
+     *     a deterministic no-op, so prompting there would just
+     *     be noise).
+     *   - At least one initiative entry after [CombatRound.actingIndex]
+     *     is a still-alive, still-pending hero whose turn would
+     *     be forfeit by a successful move.
+     *
+     * A false return means "no confirmation needed" - either the
+     * move is illegal (the controller will reject it anyway), or
+     * there are no other heroes whose actions would be lost.
+     */
+    fun wouldLockOthersOnMove(target: Cell): Boolean {
+        if (ended || !awaitingHeroInput) return false
+        val heroSlot = currentHeroSlot ?: return false
+        val activeHero = combat.party.heroes.getOrNull(heroSlot) ?: return false
+        if (!activeHero.isAlive) return false
+
+        val current = floor.partyCell
+        if (manhattan(current, target) != 1) return false
+        if (target !in floor.floorCells) return false
+        if (floor.isLockedDoor(target)) return false
+        if (floor.enemyAt(target) != null) return false
+        // SURROUNDED short-circuits attemptPartyMove without
+        // touching the party - skip confirmation when the move
+        // can't actually fire.
+        if (adjacentLivingEnemies(current).size >= 4) return false
+
+        return countPendingHeroTurnsAfterCurrent() > 0
+    }
+
+    /**
+     * Count of initiative entries strictly AFTER
+     * [CombatRound.actingIndex] that are still-alive, still-
+     * present hero slots. Removed entries (KO'd heroes whose
+     * defeat animation finalized) and dead heroes are skipped.
+     *
+     * This is the headcount the host displays implicitly in the
+     * party-move confirmation prompt: "the rest of the heroes"
+     * is exactly this set.
+     */
+    private fun countPendingHeroTurnsAfterCurrent(): Int {
+        val round = combat.round
+        val acting = round.actingIndex
+        if (acting < 0) return 0
+        var n = 0
+        for (i in (acting + 1) until combat.initiative.size) {
+            val entry = combat.initiative[i]
+            if (entry.kind != InitiativeEntry.Kind.HERO) continue
+            if (entry in round.removedEntries) continue
+            val hero = combat.party.heroes.getOrNull(entry.index) ?: continue
+            if (!hero.isAlive) continue
+            n++
+        }
+        return n
+    }
+
     /** Living enemies whose cell is Manhattan-1 to [cell]. */
     private fun adjacentLivingEnemies(cell: Cell): List<Enemy> {
         val out = ArrayList<Enemy>(4)
@@ -368,7 +521,7 @@ class CombatController(
      * - the same default the exploration-mode Action button uses.
      */
     fun commitHeroAction(slot: Int, skill: Skill?, preferredTarget: Enemy? = null): Boolean {
-        if (ended || !awaitingHeroInput) return false
+        if (ended || !awaitingHeroInput || attackFxPending) return false
         if (currentHeroSlot != slot) return false
         val hero = combat.party.heroes.getOrNull(slot) ?: return false
         if (!hero.isAlive) return false
@@ -453,8 +606,10 @@ class CombatController(
             }
         }
 
-        resolveHeroAction(hero, chosen, target)
-        finishCurrentAction()
+        withAttackFx(buildHeroStrikeFx(hero, chosen, target)) {
+            resolveHeroAction(hero, chosen, target)
+            finishCurrentAction()
+        }
         return true
     }
 
@@ -565,11 +720,14 @@ class CombatController(
 
         hero.spendMana(skill.mpCost)
         val travelled = LineOfSight.manhattan(start, landing)
+        val lungeMs = (travelled * CHARGE_MS_PER_CELL).coerceAtLeast(CHARGE_MIN_MS)
+        pendingChargeLungeMs = lungeMs
         floor.partyCell = landing
         floor.recordVisited(landing)
         // Keep the camera glued to the party so the user
         // doesn't lose the fighter mid-charge.
         camera.snapTo(landing.x.toFloat(), landing.y.toFloat())
+        partyLunge.startLunge(from = start, to = landing, durationMs = lungeMs)
 
         log.append(
             CombatLogEntry.HeroCharged(
@@ -578,8 +736,11 @@ class CombatController(
                 distance = travelled,
             ),
         )
-        resolveChargeStrike(hero, target)
-        finishCurrentAction()
+        withAttackFx(buildHeroStrikeFx(hero, skill, target)) {
+            pendingChargeLungeMs = null
+            resolveChargeStrike(hero, target)
+            finishCurrentAction()
+        }
         return true
     }
 
@@ -850,6 +1011,7 @@ class CombatController(
     private fun planEnemyTurn(enemy: Enemy) {
         enemyScript.clear()
         enemyStepRemainingMs = 0L
+        enemyMoveAnim = null
 
         // 0. Hate bookkeeping FIRST so the target pick later in
         //    [tryEnemyStrike] uses the freshly-bumped values:
@@ -963,6 +1125,7 @@ class CombatController(
         val enemy = currentEnemy()
         when (step) {
             is EnemyStep.Pan -> {
+                enemyMoveAnim = null
                 camera.panTo(
                     cellX = step.target.x.toFloat(),
                     cellY = step.target.y.toFloat(),
@@ -971,6 +1134,7 @@ class CombatController(
                 enemyStepRemainingMs = step.durationMs
             }
             is EnemyStep.PanToParty -> {
+                enemyMoveAnim = null
                 val party = floor.partyCell
                 camera.panTo(
                     cellX = party.x.toFloat(),
@@ -981,7 +1145,16 @@ class CombatController(
             }
             is EnemyStep.Move -> {
                 if (enemy != null && enemy.isAlive) {
+                    val from = enemy.cell
+                    enemyMoveAnim = EnemyMoveAnim(
+                        enemy = enemy,
+                        from = from,
+                        to = step.target,
+                        durationMs = step.durationMs,
+                    )
                     floor.moveEnemy(enemy, step.target)
+                } else {
+                    enemyMoveAnim = null
                 }
                 camera.panTo(
                     cellX = step.target.x.toFloat(),
@@ -991,12 +1164,23 @@ class CombatController(
                 enemyStepRemainingMs = step.durationMs
             }
             is EnemyStep.Strike -> {
+                enemyMoveAnim = null
                 if (enemy != null && enemy.isAlive) {
-                    tryEnemyStrike(enemy)
+                    attackFxPending = playEnemyStrikeFx(enemy)
+                    if (!attackFxPending) {
+                        tryEnemyStrike(enemy)
+                    }
+                    enemyStepRemainingMs = if (attackFxPending) {
+                        Long.MAX_VALUE / 4L
+                    } else {
+                        step.pauseMs
+                    }
+                } else {
+                    enemyStepRemainingMs = step.pauseMs
                 }
-                enemyStepRemainingMs = step.pauseMs
             }
             is EnemyStep.Wait -> {
+                enemyMoveAnim = null
                 enemyStepRemainingMs = step.durationMs
             }
         }
@@ -1078,6 +1262,84 @@ class CombatController(
             out += e.cell
         }
         return out
+    }
+
+    // ---------------------------------------------------------------
+    // Weapon attack FX
+    // ---------------------------------------------------------------
+
+    /**
+     * Runs [block] immediately when [request] is null, sprites are
+     * missing, or playback fails to start; otherwise defers [block]
+     * until the animation finishes.
+     */
+    private fun withAttackFx(request: WeaponFxRequest?, block: () -> Unit) {
+        if (request != null) {
+            val started = weaponFx.start(request) {
+                attackFxPending = false
+                block()
+            }
+            if (started) {
+                attackFxPending = true
+                return
+            }
+        }
+        block()
+    }
+
+    private fun buildHeroStrikeFx(hero: Hero, skill: Skill, target: Enemy): WeaponFxRequest? {
+        if (skill.id == SkillCatalog.FIGHTER_CHARGE_ID) {
+            return WeaponFxRequest(
+                attackerCell = floor.partyCell,
+                defenderCell = target.cell,
+                kind = WeaponFxKind.CHARGE_SWORD_HOLD,
+                weaponType = hero.weapon1?.type,
+                durationMsOverride = pendingChargeLungeMs,
+            )
+        }
+        val kind = if (skill.isSpell) {
+            WeaponFxCatalog.kindForSpell(
+                weaponType = hero.weapon1?.type,
+                isFireArrowSkill = skill.id == FIRE_ARROW_SKILL_ID,
+            )
+        } else {
+            WeaponFxCatalog.kindForWeaponAttack(hero.weapon1?.type) ?: return null
+        }
+        return WeaponFxRequest(
+            attackerCell = floor.partyCell,
+            defenderCell = target.cell,
+            kind = kind,
+            weaponType = hero.weapon1?.type,
+        )
+    }
+
+    /**
+     * Uses authored enemy weapon type when present; null keeps the
+     * old instant-hit behavior for enemies without weapon art.
+     */
+    private fun buildEnemyStrikeFx(enemy: Enemy): WeaponFxRequest? {
+        val kind = WeaponFxCatalog.kindForWeaponAttack(enemy.weaponType) ?: return null
+        return WeaponFxRequest(
+            attackerCell = enemy.cell,
+            defenderCell = floor.partyCell,
+            kind = kind,
+            weaponType = enemy.weaponType,
+        )
+    }
+
+    /**
+     * Returns true when FX playback started and [resolveEnemyMelee]
+     * will run on completion.
+     */
+    private fun playEnemyStrikeFx(enemy: Enemy): Boolean {
+        if (manhattan(enemy.cell, floor.partyCell) > 1) return false
+        val target = pickHateTarget(enemy) ?: return false
+        val request = buildEnemyStrikeFx(enemy) ?: return false
+        return weaponFx.start(request) {
+            attackFxPending = false
+            enemyStepRemainingMs = ENEMY_STRIKE_HOLD_MS
+            resolveEnemyMelee(enemy, target)
+        }
     }
 
     // ---------------------------------------------------------------
@@ -1328,6 +1590,7 @@ class CombatController(
             ended = true
             log.append(CombatLogEntry.Victory)
             awardVictoryXp()
+            awardVictoryLoot()
             removeDeadEnemiesFromFloor()
             onEnd(true)
             return true
@@ -1442,6 +1705,52 @@ class CombatController(
         Hero.BASE_MAX_MP + stats.intelligence * Hero.INT_MP_PER_POINT
 
     /**
+     * Rolls per-enemy loot for every defeated combatant in [combat]
+     * and deposits the results into the party:
+     *   - gold from `EnemyTemplate.goldMin..goldMax` (inclusive)
+     *     goes straight into [com.tavisdor.app.party.Party.gold].
+     *   - everything from [com.tavisdor.app.items.LootTable.rollAll]
+     *     is queued in [Inventory.pendingPickup] so the items
+     *     panel can surface it to the player.
+     *
+     * Surviving enemies (party-wipe-then-flee scenario) drop
+     * nothing - kills only. The roll uses the controller's [rng]
+     * so save-deterministic playthroughs see the same drops, and
+     * [Floor.depth] feeds [LootEntry.RandomMeleeWeapon] so deeper
+     * floors get better materials.
+     *
+     * A single [CombatLogEntry.GoldAwarded] log line summarises
+     * the total gold haul; individual item drops are visible in
+     * the items panel that auto-opens right after victory rather
+     * than spamming the combat log line-by-line.
+     */
+    private fun awardVictoryLoot() {
+        var totalGold = 0
+        val pickups = ArrayList<com.tavisdor.app.items.LootDrop>()
+        for (enemy in combat.enemies) {
+            if (enemy.isAlive) continue
+            val tpl = enemy.template
+            if (tpl.goldMax > 0) {
+                // nextInt is upper-exclusive, hence the +1 to honor
+                // the inclusive [goldMin, goldMax] semantics on
+                // EnemyTemplate.
+                totalGold += rng.nextInt(tpl.goldMin, tpl.goldMax + 1)
+            }
+            val table = com.tavisdor.app.items.LootTableCatalog.get(tpl.lootTableId)
+            if (table != null) {
+                pickups += table.rollAll(rng, floor.depth)
+            }
+        }
+        if (totalGold > 0) {
+            combat.party.addGold(totalGold)
+            log.append(CombatLogEntry.GoldAwarded(totalGold))
+        }
+        if (pickups.isNotEmpty()) {
+            combat.party.inventory.queueAllPickups(pickups)
+        }
+    }
+
+    /**
      * Yanks every defeated enemy out of [Floor]'s indexes so the
      * grid stops drawing their corpse and future room-enter checks
      * skip them. Live enemies (e.g. a wiped party retreats while
@@ -1504,6 +1813,9 @@ class CombatController(
         kotlin.math.abs(a.x - b.x) + kotlin.math.abs(a.y - b.y)
 
     companion object {
+        private const val FIRE_ARROW_SKILL_ID: String = "archer_fire_arrow"
+        private const val CHARGE_MS_PER_CELL: Long = 190L
+        private const val CHARGE_MIN_MS: Long = 320L
         /**
          * Duration of the smooth camera pan from the party (or
          * wherever the camera was) onto an active enemy at the
@@ -1586,6 +1898,13 @@ class CombatController(
  * variants and the compiler should yell if a new beat type is
  * added without handling.
  */
+private data class EnemyMoveAnim(
+    val enemy: Enemy,
+    val from: Cell,
+    val to: Cell,
+    val durationMs: Long,
+)
+
 private sealed class EnemyStep {
     data class Pan(val target: Cell, val durationMs: Long) : EnemyStep()
     data class PanToParty(val durationMs: Long) : EnemyStep()

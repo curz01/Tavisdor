@@ -38,6 +38,24 @@ import kotlin.math.floor
  */
 class InputHandler {
 
+    /**
+     * Invoked when a combat-mode tap on a legal one-cell move
+     * target would also forfeit at least one OTHER hero's turn
+     * this round (relocating the party costs the whole roster's
+     * action). The host is expected to show a confirmation
+     * dialog and, on accept, call [Game.attemptPartyMoveInCombat]
+     * with the same [Cell] - InputHandler does NOT auto-commit
+     * the move because we don't want a stray tap to silently
+     * burn three hero turns.
+     *
+     * Null disables the prompt: in that case any qualifying tap
+     * just goes through to [Game.attemptPartyMoveInCombat]
+     * directly. The bottom-row consequence still fires (every
+     * remaining hero turn is locked) - the player just doesn't
+     * get to opt out. Production builds should always set this.
+     */
+    var onCombatMoveNeedsConfirm: ((Cell) -> Unit)? = null
+
     private var downX: Float = 0f
     private var downY: Float = 0f
     private var trackingDown: Boolean = false
@@ -96,6 +114,18 @@ class InputHandler {
             val tappedEnemy = floor.enemyAt(target)
             if (tappedEnemy != null && tappedEnemy.isAlive) {
                 game.setSelectedEnemy(tappedEnemy)
+                return true
+            }
+
+            // Defer to the confirmation prompt when the move
+            // would burn other heroes' turns. The callback is
+            // expected to call [Game.attemptPartyMoveInCombat]
+            // itself on accept, so we DON'T commit here -
+            // returning true marks the touch as consumed (the
+            // dialog will land on the next frame).
+            val confirm = onCombatMoveNeedsConfirm
+            if (confirm != null && game.wouldCombatMoveLockOthers(target)) {
+                confirm(target)
                 return true
             }
 

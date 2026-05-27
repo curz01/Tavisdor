@@ -1,6 +1,7 @@
 package com.tavisdor.app.party
 
 import com.tavisdor.app.debug.DebugConfig
+import com.tavisdor.app.items.Inventory
 import com.tavisdor.app.items.Weapon
 import com.tavisdor.app.save.HeroSaveData
 
@@ -24,6 +25,50 @@ class Party private constructor(
 
     val frontLine: List<Hero> get() = heroes.subList(0, 2)
     val backLine: List<Hero> get() = heroes.subList(2, 4)
+
+    /**
+     * Party gold. Bumped by combat (enemy `goldMin..goldMax` rolls
+     * deposited on victory), treasure pickups, and any future
+     * shop / quest reward path. Always non-negative; the depositors
+     * are responsible for never asking for a negative amount.
+     *
+     * Mutations route through [addGold] so the inventory-change
+     * listener fires on every increment - the items panel watches
+     * a single source of truth ([Inventory.onChanged]) for both
+     * gold updates and pickup-queue updates.
+     */
+    var gold: Int = 0
+        private set
+
+    /**
+     * Shared inventory bag. Holds the equipment / weapons stash,
+     * ingredient stack, and the transient pickup queue surfaced
+     * in the items panel after combat or chest interactions.
+     */
+    val inventory: Inventory = Inventory()
+
+    /**
+     * Deposits [amount] gold and pings the inventory's change
+     * listener so the items panel re-renders the counter without
+     * needing a separate gold-specific subscription. Refuses
+     * non-positive amounts as a defensive guard so loot-roll
+     * bugs don't silently bleed the counter.
+     */
+    fun addGold(amount: Int) {
+        if (amount <= 0) return
+        gold += amount
+        inventory.notifyOwnerChanged()
+    }
+
+    /**
+     * Restore-time setter used by the load path so the saved gold
+     * value can be put back without firing the panel listener
+     * during view construction. Public to the [Party] companion
+     * only - the load path is the lone caller.
+     */
+    internal fun restoreGold(amount: Int) {
+        gold = amount.coerceAtLeast(0)
+    }
 
     // ----- Party-wide derived values -----
 
@@ -101,6 +146,30 @@ class Party private constructor(
             return Party(drafts.map { draft ->
                 Hero.spawn(name = draft.name, cls = draft.heroClass, gender = draft.gender)
             })
+        }
+
+        /**
+         * Convenience wrapper used by the load path. Restores the
+         * heroes via the legacy hero-only entry point, then layers
+         * the schema-v4 fields (gold + inventory contents) on top.
+         */
+        fun fromSaveData(saved: com.tavisdor.app.save.SaveData): Party {
+            val party = fromSaveData(saved.heroes)
+            party.restoreGold(saved.partyGold)
+            val weapons = saved.inventoryWeapons.map { w ->
+                val tier = w.tier
+                val displayName = tier?.displayMeleeName(w.type)
+                    ?: "Crude ${w.type.displayName}"
+                Weapon(
+                    type = w.type,
+                    tier = tier,
+                    displayName = displayName,
+                    attackBonus = w.attackBonus,
+                    range = w.range,
+                )
+            }
+            party.inventory.restore(weapons = weapons, ingredients = saved.inventoryIngredients)
+            return party
         }
 
         fun fromSaveData(saved: List<HeroSaveData>): Party {

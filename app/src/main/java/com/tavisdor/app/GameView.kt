@@ -40,6 +40,18 @@ class GameView @JvmOverloads constructor(
     }
     private val input = InputHandler()
 
+    /**
+     * Pass-through for [InputHandler.onCombatMoveNeedsConfirm]:
+     * MainActivity wires this to the AlertDialog flow so a
+     * combat-mode tap on a cell that would lock OTHER heroes'
+     * turns asks the player to confirm before committing. The
+     * dialog's positive button calls [Game.attemptPartyMoveInCombat]
+     * with the same target; the negative button just dismisses.
+     */
+    var onCombatMoveNeedsConfirm: ((com.tavisdor.app.dungeon.Cell) -> Unit)?
+        get() = input.onCombatMoveNeedsConfirm
+        set(value) { input.onCombatMoveNeedsConfirm = value }
+
     private var lastFrameNanos: Long = 0L
     private var loopActive = false
 

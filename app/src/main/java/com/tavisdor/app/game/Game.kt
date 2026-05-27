@@ -13,6 +13,10 @@ import com.tavisdor.app.dungeon.TemplateLibrary
 import com.tavisdor.app.party.HeroDraft
 import com.tavisdor.app.party.Party
 import com.tavisdor.app.render.Camera
+import com.tavisdor.app.render.PartyLungeGateway
+import com.tavisdor.app.render.WeaponAttackFxPlayer
+import com.tavisdor.app.render.WeaponFxGateway
+import com.tavisdor.app.render.WeaponFxRequest
 import com.tavisdor.app.save.SaveData
 import com.tavisdor.app.save.SaveStore
 import com.tavisdor.app.skills.Skill
@@ -50,6 +54,77 @@ class Game(
 
     val camera: Camera = Camera()
 
+    /** Attack weapon sprites played over the dungeon grid during combat. */
+    private val weaponAttackFxPlayer = WeaponAttackFxPlayer(context.assets)
+
+    private data class PartyLungeAnim(
+        val from: Cell,
+        val to: Cell,
+        val durationMs: Long,
+        var elapsedMs: Long,
+    ) {
+        fun t01(): Float = (elapsedMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    }
+
+    private var partyLungeAnim: PartyLungeAnim? = null
+
+    private val weaponFxGateway: WeaponFxGateway = object : WeaponFxGateway {
+        override fun start(request: WeaponFxRequest, onComplete: () -> Unit): Boolean =
+            weaponAttackFxPlayer.start(request, onComplete)
+
+        override val isPlaying: Boolean
+            get() = weaponAttackFxPlayer.isActive
+    }
+
+    private val partyLungeGateway: PartyLungeGateway = object : PartyLungeGateway {
+        override fun startLunge(from: Cell, to: Cell, durationMs: Long) {
+            partyLungeAnim = PartyLungeAnim(
+                from = from,
+                to = to,
+                durationMs = durationMs.coerceAtLeast(1L),
+                elapsedMs = 0L,
+            )
+        }
+
+        override val isLunging: Boolean
+            get() = partyLungeAnim != null
+    }
+
+    fun partyLungeVisualCell(): Pair<Float, Float>? {
+        val anim = partyLungeAnim ?: return null
+        val t = anim.t01()
+        val x = anim.from.x + (anim.to.x - anim.from.x) * t
+        val y = anim.from.y + (anim.to.y - anim.from.y) * t
+        return x to y
+    }
+
+    /** Drawn by [com.tavisdor.app.render.DungeonRenderer] on top of tokens. */
+    fun drawWeaponAttackFx(
+        canvas: android.graphics.Canvas,
+        camCx: Float,
+        camCy: Float,
+        cellPx: Float,
+        viewCx: Float,
+        viewCy: Float,
+    ) {
+        val lungeCell = partyLungeVisualCell()
+        val attackerOverride = if (lungeCell != null) {
+            val sx = (lungeCell.first - camCx) * cellPx + viewCx + cellPx / 2f
+            val sy = (lungeCell.second - camCy) * cellPx + viewCy + cellPx / 2f
+            sx to sy
+        } else null
+        weaponAttackFxPlayer.draw(
+            canvas = canvas,
+            camCx = camCx,
+            camCy = camCy,
+            cellPx = cellPx,
+            viewCx = viewCx,
+            viewCy = viewCy,
+            density = context.resources.displayMetrics.density,
+            attackerScreenOverride = attackerOverride,
+        )
+    }
+
     /** Loaded once on Game construction. Read by [FloorGenerator] on every descend. */
     private val templates: TemplateLibrary = TemplateLibrary.loadFromAssets(context)
 
@@ -76,6 +151,28 @@ class Game(
      * visibility and bind the strip to the new fight.
      */
     var onCombatChanged: ((Combat?) -> Unit)? = null
+
+    /**
+     * Fired whenever the party lands on a new dungeon floor
+     * ([descendToFloor] completes). MainActivity uses this to
+     * refresh the fixed "Floor N" label in the game header.
+     */
+    var onFloorDepthChanged: ((Int) -> Unit)? = null
+
+    /**
+     * Fired EXACTLY once per victorious encounter, AFTER the
+     * [CombatController] has deposited gold + queued any item
+     * pickups into `party.inventory`. MainActivity hooks this to
+     * pop the items panel so the player sees their haul without
+     * any extra tap. Wipes do NOT fire this - party wipes punish
+     * the player; surfacing the (empty) loot screen there would
+     * read as a reward.
+     *
+     * Fires AFTER [onCombatChanged] for the same end-of-combat
+     * transition, so the strip / hero panels can clean up first
+     * and the items panel layers on top of an already-quiet UI.
+     */
+    var onCombatVictory: (() -> Unit)? = null
 
     /**
      * Orchestrator for the active encounter. Null whenever [combat]
@@ -131,6 +228,8 @@ class Game(
         if (combat === next) return
         combat = next
         combatController = null
+        weaponAttackFxPlayer.cancel()
+        partyLungeAnim = null
         if (next != null) {
             mode = Mode.COMBAT
             combatLog.clear()
@@ -142,8 +241,23 @@ class Game(
                     log = combatLog,
                     camera = camera,
                     rng = runtimeRng,
-                    onEnd = { _ -> setCombat(null) },
+                    onEnd = { success ->
+                        // Tear down the encounter FIRST so listeners
+                        // (turn-order strip, hate icons) see combat
+                        // as cleared by the time the victory hook
+                        // runs and the items panel opens on top.
+                        setCombat(null)
+                        if (success) onCombatVictory?.invoke()
+                    },
                     onEnemyDefeated = ::handleEnemyDefeated,
+                    // Auto-track the actor whose turn it is so the
+                    // hero-panel spotlight follows initiative by
+                    // default; player taps in the strip / panel
+                    // override this until the next turn advance
+                    // writes through again.
+                    onActorChanged = { slot -> setActiveHeroSlot(slot) },
+                    weaponFx = weaponFxGateway,
+                    partyLunge = partyLungeGateway,
                 )
             }
             // Auto-select the first living enemy so the hate icons
@@ -259,25 +373,23 @@ class Game(
 
     /**
      * Slot the bottom hero panel should highlight with the white
-     * "you're up" border:
-     *   - In combat, follows the active hero whose turn it is via
-     *     the controller's [CombatController.currentHeroSlot]. The
-     *     user can't override this - the box always tracks the
-     *     initiative order during a fight.
-     *   - Out of combat, falls back to [activeHeroSlot] (the
-     *     user-selected slot from the exploration-mode flow).
+     * "you're up" border. Always resolves to [activeHeroSlot]:
+     *   - The combat controller writes through to [activeHeroSlot]
+     *     on every turn advance (via its `onActorChanged` callback
+     *     wired in [setCombat]), so the border auto-tracks the
+     *     current actor by default.
+     *   - The player can override mid-turn by tapping a portrait
+     *     in the bottom hero panel OR in the top turn-order strip;
+     *     the override sticks until the controller's next turn
+     *     advance writes back through (i.e. it's a peek, not a
+     *     permanent reassignment).
      *
      * Null when nothing should be highlighted (e.g. the party
-     * isn't built yet, or it's an enemy's turn mid-combat).
+     * isn't built yet, or it's an enemy's turn mid-combat and the
+     * player hasn't peeked at any hero).
      */
     val spotlightHeroSlot: Int?
-        get() {
-            val controller = combatController
-            if (combat != null && controller != null) {
-                return controller.currentHeroSlot
-            }
-            return activeHeroSlot
-        }
+        get() = activeHeroSlot
 
     /**
      * Marks [slot] as the active hero (or clears it when [slot] is null).
@@ -318,7 +430,7 @@ class Game(
     private fun defaultSkillFor(slot: Int): Skill? {
         val hero = party?.heroes?.getOrNull(slot) ?: return null
         // Weapon-aware basic attack so the staged auto-Attack
-        // shows the correct R-value (e.g. R2 for an Archer with
+        // shows the correct range (e.g. Range: 2 for an Archer with
         // a crude bow) in the picker.
         return hero.basicAttackSkill
     }
@@ -349,7 +461,11 @@ class Game(
     /** Restores the most recent save into this Game instance. */
     fun resumeFromSave() {
         val data = saveStore.load() ?: return
-        party = Party.fromSaveData(data.heroes)
+        // Schema-aware overload: also rehydrates party.gold and the
+        // weapons / ingredients buckets. Heroes still go through the
+        // hero-only path so the level / xp clamp logic stays in one
+        // place.
+        party = Party.fromSaveData(data)
         floorDepth = data.currentFloor
         descendToFloor(floorDepth, seed = data.floorSeed)
     }
@@ -415,6 +531,21 @@ class Game(
     fun attemptPartyMoveInCombat(target: Cell): CombatController.PartyMoveResult {
         val controller = combatController ?: return CombatController.PartyMoveResult.REJECTED
         return controller.attemptPartyMove(target)
+    }
+
+    /**
+     * Forwarder for [CombatController.wouldLockOthersOnMove].
+     * Returns true when a tap on [target] would be a legal
+     * combat move AND would forfeit at least one other hero's
+     * action - i.e. the host should prompt for confirmation
+     * before committing. Returns false outside combat or when
+     * the move is illegal / no other heroes are pending, in
+     * which case the host should just route directly to
+     * [attemptPartyMoveInCombat].
+     */
+    fun wouldCombatMoveLockOthers(target: Cell): Boolean {
+        val controller = combatController ?: return false
+        return controller.wouldLockOthersOnMove(target)
     }
 
     /**
@@ -624,16 +755,34 @@ class Game(
         setActiveHeroSlot(null)
         camera.centerOn(newFloor.partyCell.x, newFloor.partyCell.y)
         camera.scale = 1f
+        onFloorDepthChanged?.invoke(floorDepth)
     }
 
     private fun snapshotForFloorStart(): SaveData {
         val p = party ?: error("Cannot snapshot without a party.")
         val f = floor ?: error("Cannot snapshot without a floor.")
+        // Schema v4 adds gold + the persistent inventory buckets.
+        // The transient pickup queue is intentionally NOT snapshotted -
+        // a Save & Quit with the items panel open should still let the
+        // player decide what to keep after relaunch... once that flow
+        // exists. For now we snapshot at floor-start (when the panel
+        // is closed) so the queue is already empty.
+        val weaponSaves = p.inventory.weapons.map { w ->
+            com.tavisdor.app.save.WeaponSaveData(
+                type = w.type,
+                tier = w.tier,
+                attackBonus = w.attackBonus,
+                range = w.range,
+            )
+        }
         return SaveData(
             schemaVersion = SaveData.CURRENT_SCHEMA,
             heroes = p.toSaveHeroes(),
             currentFloor = floorDepth,
             floorSeed = f.seed,
+            partyGold = p.gold,
+            inventoryWeapons = weaponSaves,
+            inventoryIngredients = p.inventory.ingredients,
         )
     }
 
@@ -652,9 +801,20 @@ class Game(
         // whenever a redraw is warranted so the host can keep its
         // invalidate loop hot.
         if (mode == Mode.COMBAT) {
-            val controller = combatController ?: return false
+            val controller = combatController ?: return weaponAttackFxPlayer.isActive
             val deltaMs = (dtSec * 1000f).toLong().coerceAtLeast(0L)
-            return controller.tick(deltaMs)
+            var redraw = controller.tick(deltaMs)
+            weaponAttackFxPlayer.tick(deltaMs)
+            val lunge = partyLungeAnim
+            if (lunge != null) {
+                lunge.elapsedMs += deltaMs
+                if (lunge.elapsedMs >= lunge.durationMs) {
+                    partyLungeAnim = null
+                }
+                redraw = true
+            }
+            if (weaponAttackFxPlayer.isActive) redraw = true
+            return redraw
         }
         // While exploring, the renderer drives an idle "!" bounce
         // animation that needs a continuous redraw cadence even when
