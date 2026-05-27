@@ -19,4 +19,7 @@ sealed class LootDrop {
      * `tier.displayMeleeName(weapon)` (e.g. "Wood Spear").
      */
     data class MeleeWeaponDrop(val weapon: WeaponType, val tier: LootTier) : LootDrop()
+
+    /** Dropped by an enemy assigned to guard a specific floor lock. */
+    data class FloorKeyDrop(val key: FloorKey) : LootDrop()
 }

@@ -4,7 +4,8 @@
     - gameRoot           : in-dungeon UI (GameView + bottom HeroPanelView)
     - titleOverlay       : title screen, shown on cold launch / Save & Quit
     - classSelectOverlay : new-game class assignment, shown only between Title and Floor 1
-    - heroDetailOverlay  : modal hero info / equipment panel (over gameRoot)
+    - heroDetailOverlay      : modal hero info / equipment panel (over gameRoot)
+    - heroSkillAssignOverlay : modal skill assignment for Action button
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -782,18 +783,9 @@
     </FrameLayout>
 
     <!--
-      ============== Items overlay (modal, hidden by default) ==============
-      Opened by the action-bar "Items" button and auto-opened after victory
-      (and later when searching containers / opening chests). Mirrors the
-      heroDetailOverlay scrim + centered panel idiom, but the panel content
-      is a vertical ScrollView with three section containers populated
-      programmatically by ItemsScreen.
-
-      Layout summary:
-        - Top row: gold counter (left) + Close (right).
-        - Section 1 header + container: Equipment & Weapons.
-        - Section 2 header + container: Ingredients.
-        - Section 3 header + hint + container + Pick Up All: Pickup / Discard.
+      ============== Inventory overlay (modal, hidden by default) ==============
+      Inventory panel with top tabs (Pickup default). ItemsScreen
+      populates tab bodies; fixed tab body height preserves panel footprint.
     -->
     <FrameLayout
         android:id="@+id/itemsOverlay"
@@ -802,27 +794,40 @@
         android:background="@color/items_panel_scrim"
         android:clickable="true"
         android:focusable="true"
+        android:clipChildren="false"
+        android:clipToPadding="false"
         android:visibility="gone">
 
-        <ScrollView
-            android:id="@+id/itemsPanelScroll"
-            android:layout_width="@dimen/items_panel_width"
+        <LinearLayout
+            android:id="@+id/itemsPanelHost"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
+            android:layout_marginHorizontal="@dimen/items_panel_host_margin_horizontal"
             android:layout_marginVertical="24dp"
-            android:background="@drawable/bg_hero_detail_panel"
-            android:clipToOutline="true"
-            android:fillViewport="false"
-            android:scrollbars="none">
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:clickable="true"
+            android:focusable="true"
+            android:orientation="vertical">
 
-            <LinearLayout
-                android:id="@+id/itemsPanel"
+            <ScrollView
+                android:id="@+id/itemsPanelScroll"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:clickable="true"
-                android:focusable="true"
-                android:orientation="vertical"
-                android:padding="@dimen/items_panel_padding">
+                android:background="@drawable/bg_hero_detail_panel"
+                android:clipToOutline="true"
+                android:fillViewport="false"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/itemsPanel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:orientation="vertical"
+                    android:padding="@dimen/items_panel_padding">
 
                 <!-- Top row: gold counter (left) + Close (right). -->
                 <LinearLayout
@@ -852,74 +857,273 @@
                         android:text="@string/items_panel_close" />
                 </LinearLayout>
 
-                <!-- Section 1: Equipment & Weapons. -->
-                <TextView
+                <!-- Tab strip: 80% panel width, right-aligned; three equal tabs. -->
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="@dimen/items_panel_section_gap"
-                    android:text="@string/items_panel_section_equipment"
-                    android:textColor="@color/items_panel_section_header"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
+                    android:baselineAligned="false"
+                    android:orientation="horizontal">
+
+                    <Space
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        android:layout_weight="0.2" />
+
+                    <LinearLayout
+                        android:id="@+id/itemsSideTabs"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="0.8"
+                        android:baselineAligned="false"
+                        android:orientation="horizontal">
+
+                        <FrameLayout
+                            android:id="@+id/itemsSideTabPickup"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/items_panel_top_tab_height"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_inventory_top_tab_pickup"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:gravity="center"
+                                android:text="@string/items_panel_tab_pickup"
+                                android:textColor="@color/inventory_tab_label"
+                                android:textSize="11sp"
+                                android:textStyle="bold" />
+                        </FrameLayout>
+
+                        <FrameLayout
+                            android:id="@+id/itemsSideTabEquipment"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/items_panel_top_tab_height"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_inventory_top_tab_equipment"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:gravity="center"
+                                android:text="@string/items_panel_tab_equipment"
+                                android:textColor="@color/inventory_tab_label"
+                                android:textSize="11sp"
+                                android:textStyle="bold" />
+                        </FrameLayout>
+
+                        <FrameLayout
+                            android:id="@+id/itemsSideTabIngredients"
+                            android:layout_width="0dp"
+                            android:layout_height="@dimen/items_panel_top_tab_height"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_inventory_top_tab_ingredients"
+                            android:clickable="true"
+                            android:focusable="true">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:gravity="center"
+                                android:text="@string/items_panel_tab_ingredients"
+                                android:textColor="@color/inventory_tab_label"
+                                android:textSize="11sp"
+                                android:textStyle="bold" />
+                        </FrameLayout>
+                    </LinearLayout>
+                </LinearLayout>
+
+                <FrameLayout
+                    android:id="@+id/itemsTabBody"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/items_panel_tab_body_height"
+                    android:layout_marginTop="@dimen/items_panel_top_tab_overlap">
+
+                    <!-- Tab 0 (default): Pickup / Discard -->
+                    <LinearLayout
+                        android:id="@+id/itemsTabPickup"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/tvItemsPickupHint"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/items_panel_pickup_hint"
+                            android:textColor="@color/items_panel_hint"
+                            android:textSize="11sp" />
+
+                        <ScrollView
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_marginTop="4dp"
+                            android:layout_weight="1"
+                            android:fillViewport="true"
+                            android:scrollbars="none">
+
+                            <LinearLayout
+                                android:id="@+id/itemsPickupList"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="vertical" />
+                        </ScrollView>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnItemsPickUpAll"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/items_panel_pickup_all" />
+                    </LinearLayout>
+
+                    <!-- Tab 1: Equipment & Weapons -->
+                    <ScrollView
+                        android:id="@+id/itemsTabEquipment"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:scrollbars="none"
+                        android:visibility="gone">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:paddingTop="4dp">
+
+                            <TextView
+                                android:id="@+id/tvItemsEquipHint"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:paddingBottom="6dp"
+                                android:text="@string/inventory_equip_pick_weapon"
+                                android:textColor="@color/items_panel_section_header"
+                                android:textSize="11sp"
+                                android:visibility="gone" />
+
+                            <LinearLayout
+                                android:id="@+id/itemsEquipmentList"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="vertical" />
+                        </LinearLayout>
+                    </ScrollView>
+
+                    <!-- Tab 2: Ingredients -->
+                    <ScrollView
+                        android:id="@+id/itemsTabIngredients"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:scrollbars="none"
+                        android:visibility="gone">
+
+                        <LinearLayout
+                            android:id="@+id/itemsIngredientList"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:paddingTop="4dp" />
+                    </ScrollView>
+                </FrameLayout>
+                </LinearLayout>
+            </ScrollView>
+
+            <!-- Party summary OR per-hero equipment (toggled by ItemsScreen). -->
+            <FrameLayout
+                android:id="@+id/itemsHeroLowerHost"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/items_panel_summary_gap">
 
                 <LinearLayout
-                    android:id="@+id/itemsEquipmentList"
+                    android:id="@+id/itemsHeroSummaryPanel"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:background="@drawable/bg_hero_detail_panel"
+                    android:clipToOutline="true"
                     android:orientation="vertical"
-                    android:paddingTop="4dp" />
+                    android:padding="@dimen/items_panel_padding">
 
-                <!-- Section 2: Ingredients. -->
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/items_panel_section_gap"
-                    android:text="@string/items_panel_section_ingredients"
-                    android:textColor="@color/items_panel_section_header"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
 
-                <LinearLayout
-                    android:id="@+id/itemsIngredientList"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:paddingTop="4dp" />
+                        <include
+                            android:id="@+id/heroSummarySlot0"
+                            layout="@layout/item_inventory_hero_summary"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="@dimen/items_panel_summary_cell_gap_half"
+                            android:layout_weight="1" />
 
-                <!-- Section 3: Pickup / Discard. -->
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/items_panel_section_gap"
-                    android:text="@string/items_panel_section_pickup"
-                    android:textColor="@color/items_panel_section_header"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
+                        <include
+                            android:id="@+id/heroSummarySlot1"
+                            layout="@layout/item_inventory_hero_summary"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="@dimen/items_panel_summary_cell_gap_half"
+                            android:layout_weight="1" />
+                    </LinearLayout>
 
-                <TextView
-                    android:id="@+id/tvItemsPickupHint"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:text="@string/items_panel_pickup_hint"
-                    android:textColor="@color/items_panel_hint"
-                    android:textSize="11sp" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/items_panel_summary_cell_gap"
+                        android:orientation="horizontal">
 
-                <LinearLayout
-                    android:id="@+id/itemsPickupList"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:paddingTop="4dp" />
+                        <include
+                            android:id="@+id/heroSummarySlot2"
+                            layout="@layout/item_inventory_hero_summary"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="@dimen/items_panel_summary_cell_gap_half"
+                            android:layout_weight="1" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnItemsPickUpAll"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:text="@string/items_panel_pickup_all" />
-            </LinearLayout>
-        </ScrollView>
+                        <include
+                            android:id="@+id/heroSummarySlot3"
+                            layout="@layout/item_inventory_hero_summary"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="@dimen/items_panel_summary_cell_gap_half"
+                            android:layout_weight="1" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <include layout="@layout/panel_inventory_hero_equipment" />
+            </FrameLayout>
+        </LinearLayout>
+    </FrameLayout>
+
+    <!--
+      ============== Hero skill assignment overlay ==============
+      Opens when the player taps anywhere on a hero cell in the bottom
+      panel. Stages the skill committed by the top Action button.
+    -->
+    <FrameLayout
+        android:id="@+id/heroSkillAssignOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/hero_detail_scrim"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <FrameLayout
+            android:id="@+id/heroSkillAssignPanelHost"
+            android:layout_width="@dimen/hero_skill_assign_panel_width"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginVertical="24dp"
+            android:clickable="true"
+            android:focusable="true">
+
+            <include layout="@layout/panel_hero_skill_assign" />
+        </FrameLayout>
     </FrameLayout>
 </FrameLayout>

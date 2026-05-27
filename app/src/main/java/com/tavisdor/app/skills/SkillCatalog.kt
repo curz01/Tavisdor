@@ -1,6 +1,8 @@
 package com.tavisdor.app.skills
 
 import com.tavisdor.app.enemies.Element
+import com.tavisdor.app.items.Ingredient
+import com.tavisdor.app.items.WeaponType
 import com.tavisdor.app.party.HeroClass
 import com.tavisdor.app.party.LevelProgression
 
@@ -172,6 +174,7 @@ object SkillCatalog {
             id = "thief_feint", name = "Feint", level = 1,
             type = SkillCastType.PREPARE, range = 1, mp = 1,
             costsAction = false,
+            button = SkillButton.ACTION,
             desc = "Reduce hate level by 2. 1 mana. Does not cost an action.",
         ),
         skill(
@@ -181,22 +184,31 @@ object SkillCatalog {
                 "Cannot heal dead.",
         ),
         skill(
+            id = "thief_lock_pick", name = "Lock Pick", level = 2,
+            type = SkillCastType.PASSIVE, range = 0, mp = 0,
+            desc = "Pick locked doors and chests out of combat. Each attempt costs one " +
+                "Stone Shard. DEX + 1d3 vs lock level for this dungeon depth.",
+        ),
+        skill(
             id = "thief_evasive_maneuver", name = "Evasive Maneuver", level = 3,
             type = SkillCastType.PREPARE, range = 1, mp = 1,
             costsAction = false,
             desc = "Increase dodge by 20% for the next 2 turns. 1 mana. Does not cost an action.",
         ),
         skill(
+            // Setup / hate redirect — support skill, not a direct attack.
             id = "thief_trick_attack", name = "Trick Attack", level = 4,
             type = SkillCastType.ACTIVE, range = 1, mp = 1,
             costsAction = false,
             damage = 4, // 1d6 average rounded down (3.5 -> 4 in author table)
+            button = SkillButton.GUARD,
             desc = "Next attack deals +1d6 damage, and hate is added to another party member of " +
                 "your choice. 1 mana. Does not cost an action.",
         ),
         skill(
             id = "thief_steal_item", name = "Steal Item", level = 5,
             type = SkillCastType.PREPARE, range = 1, mp = 1,
+            button = SkillButton.ACTION,
             desc = "Next successful attack deals no damage; instead steals 1 item from the " +
                 "enemy's pool (does not reduce the end-of-encounter reward table). 1 mana.",
         ),
@@ -248,8 +260,9 @@ object SkillCatalog {
         skill(
             id = "archer_poison_arrow", name = "Poison Arrow", level = 2,
             type = SkillCastType.ACTIVE, range = 3, mp = 0,
+            requiredShard = Ingredient.STONE_SHARD,
             desc = "Normal damage; on poison success, enemy takes 2 damage each turn for the " +
-                "next 2 turns.",
+                "next 2 turns. Requires a Stone Shard.",
         ),
         skill(
             id = "archer_cooking", name = "Cooking", level = 3,
@@ -278,15 +291,17 @@ object SkillCatalog {
             id = "archer_fire_arrow", name = "Fire Arrow", level = 6,
             type = SkillCastType.ACTIVE, range = 3, mp = 0,
             damage = 4, element = Element.FIRE,
+            requiredShard = Ingredient.FLAME_SHARD,
             desc = "Normal damage + 1d6 fire damage. Increased damage to Earth, reduced damage " +
-                "to Water.",
+                "to Water. Requires a Flame Shard.",
         ),
         skill(
             id = "archer_ice_arrow", name = "Ice Arrow", level = 7,
             type = SkillCastType.ACTIVE, range = 3, mp = 0,
             damage = 4, element = Element.WATER, // ice resolves under WATER per the triangle
+            requiredShard = Ingredient.HYDRO_SHARD,
             desc = "Normal damage + 1d6 ice damage. Increased damage to Fire, reduced damage " +
-                "to Earth.",
+                "to Earth. Requires a Hydro Shard.",
         ),
         skill(
             // Cast type flipped to PREPARE per description doc.
@@ -343,6 +358,22 @@ object SkillCatalog {
      */
     const val BASIC_DEFEND_ID: String = "basic_defend"
 
+    /** Thief passive: pick locks on doors and chests (DEX + 1d3 vs lock level). */
+    const val THIEF_LOCK_PICK_ID: String = "thief_lock_pick"
+
+    /**
+     * Out-of-combat / utility skills listed in the assignment panel's
+     * PASSIVE column (still stageable for the Action button). Not
+     * [SkillCastType.PASSIVE] mechanically.
+     */
+    val ASSIGN_PASSIVE_COLUMN_SKILL_IDS: Set<String> = setOf(
+        "archer_cooking",
+        "mage_make_potion_1",
+        "fighter_camp",
+        "thief_rest",
+        THIEF_LOCK_PICK_ID,
+    )
+
     /** AC bonus granted by the universal Defend skill for one turn. */
     const val BASIC_DEFEND_AC_BONUS: Int = 2
 
@@ -355,6 +386,12 @@ object SkillCatalog {
      * [FIGHTER_CHARGE_DAMAGE_PCT]% of normal melee damage.
      */
     const val FIGHTER_CHARGE_ID: String = "fighter_charge"
+
+    /** Archer prepare: extra arrows on the hero's next offensive commit. */
+    const val ARCHER_RAPID_FIRE_ID: String = "archer_rapid_fire"
+
+    /** Archer prepare: two attacks on the next offensive commit. */
+    const val ARCHER_DOUBLE_SHOT_ID: String = "archer_double_shot"
 
     /**
      * Charge damage as a percentage of a normal basic-attack
@@ -386,6 +423,10 @@ object SkillCatalog {
         description = "Standard attack against an adjacent enemy. " +
             "No mana cost; uses the hero's main action.",
     )
+
+    /** Player-facing basic attack label, e.g. `Attack (Sword)` — weapon type only, no tier prefix. */
+    fun basicAttackDisplayName(weaponType: WeaponType): String =
+        "Attack (${weaponType.displayName})"
 
     /**
      * The default "Defend" action every hero has access to from
@@ -481,6 +522,7 @@ object SkillCatalog {
         damage: Int? = null,
         element: Element? = null,
         button: SkillButton? = null,
+        requiredShard: Ingredient? = null,
     ): Skill = Skill(
         id = id,
         displayName = name,
@@ -494,6 +536,7 @@ object SkillCatalog {
         damage = damage,
         element = element,
         buttonOverride = button,
+        requiredShard = requiredShard,
     )
 
     private fun List<Skill>.forClass(cls: HeroClass): List<Skill> =

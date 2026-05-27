@@ -8,17 +8,15 @@ import android.view.View
 import android.view.ViewConfiguration
 import com.tavisdor.app.game.Game
 import com.tavisdor.app.render.HeroPanelRenderer
-import com.tavisdor.app.skills.SkillButton
-
 /**
  * Persistent bottom strip showing the four heroes in a 2x2 grid:
  *   row 0 = front line (slots 0, 1)
  *   row 1 = back line  (slots 2, 3)
  *
- * Tapping a hero portrait fires [onHeroPortraitTapped] with the slot
- * index. The activity uses that to open the hero detail panel.
- * Taps on the action buttons (ACT / GRD / SPL) are not handled yet -
- * combat hasn't been wired up.
+ * Tapping anywhere inside a hero cell fires [onHeroCellTapped] with
+ * the slot index so the activity can open the skill-assignment panel.
+ * The tap also marks that hero as the active selection (white border)
+ * for the top Action button.
  */
 class HeroPanelView @JvmOverloads constructor(
     context: Context,
@@ -31,15 +29,8 @@ class HeroPanelView @JvmOverloads constructor(
         it.density = resources.displayMetrics.density
     }
 
-    /** Fires with slot index 0..3 when a portrait square is tapped. */
-    var onHeroPortraitTapped: ((Int) -> Unit)? = null
-
-    /**
-     * Fires when one of the 3 action buttons (ACT / GRD / SPL) is
-     * tapped. Receives the hero slot (0..3) plus which button was hit.
-     * The activity uses this to pop a skill-selection dialog.
-     */
-    var onHeroActionButtonTapped: ((slot: Int, button: SkillButton) -> Unit)? = null
+    /** Fires with slot index 0..3 when any part of a hero cell is tapped. */
+    var onHeroCellTapped: ((Int) -> Unit)? = null
 
     private var downX: Float = 0f
     private var downY: Float = 0f
@@ -56,6 +47,7 @@ class HeroPanelView @JvmOverloads constructor(
         // the label row updates the same frame the player taps a new
         // goblin, instead of waiting for the next animation tick.
         g.onSelectedEnemyChanged = { invalidate() }
+        g.onSkillStagingChanged = { invalidate() }
         invalidate()
     }
 
@@ -79,34 +71,12 @@ class HeroPanelView @JvmOverloads constructor(
                 val dy = event.y - downY
                 if (dx * dx + dy * dy > slop.toFloat() * slop) return false
 
-                // Hit-test order is most-specific to least-specific:
-                //   1. ACT / GRD / SPL buttons (open skill picker)
-                //   2. Portrait square         (open detail panel)
-                //   3. Anywhere else in the cell (selection-only)
-                // In ALL three cases we also mark that hero as active
-                // so the top-bar Action button has a target and the
-                // white blink border appears on the tapped cell.
-                val btnHit = renderer.hitTestActionButton(event.x, event.y, width, height)
-                if (btnHit != null && game?.party?.heroes?.getOrNull(btnHit.slot) != null) {
-                    game?.setActiveHeroSlot(btnHit.slot)
-                    onHeroActionButtonTapped?.invoke(btnHit.slot, btnHit.button)
-                    return true
-                }
-
-                val portraitSlot = renderer.hitTestPortraitSlot(event.x, event.y, width, height)
-                if (portraitSlot >= 0 && game?.party?.heroes?.getOrNull(portraitSlot) != null) {
-                    game?.setActiveHeroSlot(portraitSlot)
-                    onHeroPortraitTapped?.invoke(portraitSlot)
-                    return true
-                }
-
-                // Fallback: tap anywhere inside a cell selects that
-                // hero without opening any panel. Useful when the
-                // player wants to retarget the top-bar Action button
-                // without firing any of the cell's interactive bits.
+                // Whole cell (portrait, bars, ACT/GRD buttons, blank
+                // space) opens skill assignment and marks the hero active.
                 val cellSlot = renderer.hitTestCell(event.x, event.y, width, height)
                 if (cellSlot >= 0 && game?.party?.heroes?.getOrNull(cellSlot) != null) {
                     game?.setActiveHeroSlot(cellSlot)
+                    onHeroCellTapped?.invoke(cellSlot)
                     return true
                 }
 

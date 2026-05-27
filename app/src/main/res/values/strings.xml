@@ -4,7 +4,7 @@
 
     <!-- Title screen -->
     <string name="title_main">Tavisdor</string>
-    <string name="title_subtitle">: The Shifting Passage</string>
+    <string name="title_subtitle">The Shifting Passage</string>
     <string name="title_start_new_game">Start New Game</string>
     <string name="title_continue">Continue</string>
     <string name="title_new_game_overwrite_title">Start a new game?</string>
@@ -50,7 +50,7 @@
     <!-- Action bar (between dungeon view and hero panel). -->
     <string name="action_bar_menu">Menu</string>
     <string name="action_bar_action">Action</string>
-    <string name="action_bar_items">Items</string>
+    <string name="action_bar_items">Inventory</string>
 
     <!--
       Glyphs on the combat-log scroll buttons. Kept as strings
@@ -65,7 +65,7 @@
     <string name="action_bar_action_fired">%1$s used %2$s. (combat not implemented yet)</string>
     <string name="action_bar_action_combat_not_your_turn">Wait for your turn.</string>
     <string name="action_bar_action_combat_invalid">Action refused (not enough MP, no target, or not your turn).</string>
-    <string name="action_bar_items_unavailable">Items - coming soon.</string>
+    <string name="action_bar_items_unavailable">Inventory - coming soon.</string>
 
     <!-- In-game menu dialog (opened from the action bar). -->
     <string name="ingame_menu_title">Menu</string>
@@ -117,6 +117,26 @@
     <string name="skill_picker_toast_selected">%1$s staged for %2$s.</string>
     <string name="skill_picker_toast_reverted">%1$s will use a basic Attack.</string>
 
+    <!-- Hero skill assignment panel (tap hero cell on bottom panel). -->
+    <string name="hero_skill_assign_mana_format">Mana: %1$d/%2$d</string>
+    <string name="hero_skill_assign_offensive">OFFENSIVE</string>
+    <string name="hero_skill_assign_defensive">DEFENSIVE</string>
+    <string name="hero_skill_assign_passive">PASSIVE</string>
+    <string name="hero_skill_assign_section_empty">(none)</string>
+    <string name="hero_skill_assign_confirm_title">%1$s</string>
+    <string name="hero_skill_assign_confirm">Confirm</string>
+    <string name="hero_skill_assign_cancel">Cancel</string>
+    <string name="hero_skill_assign_passive_ok">OK</string>
+    <string name="hero_skill_assign_mp_part">%1$d MP</string>
+    <string name="hero_skill_assign_range_part">Range: %1$d</string>
+    <string name="hero_skill_assign_range_req_shard">Range: %1$d, (Req. shard)</string>
+    <string name="hero_skill_assign_shard_required_detail">Requires %1$s in Ingredients.</string>
+    <string name="hero_skill_assign_missing_shard">You need a %1$s in Ingredients to use this skill.</string>
+    <string name="hero_skill_assign_no_action_part">[NA]</string>
+    <string name="hero_skill_assign_need_main_action">Select a main action skill as well (green).</string>
+    <string name="hero_skill_assign_insufficient_mp">Not enough mana to use both staged skills.</string>
+    <string name="combat_target_pick_enemy">Tap a highlighted enemy to attack.</string>
+
     <!-- Heal target picker (Action button in combat with a Heal skill
          staged). %1$s is the skill display name (e.g. "Heal II"). -->
     <string name="heal_picker_title">Who should receive %1$s?</string>
@@ -126,13 +146,20 @@
     <!-- Locked door dialog -->
     <string name="door_locked_title">Locked Door</string>
     <string name="door_locked_message">A heavy lock holds this door shut. What will you do?</string>
-    <string name="door_action_use_key">Use a Key</string>
-    <string name="door_action_pick_lock">Pick the Lock</string>
-    <string name="door_action_force_open">Force it Open</string>
+    <string name="door_action_kick_down">Kick down door</string>
+    <string name="door_action_pick_lock">Pick lock</string>
+    <string name="door_action_use_key">Use key</string>
     <string name="door_action_cancel">Step Back</string>
     <string name="door_result_opened">The door swings open.</string>
     <string name="door_result_failed_pick">The lock holds firm.</string>
+    <string name="door_result_failed_pick_dex">Lock pick failed (%1$d vs lock %2$d). The Stone Shard is used up.</string>
+    <string name="door_result_no_lock_pick">No Thief with Lock Pick in the party.</string>
+    <string name="door_result_no_shard">Need a Stone Shard to pick this lock.</string>
     <string name="door_result_failed_force">The door won\'t budge.</string>
+    <string name="door_result_failed_force_str">Force failed (%1$d vs lock %2$d). You cannot try forcing it again.</string>
+    <string name="door_result_str_already_tried">You already tried to force this lock.</string>
+    <string name="door_result_brute_damaged">The lock was mangled by brute force and cannot be picked. Only the matching dungeon key will open it.</string>
+    <string name="door_result_no_key">You need the key that drops on this floor for this lock.</string>
 
     <!-- Combat-mode party-move confirmation. Fired when a tap on
          a legal move target would forfeit the other heroes' turns
@@ -142,19 +169,38 @@
     <string name="combat_move_confirm_yes">Move</string>
     <string name="combat_move_confirm_no">Cancel</string>
 
-    <!-- Items panel: opened by the action-bar Items button and
-         auto-opened after victory / chest interactions. The three
-         sections (equipment, ingredients, pickup) and the gold
-         counter share this resource block. -->
-    <string name="items_panel_title">Items</string>
+    <!-- Inventory panel: opened by the action-bar Inventory button and
+         auto-opened after victory / chest interactions. Tab labels and
+         the gold counter share this resource block. -->
+    <string name="items_panel_title">Inventory</string>
     <string name="items_panel_gold_format">Gold: %1$d</string>
     <string name="items_panel_section_equipment">Equipment &amp; Weapons</string>
     <string name="items_panel_section_ingredients">Ingredients</string>
     <string name="items_panel_section_pickup">Pickup / Discard</string>
+    <!-- Short labels for binder-style side tabs (full names stay in-section). -->
+    <string name="items_panel_tab_pickup">Loot</string>
+    <string name="items_panel_tab_equipment">Equipment</string>
+    <string name="items_panel_tab_ingredients">Ingredients</string>
     <string name="items_panel_section_empty">(empty)</string>
     <string name="items_panel_pickup_hint">Tap a row to keep it. Anything left here is discarded when you close.</string>
     <string name="items_panel_pickup_all">Pick Up All</string>
     <string name="items_panel_close">Close</string>
     <string name="items_panel_toast_picked_up">Picked up %1$s.</string>
     <string name="items_panel_toast_discarded">Discarded %1$d item(s).</string>
+
+    <!-- Party summary grid below the inventory panel (text-only stats). -->
+    <string name="inventory_summary_level">Level: %1$d</string>
+    <string name="inventory_summary_hp">HP: %1$d/%2$d</string>
+    <string name="inventory_summary_mp">MP: %1$d/%2$d</string>
+    <string name="inventory_summary_ac">AC: %1$d</string>
+    <string name="inventory_summary_str">STR: %1$d</string>
+    <string name="inventory_summary_dex">DEX: %1$d</string>
+    <string name="inventory_summary_int">INT: %1$d</string>
+    <string name="inventory_summary_exp">EXP %1$d/%2$d</string>
+    <string name="inventory_hero_equip_close">X</string>
+    <string name="inventory_equip_pick_weapon">Tap a weapon in the Equipment tab above.</string>
+    <string name="inventory_toast_equipped">Equipped %1$s.</string>
+    <string name="inventory_toast_unequipped">Unequipped %1$s.</string>
+    <string name="inventory_toast_cannot_equip">%1$s cannot use that weapon.</string>
+    <string name="inventory_toast_armor_not_in_gear">Armor is not in the Equipment stash yet.</string>
 </resources>

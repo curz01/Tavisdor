@@ -29,6 +29,7 @@ class Inventory {
 
     private val _weapons: MutableList<Weapon> = mutableListOf()
     private val _ingredients: MutableList<Ingredient> = mutableListOf()
+    private val _floorKeys: MutableList<FloorKey> = mutableListOf()
     private val _pendingPickup: MutableList<LootDrop> = mutableListOf()
 
     /**
@@ -67,6 +68,9 @@ class Inventory {
      */
     val ingredients: List<Ingredient> get() = _ingredients
 
+    /** Keys tied to a specific lock on a specific dungeon floor depth. */
+    val floorKeys: List<FloorKey> get() = _floorKeys
+
     /**
      * Items waiting in the pickup window. Indexing is stable
      * between [pickUpAt] calls so the activity can pass the
@@ -76,6 +80,65 @@ class Inventory {
 
     /** True when there's at least one row in [pendingPickup]. */
     val hasPendingPickup: Boolean get() = _pendingPickup.isNotEmpty()
+
+    /** Index of the first bag row matching [weapon] (data-class equality). */
+    fun indexOfWeapon(weapon: Weapon): Int =
+        _weapons.indexOfFirst { it == weapon }
+
+    /** Index of the first bag row with this display name (stack pick). */
+    fun indexOfWeaponByDisplayName(displayName: String): Int =
+        _weapons.indexOfFirst { it.displayName == displayName }
+
+    /** Removes and returns the weapon at [index], or null if out of range. */
+    fun removeWeaponAt(index: Int): Weapon? {
+        if (index !in _weapons.indices) return null
+        val removed = _weapons.removeAt(index)
+        notifyChanged()
+        return removed
+    }
+
+    /** Adds a spare weapon to the Gear stash. */
+    fun addWeapon(weapon: Weapon) {
+        _weapons += weapon
+        notifyChanged()
+    }
+
+    /** How many of [ingredient] are in the stash (duplicates count). */
+    fun countOf(ingredient: Ingredient): Int =
+        _ingredients.count { it == ingredient }
+
+    fun hasIngredient(ingredient: Ingredient): Boolean =
+        countOf(ingredient) > 0
+
+    /**
+     * Removes one instance of [ingredient] from the stash. Returns
+     * false when none are available.
+     */
+    fun consumeIngredient(ingredient: Ingredient): Boolean {
+        val index = _ingredients.indexOf(ingredient)
+        if (index < 0) return false
+        _ingredients.removeAt(index)
+        notifyChanged()
+        return true
+    }
+
+    fun hasFloorKey(floorDepth: Int, lockId: String): Boolean =
+        _floorKeys.any { it.floorDepth == floorDepth && it.lockId == lockId }
+
+    fun consumeFloorKey(floorDepth: Int, lockId: String): Boolean {
+        val index = _floorKeys.indexOfFirst {
+            it.floorDepth == floorDepth && it.lockId == lockId
+        }
+        if (index < 0) return false
+        _floorKeys.removeAt(index)
+        notifyChanged()
+        return true
+    }
+
+    fun addFloorKey(key: FloorKey) {
+        _floorKeys += key
+        notifyChanged()
+    }
 
     /** Pushes [drop] onto the back of the pickup queue. */
     fun queuePickup(drop: LootDrop) {
@@ -141,6 +204,7 @@ class Inventory {
         when (drop) {
             is LootDrop.IngredientDrop -> _ingredients += drop.ingredient
             is LootDrop.MeleeWeaponDrop -> _weapons += weaponFromDrop(drop)
+            is LootDrop.FloorKeyDrop -> _floorKeys += drop.key
         }
     }
 
@@ -174,11 +238,17 @@ class Inventory {
      * restored - it's transient by design (closed-panel ==
      * discarded).
      */
-    fun restore(weapons: List<Weapon>, ingredients: List<Ingredient>) {
+    fun restore(
+        weapons: List<Weapon>,
+        ingredients: List<Ingredient>,
+        floorKeys: List<FloorKey> = emptyList(),
+    ) {
         _weapons.clear()
         _weapons += weapons
         _ingredients.clear()
         _ingredients += ingredients
+        _floorKeys.clear()
+        _floorKeys += floorKeys
         _pendingPickup.clear()
         notifyChanged()
     }

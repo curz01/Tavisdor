@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_equip_slot"
+    android:clickable="true"
+    android:focusable="true"
+    android:foreground="?attr/selectableItemBackground"
+    android:orientation="vertical"
+    android:padding="@dimen/inventory_summary_card_padding">
+
+    <TextView
+        android:id="@+id/tvHeroSummaryHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="2"
+        android:textColor="@color/hero_detail_value"
+        android:textSize="@dimen/inventory_summary_header_text"
+        android:textStyle="bold"
+        tools:text="Aldric - Fighter" />
+
+    <TextView
+        android:id="@+id/tvHeroSummaryLevel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:textColor="@color/items_panel_label_dim"
+        android:textSize="@dimen/inventory_summary_stat_text"
+        tools:text="Level: 5" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/inventory_summary_block_margin"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvHeroSummaryHp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:textColor="@color/items_panel_row_text"
+                android:textSize="@dimen/inventory_summary_stat_text"
+                tools:text="HP: 42/50" />
+
+            <TextView
+                android:id="@+id/tvHeroSummaryMp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:textColor="@color/items_panel_row_text"
+                android:textSize="@dimen/inventory_summary_stat_text"
+                tools:text="MP: 10/15" />
+
+            <TextView
+                android:id="@+id/tvHeroSummaryAc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:textColor="@color/items_panel_row_text"
+                android:textSize="@dimen/inventory_summary_stat_text"
+                tools:text="AC: 12" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvHeroSummaryStr"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:textColor="@color/items_panel_row_text"
+                android:textSize="@dimen/inventory_summary_stat_text"
+                tools:text="STR: 14" />
+
+            <TextView
+                android:id="@+id/tvHeroSummaryDex"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:textColor="@color/items_panel_row_text"
+                android:textSize="@dimen/inventory_summary_stat_text"
+                tools:text="DEX: 10" />
+
+            <TextView
+                android:id="@+id/tvHeroSummaryInt"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:textColor="@color/items_panel_row_text"
+                android:textSize="@dimen/inventory_summary_stat_text"
+                tools:text="INT: 8" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvHeroSummaryXp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/inventory_summary_xp_margin_top"
+        android:maxLines="1"
+        android:textColor="@color/items_panel_label_dim"
+        android:textSize="@dimen/inventory_summary_stat_text"
+        tools:text="EXP 500/1500" />
+</LinearLayout>

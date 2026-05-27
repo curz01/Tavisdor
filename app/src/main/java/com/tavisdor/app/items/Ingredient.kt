@@ -11,6 +11,8 @@ enum class IngredientCategory(val displayName: String) {
     BEVERAGE("Beverage"),
     RAW_MEAT("Raw Meat"),
     REAGENT("Reagent"),
+    /** Flame / Stone / Wind / Hydro shards, clusters, and cores. */
+    ELEMENTAL("Elemental"),
 }
 
 /**
@@ -45,9 +47,29 @@ enum class Ingredient(
     WINE(          "Wine",           IngredientCategory.BEVERAGE, 3),
     RAW_BEEF(      "Raw Beef",       IngredientCategory.RAW_MEAT, 3),
     GINSENG_ROOT(  "Ginseng Root",   IngredientCategory.REAGENT,  3),
+
+    // ----- Elemental shards (potency 1 = shard, 2 = cluster, 3 = core) -----
+    FLAME_SHARD(   "Flame Shard",    IngredientCategory.ELEMENTAL, 1),
+    STONE_SHARD(   "Stone Shard",    IngredientCategory.ELEMENTAL, 1),
+    WIND_SHARD(    "Wind Shard",     IngredientCategory.ELEMENTAL, 1),
+    HYDRO_SHARD(   "Hydro Shard",    IngredientCategory.ELEMENTAL, 1),
+
+    FLAME_CLUSTER( "Flame Cluster",  IngredientCategory.ELEMENTAL, 2),
+    STONE_CLUSTER( "Stone Cluster",  IngredientCategory.ELEMENTAL, 2),
+    WIND_CLUSTER(  "Wind Cluster",   IngredientCategory.ELEMENTAL, 2),
+    HYDRO_CLUSTER( "Hydro Cluster",  IngredientCategory.ELEMENTAL, 2),
+
+    FLAME_CORE(    "Flame Core",     IngredientCategory.ELEMENTAL, 3),
+    STONE_CORE(    "Stone Core",     IngredientCategory.ELEMENTAL, 3),
+    WIND_CORE(     "Wind Core",      IngredientCategory.ELEMENTAL, 3),
+    HYDRO_CORE(    "Hydro Core",     IngredientCategory.ELEMENTAL, 3),
     ;
 
     companion object {
+        /** 1 core = 10 clusters = 100 shards (for future crafting breaks). */
+        const val CLUSTERS_PER_CORE: Int = 10
+        const val SHARDS_PER_CLUSTER: Int = 10
+        const val SHARDS_PER_CORE: Int = CLUSTERS_PER_CORE * SHARDS_PER_CLUSTER
         /**
          * Lowest authored potency. Below this, [atPotency] returns
          * an empty list and loot rolls should fall through to
@@ -69,5 +91,9 @@ enum class Ingredient(
         /** Every ingredient in [category], potency 1 first. */
         fun inCategory(category: IngredientCategory): List<Ingredient> =
             entries.filter { it.category == category }.sortedBy { it.potency }
+
+        /** All elemental items at [potency] (1 = shard, 2 = cluster, 3 = core). */
+        fun elementalAtPotency(potency: Int): List<Ingredient> =
+            inCategory(IngredientCategory.ELEMENTAL).filter { it.potency == potency }
     }
 }

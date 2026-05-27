@@ -6,6 +6,27 @@ import com.tavisdor.app.skills.Skill
 import com.tavisdor.app.skills.SkillButton
 import com.tavisdor.app.skills.SkillCatalog
 
+/** Offensive column in the skill-assignment panel (ACTION bucket). */
+fun Hero.offensiveSkillsForAssign(): List<Skill> =
+    knownSkills.filter {
+        it.button == SkillButton.ACTION &&
+            it.id !in SkillCatalog.ASSIGN_PASSIVE_COLUMN_SKILL_IDS
+    }
+
+/** Defensive column: GUARD bucket excluding passives and utility skills. */
+fun Hero.defensiveSkillsForAssign(): List<Skill> =
+    knownSkills.filter {
+        it.button == SkillButton.GUARD &&
+            !it.isPassive &&
+            it.id !in SkillCatalog.ASSIGN_PASSIVE_COLUMN_SKILL_IDS
+    }
+
+/** Passive column: always-on passives plus out-of-combat utility skills. */
+fun Hero.passiveSkillsForAssign(): List<Skill> =
+    knownSkills.filter {
+        it.isPassive || it.id in SkillCatalog.ASSIGN_PASSIVE_COLUMN_SKILL_IDS
+    }
+
 /**
  * One member of the party. STR / DEX / INT are NOT stored - they are
  * looked up from [ClassStats] using the hero's class and current level,
@@ -81,7 +102,7 @@ data class Hero(
     /**
      * Flat dodge chance as a percentage (1% per point of [dexterity]).
      * Combat's to-hit roll subtracts this from the attacker's accuracy.
-     * Capped to a sane 90% so a maxed Archer (DEX 17 at L10) still has
+     * Capped to a sane 90% so a max-DEX hero at L10 still has
      * a small chance to be hit.
      */
     val dodgeChancePct: Int get() = (dexterity * DEX_DODGE_PCT_PER_POINT).coerceAtMost(90)
@@ -110,27 +131,28 @@ data class Hero(
     // ----- Skills (derived from class + level via [SkillCatalog]) -----
 
     /**
-     * The hero's current "Attack" option, with the [Skill.range]
-     * field rewritten to match the equipped [weapon1]. A crude
-     * sword / dagger / staff keeps range 1; a crude bow bumps
-     * it to [Weapon.CRUDE_BOW_RANGE] so the archer can fire from
-     * a distance. The base skill from [SkillCatalog] is class-
-     * tinted but range-static; this property is the single source
-     * of truth for "what range does this hero swing / shoot at?"
+     * The hero's current "Attack" option, with [Skill.displayName]
+     * and [Skill.range] rewritten from equipped [weapon1]. Shows
+     * `Attack (Sword)` etc. using [WeaponType.displayName] only
+     * (no tier prefix like "Crude"). A crude bow bumps range to
+     * [Weapon.CRUDE_BOW_RANGE] (3); melee weapons stay at 1.
      */
     val basicAttackSkill: Skill
         get() {
             val base = SkillCatalog.basicAttackFor(heroClass)
             val w = weapon1 ?: return base
-            return if (w.range != base.range) base.copy(range = w.range) else base
+            return base.copy(
+                displayName = SkillCatalog.basicAttackDisplayName(w.type),
+                range = w.range,
+            )
         }
 
     /**
      * Every skill / spell this hero currently knows, in unlock
      * order. The universal basic Attack is patched in with the
      * weapon-aware range (see [basicAttackSkill]) so the skill
-     * picker and the hero detail panel both show "Range: 2" for an
-     * Archer with a bow.
+     * picker and the hero detail panel both show bow range for an
+     * Archer with a bow equipped.
      */
     val knownSkills: List<Skill> get() = applyBasicAttackRange(
         SkillCatalog.knownSkillsFor(heroClass, level),
@@ -155,7 +177,6 @@ data class Hero(
     private fun applyBasicAttackRange(list: List<Skill>): List<Skill> {
         if (weapon1 == null) return list
         val ba = basicAttackSkill
-        if (ba.range == SkillCatalog.basicAttackFor(heroClass).range) return list
         return list.map { if (it.id == SkillCatalog.BASIC_ATTACK_ID) ba else it }
     }
 

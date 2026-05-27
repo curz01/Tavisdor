@@ -9,6 +9,8 @@ import com.tavisdor.app.party.ClassStats
 import com.tavisdor.app.party.Hero
 import com.tavisdor.app.render.Camera
 import com.tavisdor.app.render.PartyLungeGateway
+import com.tavisdor.app.render.BowVolley
+import com.tavisdor.app.render.BowVolleyPlan
 import com.tavisdor.app.render.WeaponFxCatalog
 import com.tavisdor.app.render.WeaponFxGateway
 import com.tavisdor.app.render.WeaponFxKind
@@ -162,6 +164,12 @@ class CombatController(
 
     /** Duration for the *next* Charge lunge, consumed by the Charge FX request. */
     private var pendingChargeLungeMs: Long? = null
+
+    /**
+     * Per-slot archer prepare flags. Consumed when the hero next
+     * commits an offensive skill through [commitHeroAction].
+     */
+    private val archerPrepareBuffs = Array(4) { ArcherPrepareBuffs() }
 
     /**
      * Fractional grid coordinates for drawing [enemy] this frame.
@@ -554,6 +562,16 @@ class CombatController(
         if (chosen.id == SkillCatalog.FIGHTER_CHARGE_ID) {
             return commitHeroCharge(slot, chosen, preferredTarget)
         }
+        if (chosen.id == SkillCatalog.ARCHER_RAPID_FIRE_ID) {
+            return commitArcherPrepare(hero, chosen) {
+                archerPrepareBuffs[slot].rapidFirePending = true
+            }
+        }
+        if (chosen.id == SkillCatalog.ARCHER_DOUBLE_SHOT_ID) {
+            return commitArcherPrepare(hero, chosen) {
+                archerPrepareBuffs[slot].doubleShotPending = true
+            }
+        }
         // Validate MP cost.
         if (chosen.mpCost > hero.mp) return false
 
@@ -606,11 +624,101 @@ class CombatController(
             }
         }
 
-        withAttackFx(buildHeroStrikeFx(hero, chosen, target)) {
-            resolveHeroAction(hero, chosen, target)
+        val shotPlan = consumeArcherShotPlan(slot)
+        val multiArrow = shotPlan.totalArrows > 1
+
+        chosen.requiredShard?.let { shard ->
+            if (multiArrow) {
+                if (!combat.party.inventory.hasIngredient(shard)) {
+                    log.append(
+                        CombatLogEntry.MissingShard(
+                            attacker = hero.name,
+                            skillName = chosen.displayName,
+                            shardName = shard.displayName,
+                        ),
+                    )
+                    return false
+                }
+            } else if (!combat.party.inventory.consumeIngredient(shard)) {
+                log.append(
+                    CombatLogEntry.MissingShard(
+                        attacker = hero.name,
+                        skillName = chosen.displayName,
+                        shardName = shard.displayName,
+                    ),
+                )
+                return false
+            }
+        }
+
+        withAttackFx(buildHeroStrikeFx(hero, chosen, target, shotPlan)) {
+            if (multiArrow) {
+                resolveHeroActionMultiArrow(hero, chosen, target, shotPlan)
+            } else {
+                resolveHeroAction(hero, chosen, target)
+            }
             finishCurrentAction()
         }
         return true
+    }
+
+    /**
+     * Arms a Rapid Fire / Double Shot buff. Prepare skills skip
+     * target / range gates; Rapid Fire does not consume the turn
+     * when [Skill.costsAction] is false.
+     */
+    private fun commitArcherPrepare(
+        hero: Hero,
+        skill: Skill,
+        armBuff: () -> Unit,
+    ): Boolean {
+        if (skill.mpCost > hero.mp) return false
+        if (skill.mpCost > 0) hero.spendMana(skill.mpCost)
+        armBuff()
+        log.append(
+            CombatLogEntry.Info("${hero.name} prepares ${skill.displayName}."),
+        )
+        if (skill.costsAction) {
+            finishCurrentAction()
+        }
+        return true
+    }
+
+    /**
+     * Reads and clears pending archer buffs for [slot], producing
+     * how many arrows the upcoming attack should fire.
+     */
+    private fun consumeArcherShotPlan(slot: Int): ArcherShotPlan {
+        val buffs = archerPrepareBuffs[slot]
+        val volleys = mutableListOf<BowVolley>()
+        var secondArrowMissChancePct = 0
+
+        val hadDouble = buffs.doubleShotPending
+        val hadRapid = buffs.rapidFirePending
+        if (hadDouble) {
+            buffs.doubleShotPending = false
+            secondArrowMissChancePct = ARCHER_DOUBLE_SHOT_SECOND_MISS_PCT
+            volleys += BowVolley.Parallel(arrowCount = 2)
+        }
+        if (hadRapid) {
+            buffs.rapidFirePending = false
+            var rapidArrows = 2
+            if (rng.nextDouble() < ARCHER_RAPID_FIRE_EXTRA_ARROW_CHANCE) {
+                rapidArrows += 1
+            }
+            if (hadDouble) {
+                val extra = rapidArrows - 2
+                if (extra > 0) {
+                    volleys += BowVolley.Sequential(arrowCount = extra)
+                }
+            } else {
+                volleys += BowVolley.Sequential(arrowCount = rapidArrows)
+            }
+        }
+        return ArcherShotPlan(
+            volleys = volleys,
+            secondArrowMissChancePct = secondArrowMissChancePct,
+        )
     }
 
     /**
@@ -736,7 +844,7 @@ class CombatController(
                 distance = travelled,
             ),
         )
-        withAttackFx(buildHeroStrikeFx(hero, skill, target)) {
+        withAttackFx(buildHeroStrikeFx(hero, skill, target, ArcherShotPlan.EMPTY)) {
             pendingChargeLungeMs = null
             resolveChargeStrike(hero, target)
             finishCurrentAction()
@@ -1287,7 +1395,12 @@ class CombatController(
         block()
     }
 
-    private fun buildHeroStrikeFx(hero: Hero, skill: Skill, target: Enemy): WeaponFxRequest? {
+    private fun buildHeroStrikeFx(
+        hero: Hero,
+        skill: Skill,
+        target: Enemy,
+        shotPlan: ArcherShotPlan,
+    ): WeaponFxRequest? {
         if (skill.id == SkillCatalog.FIGHTER_CHARGE_ID) {
             return WeaponFxRequest(
                 attackerCell = floor.partyCell,
@@ -1305,12 +1418,21 @@ class CombatController(
         } else {
             WeaponFxCatalog.kindForWeaponAttack(hero.weapon1?.type) ?: return null
         }
+        val bowVolleyPlan = buildBowVolleyPlan(kind, shotPlan)
         return WeaponFxRequest(
             attackerCell = floor.partyCell,
             defenderCell = target.cell,
             kind = kind,
             weaponType = hero.weapon1?.type,
+            bowVolleyPlan = bowVolleyPlan,
         )
+    }
+
+    private fun buildBowVolleyPlan(kind: WeaponFxKind, shotPlan: ArcherShotPlan): BowVolleyPlan? {
+        if (shotPlan.volleys.isEmpty()) return null
+        if (kind != WeaponFxKind.BOW_SHOT && kind != WeaponFxKind.FIRE_PROJECTILE) return null
+        val arrowAsset = if (kind == WeaponFxKind.FIRE_PROJECTILE) "fire_arrow" else "arrow"
+        return BowVolleyPlan(volleys = shotPlan.volleys, arrowAsset = arrowAsset)
     }
 
     /**
@@ -1356,10 +1478,59 @@ class CombatController(
      */
     private fun resolveHeroAction(hero: Hero, skill: Skill, target: Enemy) {
         if (skill.mpCost > 0) hero.spendMana(skill.mpCost)
+        resolveHeroActionShot(hero, skill, target)
+    }
 
-        // Look up the hero / enemy indices once so the hate hooks
-        // below can record damage tallies and apply the heal bump
-        // without re-scanning the lists for every call site.
+    /**
+     * Fires [plan.arrowCount] shots. Elemental shards are consumed
+     * only after a successful hit (spell connect or melee hit).
+     * Double Shot's second arrow rolls an extra miss chance.
+     */
+    private fun resolveHeroActionMultiArrow(
+        hero: Hero,
+        skill: Skill,
+        target: Enemy,
+        plan: ArcherShotPlan,
+    ) {
+        if (skill.mpCost > 0) hero.spendMana(skill.mpCost)
+
+        for (arrowIndex in 0 until plan.totalArrows) {
+            if (!target.isAlive) break
+
+            if (arrowIndex == 1 && plan.secondArrowMissChancePct > 0) {
+                if (rng.nextInt(100) < plan.secondArrowMissChancePct) {
+                    log.append(
+                        CombatLogEntry.MeleeMiss(
+                            attacker = hero.name,
+                            target = target.name,
+                        ),
+                    )
+                    continue
+                }
+            }
+
+            val hit = resolveHeroActionShot(hero, skill, target)
+            val shard = skill.requiredShard
+            if (hit && shard != null) {
+                if (!combat.party.inventory.consumeIngredient(shard)) {
+                    log.append(
+                        CombatLogEntry.MissingShard(
+                            attacker = hero.name,
+                            skillName = skill.displayName,
+                            shardName = shard.displayName,
+                        ),
+                    )
+                    break
+                }
+            }
+        }
+    }
+
+    /**
+     * Resolves one offensive swing. Returns true when the attack
+     * connected (spell hit or melee hit); false on resist / miss.
+     */
+    private fun resolveHeroActionShot(hero: Hero, skill: Skill, target: Enemy): Boolean {
         val heroSlot = combat.party.heroes.indexOf(hero)
         val targetIdx = combat.enemies.indexOf(target)
 
@@ -1387,23 +1558,20 @@ class CombatController(
                 if (out.damage > 0) {
                     combat.hate.recordDamage(targetIdx, heroSlot, out.damage)
                 }
-            } else {
-                log.append(
-                    CombatLogEntry.SpellResist(
-                        attacker = hero.name,
-                        spellName = skill.displayName,
-                        target = target.name,
-                    ),
-                )
+                handleEnemyKoIfDead(target)
+                return true
             }
-            handleEnemyKoIfDead(target)
-        } else if (skill.damage != null || isBasicAttack(skill)) {
-            // Melee path: damage = STR + equipped-weapon bonus
-            // + skill bonus. Crude starters add 0, so a hero
-            // with a starter weapon hits for pure STR + skill.
-            // Falling back to [LootTier.FISTS_DAMAGE] only fires
-            // on hypothetical barehanded heroes - the spawn /
-            // load paths always issue a crude weapon today.
+            log.append(
+                CombatLogEntry.SpellResist(
+                    attacker = hero.name,
+                    spellName = skill.displayName,
+                    target = target.name,
+                ),
+            )
+            return false
+        }
+
+        if (skill.damage != null || isBasicAttack(skill)) {
             val weaponBonus = hero.weapon1?.attackBonus ?: LootTier.FISTS_DAMAGE
             val attackPower = hero.strength + weaponBonus + (skill.damage ?: 0)
             val out = CombatMath.resolveMelee(
@@ -1418,18 +1586,15 @@ class CombatController(
                 targetName = target.name,
                 outcome = out,
             )
-            if (out.damage > 0) {
+            if (out.hit && out.damage > 0) {
                 target.takeDamage(out.damage)
                 combat.hate.recordDamage(targetIdx, heroSlot, out.damage)
             }
             handleEnemyKoIfDead(target)
+            return out.hit
         }
-        // Heal spells never reach this resolver - they're routed
-        // through [commitHeroHeal] which handles the aggro pulse,
-        // the MP cost, and the per-hero target picking. Anything
-        // that survives both branches above (no damage, no element,
-        // not basic-attack) is a pure-utility skill (buffs, passives,
-        // prepare-only setup) whose resolver still hasn't landed.
+
+        return false
     }
 
     /**
@@ -1740,6 +1905,14 @@ class CombatController(
             if (table != null) {
                 pickups += table.rollAll(rng, floor.depth)
             }
+            for (lockId in enemy.floorKeyLockIds) {
+                pickups += com.tavisdor.app.items.LootDrop.FloorKeyDrop(
+                    com.tavisdor.app.items.FloorKey(
+                        floorDepth = floor.depth,
+                        lockId = lockId,
+                    ),
+                )
+            }
         }
         if (totalGold > 0) {
             combat.party.addGold(totalGold)
@@ -1812,8 +1985,32 @@ class CombatController(
     private fun manhattan(a: com.tavisdor.app.dungeon.Cell, b: com.tavisdor.app.dungeon.Cell): Int =
         kotlin.math.abs(a.x - b.x) + kotlin.math.abs(a.y - b.y)
 
+    private data class ArcherPrepareBuffs(
+        var rapidFirePending: Boolean = false,
+        var doubleShotPending: Boolean = false,
+    )
+
+    private data class ArcherShotPlan(
+        val volleys: List<BowVolley>,
+        val secondArrowMissChancePct: Int = 0,
+    ) {
+        val totalArrows: Int
+            get() = volleys.sumOf { volley ->
+                when (volley) {
+                    is BowVolley.Parallel -> volley.arrowCount
+                    is BowVolley.Sequential -> volley.arrowCount
+                }
+            }
+
+        companion object {
+            val EMPTY = ArcherShotPlan(volleys = emptyList())
+        }
+    }
+
     companion object {
         private const val FIRE_ARROW_SKILL_ID: String = "archer_fire_arrow"
+        private const val ARCHER_RAPID_FIRE_EXTRA_ARROW_CHANCE = 0.80
+        private const val ARCHER_DOUBLE_SHOT_SECOND_MISS_PCT = 25
         private const val CHARGE_MS_PER_CELL: Long = 190L
         private const val CHARGE_MIN_MS: Long = 320L
         /**

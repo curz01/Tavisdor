@@ -8,6 +8,24 @@ import com.tavisdor.app.items.WeaponType
  * [attackerCell] and [defenderCell]. Works for heroes and enemies
  * alike - only cells and weapon context matter.
  */
+/**
+ * Describes how many arrows to animate and whether they fly in
+ * parallel (Double Shot) or as separate bow cycles (Rapid Fire).
+ */
+data class BowVolleyPlan(
+    val volleys: List<BowVolley>,
+    /** Projectile sprite: `arrow` or `fire_arrow`. */
+    val arrowAsset: String,
+)
+
+sealed class BowVolley {
+    /** One bow draw; [arrowCount] arrows fly side-by-side (Double Shot). */
+    data class Parallel(val arrowCount: Int) : BowVolley()
+
+    /** Full draw + flight per arrow, played back-to-back (Rapid Fire). */
+    data class Sequential(val arrowCount: Int) : BowVolley()
+}
+
 data class WeaponFxRequest(
     val attackerCell: Cell,
     val defenderCell: Cell,
@@ -16,6 +34,8 @@ data class WeaponFxRequest(
     val weaponType: WeaponType? = null,
     /** Optional duration override for this specific playback. */
     val durationMsOverride: Long? = null,
+    /** When set, bow / fire-arrow kinds play multiple volleys instead of one shot. */
+    val bowVolleyPlan: BowVolleyPlan? = null,
 )
 
 /**

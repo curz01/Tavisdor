@@ -106,13 +106,17 @@ class InputHandler {
         // (single-cell, disengage check on adjacent enemies); the
         // exploration mover handles paths of any length.
         if (game.combat != null) {
+            if (game.isCombatTargetSelectionActive()) {
+                return game.handleCombatTargetTap(target)
+            }
+
             // Enemy-cell tap: select the enemy so its hate values
             // populate the hero-panel hate icons. We check this
             // BEFORE attemptPartyMoveInCombat because that call
             // rejects enemy-occupied cells outright, so without
             // this branch tap-to-select would never fire.
             val tappedEnemy = floor.enemyAt(target)
-            if (tappedEnemy != null && tappedEnemy.isAlive) {
+            if (tappedEnemy != null && tappedEnemy.isAlive && floor.isVisibleToParty(target)) {
                 game.setSelectedEnemy(tappedEnemy)
                 return true
             }

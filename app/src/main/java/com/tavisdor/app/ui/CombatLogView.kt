@@ -342,6 +342,12 @@ class CombatLogView @JvmOverloads constructor(
                 disadvantageSeg(out, "blocked")
                 whiteSeg(out, " - no clear shot at ${entry.target}.")
             }
+            is CombatLogEntry.MissingShard -> {
+                whiteSeg(out, "${entry.attacker} needs a ")
+                whiteSeg(out, "${entry.shardName}")
+                whiteSeg(out, " to use ")
+                whiteSeg(out, "${entry.skillName}.")
+            }
             is CombatLogEntry.Info -> {
                 whiteSeg(out, entry.text)
             }

@@ -8,13 +8,14 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
 import com.google.android.material.button.MaterialButton
 import com.tavisdor.app.R
+import com.tavisdor.app.items.FloorKey
 import com.tavisdor.app.items.Ingredient
 import com.tavisdor.app.items.Inventory
 import com.tavisdor.app.items.LootDrop
 import com.tavisdor.app.items.Weapon
+import com.tavisdor.app.party.HeroEquipment
 import com.tavisdor.app.party.Party
 
 /**
@@ -29,12 +30,9 @@ import com.tavisdor.app.party.Party
  *     "panel") that consumes touches so taps inside don't
  *     bubble out to the scrim.
  *   - Top row: gold counter (left) + Close (right).
- *   - Section 1 (Equipment & Weapons): read-only list of [Weapon].
- *   - Section 2 (Ingredients): read-only list of [Ingredient].
- *   - Section 3 (Pickup / Discard): tappable rows that move
- *     into section 1 / 2 on tap, or get silently dropped when
- *     the panel closes with the section non-empty. "Pick Up
- *     All" button below grabs the entire queue at once.
+ *   - Top tab strip (horizontal, right-aligned): Pickup, Gear, Mats.
+ *   - Pickup tab: tappable rows, Pick Up All, discard-on-close.
+ *   - Below: 2x2 party summary, or per-hero equipment when a card is tapped.
  *
  * Lifecycle:
  *   - Construct once per Activity; reuses the same view tree.
@@ -51,18 +49,65 @@ class ItemsScreen(
     private val root: ViewGroup,
     var onDismiss: (() -> Unit)? = null,
 ) {
+    /** Fired after a hero equips / unequips a weapon so the HUD can refresh. */
+    var onPartyEquipmentChanged: (() -> Unit)? = null
+
+    private data class PendingWeaponEquip(
+        val heroSlot: Int,
+        val weaponSlot: HeroEquipment.WeaponSlot,
+    )
     private val ctx: Context get() = root.context
 
+    private val panelHost: View = root.findViewById(R.id.itemsPanelHost)
     private val scroll: ScrollView = root.findViewById(R.id.itemsPanelScroll)
     private val panel: View = root.findViewById(R.id.itemsPanel)
 
+    private val sideTabPickup: View = root.findViewById(R.id.itemsSideTabPickup)
+    private val sideTabEquipment: View = root.findViewById(R.id.itemsSideTabEquipment)
+    private val sideTabIngredients: View = root.findViewById(R.id.itemsSideTabIngredients)
+
+    private val tabPickup: View = root.findViewById(R.id.itemsTabPickup)
+    private val tabEquipment: View = root.findViewById(R.id.itemsTabEquipment)
+    private val tabIngredients: View = root.findViewById(R.id.itemsTabIngredients)
+
     private val tvGold: TextView = root.findViewById(R.id.tvItemsGold)
+    private val tvEquipHint: TextView = root.findViewById(R.id.tvItemsEquipHint)
     private val equipmentList: LinearLayout = root.findViewById(R.id.itemsEquipmentList)
     private val ingredientList: LinearLayout = root.findViewById(R.id.itemsIngredientList)
     private val pickupList: LinearLayout = root.findViewById(R.id.itemsPickupList)
     private val tvPickupHint: TextView = root.findViewById(R.id.tvItemsPickupHint)
     private val btnClose: MaterialButton = root.findViewById(R.id.btnItemsClose)
     private val btnPickUpAll: MaterialButton = root.findViewById(R.id.btnItemsPickUpAll)
+
+    private enum class InventoryTab { PICKUP, EQUIPMENT, INGREDIENTS }
+
+    private val sideTabs: List<View> by lazy {
+        listOf(sideTabPickup, sideTabEquipment, sideTabIngredients)
+    }
+
+    private val heroSummaryPanel: View = root.findViewById(R.id.itemsHeroSummaryPanel)
+
+    private val heroSummarySlots: List<InventoryHeroSummarySlot> by lazy {
+        listOf(
+            InventoryHeroSummarySlot(root.findViewById(R.id.heroSummarySlot0)),
+            InventoryHeroSummarySlot(root.findViewById(R.id.heroSummarySlot1)),
+            InventoryHeroSummarySlot(root.findViewById(R.id.heroSummarySlot2)),
+            InventoryHeroSummarySlot(root.findViewById(R.id.heroSummarySlot3)),
+        )
+    }
+
+    private val heroEquipPanel: InventoryHeroEquipPanel = InventoryHeroEquipPanel(
+        root = root.findViewById(R.id.itemsHeroEquipPanel),
+    ).also {
+        it.onClose = { showHeroSummary() }
+        it.onSlotClick = { slot -> onEquipSlotClicked(slot) }
+    }
+
+    /** When set, the lower host shows [heroEquipPanel] instead of the 2x2 summary. */
+    private var selectedHeroSlot: Int? = null
+
+    /** Waiting for the player to pick a weapon from the Gear tab. */
+    private var pendingWeaponEquip: PendingWeaponEquip? = null
 
     /**
      * Party currently surfaced by the panel. Set via [bind]; the
@@ -81,9 +126,23 @@ class ItemsScreen(
 
     init {
         root.setOnClickListener { hide() }
+        panelHost.setOnClickListener { /* consume so taps on panel/tabs don't dismiss */ }
         panel.setOnClickListener { /* consume so taps don't dismiss */ }
         btnClose.setOnClickListener { hide() }
         btnPickUpAll.setOnClickListener { onPickUpAllTapped() }
+
+        sideTabs.forEachIndexed { index, tab ->
+            tab.setOnClickListener {
+                if (index != InventoryTab.EQUIPMENT.ordinal) {
+                    clearPendingWeaponEquip()
+                }
+                selectTab(index)
+            }
+        }
+
+        heroSummarySlots.forEachIndexed { index, slot ->
+            slot.root.setOnClickListener { openHeroEquipment(index) }
+        }
     }
 
     /** Wire the panel to [party]. Idempotent. */
@@ -100,9 +159,44 @@ class ItemsScreen(
     fun show() {
         val p = party ?: return
         p.inventory.onChanged = inventoryListener
+        showHeroSummary()
+        selectTab(InventoryTab.PICKUP.ordinal)
         refresh()
         scroll.scrollTo(0, 0)
         root.visibility = View.VISIBLE
+    }
+
+    private fun showHeroSummary() {
+        selectedHeroSlot = null
+        clearPendingWeaponEquip()
+        heroSummaryPanel.visibility = View.VISIBLE
+        heroEquipPanel.hide()
+    }
+
+    private fun clearPendingWeaponEquip() {
+        pendingWeaponEquip = null
+        tvEquipHint.visibility = View.GONE
+    }
+
+    private fun openHeroEquipment(slotIndex: Int) {
+        val hero = party?.heroes?.getOrNull(slotIndex) ?: return
+        selectedHeroSlot = slotIndex
+        heroEquipPanel.bind(hero)
+        heroSummaryPanel.visibility = View.GONE
+        heroEquipPanel.show()
+    }
+
+    private fun selectTab(index: Int) {
+        showTab(index)
+        sideTabs.forEachIndexed { i, tab ->
+            tab.isSelected = i == index
+        }
+    }
+
+    private fun showTab(index: Int) {
+        tabPickup.visibility = if (index == InventoryTab.PICKUP.ordinal) View.VISIBLE else View.GONE
+        tabEquipment.visibility = if (index == InventoryTab.EQUIPMENT.ordinal) View.VISIBLE else View.GONE
+        tabIngredients.visibility = if (index == InventoryTab.INGREDIENTS.ordinal) View.VISIBLE else View.GONE
     }
 
     /**
@@ -114,15 +208,12 @@ class ItemsScreen(
      */
     fun hide() {
         if (root.visibility == View.GONE) return
+        showHeroSummary()
         val discarded = party?.inventory?.discardPendingPickup() ?: 0
         party?.inventory?.onChanged = null
         root.visibility = View.GONE
         if (discarded > 0) {
-            Toast.makeText(
-                ctx,
-                ctx.getString(R.string.items_panel_toast_discarded, discarded),
-                Toast.LENGTH_SHORT,
-            ).show()
+            AppToast.show(ctx, ctx.getString(R.string.items_panel_toast_discarded, discarded))
         }
         onDismiss?.invoke()
     }
@@ -143,11 +234,7 @@ class ItemsScreen(
         } else {
             "${collected.size} items"
         }
-        Toast.makeText(
-            ctx,
-            ctx.getString(R.string.items_panel_toast_picked_up, label),
-            Toast.LENGTH_SHORT,
-        ).show()
+        AppToast.show(ctx, ctx.getString(R.string.items_panel_toast_picked_up, label))
     }
 
     /**
@@ -160,28 +247,129 @@ class ItemsScreen(
         tvGold.text = ctx.getString(R.string.items_panel_gold_format, p.gold)
 
         renderEquipment(p.inventory.weapons)
-        renderIngredients(p.inventory.ingredients)
+        renderIngredients(p.inventory.ingredients, p.inventory.floorKeys)
         renderPickup(p.inventory.pendingPickup)
+        val slot = selectedHeroSlot
+        if (slot != null) {
+            p.heroes.getOrNull(slot)?.let { heroEquipPanel.bind(it) }
+        } else {
+            renderHeroSummary(p)
+        }
+    }
+
+    /** Slots 0–1 front row, 2–3 back row — mirrors [HeroPanelView]. */
+    private fun renderHeroSummary(party: Party) {
+        party.heroes.forEachIndexed { index, hero ->
+            heroSummarySlots[index].bind(hero)
+        }
     }
 
     private fun renderEquipment(weapons: List<Weapon>) {
+        tvEquipHint.visibility = if (pendingWeaponEquip != null) View.VISIBLE else View.GONE
+
         equipmentList.removeAllViews()
         if (weapons.isEmpty()) {
             equipmentList.addView(emptyRow())
             return
         }
+        val picking = pendingWeaponEquip != null
         for (group in groupByLabel(weapons) { it.displayName }) {
-            equipmentList.addView(staticRow(formatStackLabel(group.label, group.count)))
+            val label = formatStackLabel(group.label, group.count)
+            equipmentList.addView(
+                if (picking) {
+                    gearPickRow(label, group.label)
+                } else {
+                    staticRow(label)
+                },
+            )
         }
     }
 
-    private fun renderIngredients(ingredients: List<Ingredient>) {
+    private fun gearPickRow(label: String, displayName: String): View {
+        val tv = baseRow(label)
+        tv.setBackgroundResource(android.R.drawable.list_selector_background)
+        tv.isClickable = true
+        tv.isFocusable = true
+        tv.setOnClickListener { onGearWeaponRowTapped(displayName) }
+        return tv
+    }
+
+    private fun onEquipSlotClicked(slot: InventoryHeroEquipPanel.EquipSlot) {
+        val heroSlot = selectedHeroSlot ?: return
+        val p = party ?: return
+        val hero = p.heroes.getOrNull(heroSlot) ?: return
+        when (slot) {
+            InventoryHeroEquipPanel.EquipSlot.PRIMARY_WEAPON ->
+                onWeaponSlotClicked(heroSlot, HeroEquipment.WeaponSlot.PRIMARY, hero.weapon1)
+            InventoryHeroEquipPanel.EquipSlot.OFF_HAND_WEAPON ->
+                onWeaponSlotClicked(heroSlot, HeroEquipment.WeaponSlot.OFF_HAND, hero.weapon2)
+            InventoryHeroEquipPanel.EquipSlot.HELMET,
+            InventoryHeroEquipPanel.EquipSlot.ARMOR,
+            InventoryHeroEquipPanel.EquipSlot.BOOTS,
+            -> {
+                AppToast.show(ctx, R.string.inventory_toast_armor_not_in_gear)
+            }
+        }
+    }
+
+    private fun onWeaponSlotClicked(
+        heroSlot: Int,
+        weaponSlot: HeroEquipment.WeaponSlot,
+        equipped: Weapon?,
+    ) {
+        if (equipped != null) {
+            unequipWeapon(heroSlot, weaponSlot, equipped.displayName)
+            return
+        }
+        pendingWeaponEquip = PendingWeaponEquip(heroSlot, weaponSlot)
+        selectTab(InventoryTab.EQUIPMENT.ordinal)
+        refresh()
+    }
+
+    private fun onGearWeaponRowTapped(displayName: String) {
+        val pending = pendingWeaponEquip ?: return
+        val p = party ?: return
+        val idx = p.inventory.indexOfWeaponByDisplayName(displayName)
+        val weapon = p.inventory.weapons.getOrNull(idx) ?: return
+        equipWeapon(pending.heroSlot, pending.weaponSlot, weapon)
+    }
+
+    private fun equipWeapon(heroSlot: Int, weaponSlot: HeroEquipment.WeaponSlot, weapon: Weapon) {
+        val p = party ?: return
+        when (HeroEquipment.equipWeapon(p, heroSlot, weaponSlot, weapon)) {
+            HeroEquipment.EquipResult.SUCCESS -> {
+                clearPendingWeaponEquip()
+                AppToast.show(ctx, ctx.getString(R.string.inventory_toast_equipped, weapon.displayName))
+                onPartyEquipmentChanged?.invoke()
+            }
+            HeroEquipment.EquipResult.NOT_USABLE_BY_HERO -> {
+                val hero = p.heroes[heroSlot]
+                AppToast.show(ctx, ctx.getString(R.string.inventory_toast_cannot_equip, hero.name))
+            }
+            HeroEquipment.EquipResult.NOT_IN_INVENTORY -> refresh()
+        }
+        refresh()
+    }
+
+    private fun unequipWeapon(heroSlot: Int, weaponSlot: HeroEquipment.WeaponSlot, displayName: String) {
+        val p = party ?: return
+        if (!HeroEquipment.unequipWeapon(p, heroSlot, weaponSlot)) return
+        clearPendingWeaponEquip()
+        AppToast.show(ctx, ctx.getString(R.string.inventory_toast_unequipped, displayName))
+        onPartyEquipmentChanged?.invoke()
+        refresh()
+    }
+
+    private fun renderIngredients(ingredients: List<Ingredient>, floorKeys: List<FloorKey>) {
         ingredientList.removeAllViews()
-        if (ingredients.isEmpty()) {
+        if (ingredients.isEmpty() && floorKeys.isEmpty()) {
             ingredientList.addView(emptyRow())
             return
         }
         for (group in groupByLabel(ingredients) { it.displayName }) {
+            ingredientList.addView(staticRow(formatStackLabel(group.label, group.count)))
+        }
+        for (group in groupByLabel(floorKeys) { it.displayName() }) {
             ingredientList.addView(staticRow(formatStackLabel(group.label, group.count)))
         }
     }
@@ -230,11 +418,7 @@ class ItemsScreen(
         val idx = p.inventory.pendingPickup.indexOfFirst { displayName(it) == label }
         if (idx < 0) return
         val picked = p.inventory.pickUpAt(idx) ?: return
-        Toast.makeText(
-            ctx,
-            ctx.getString(R.string.items_panel_toast_picked_up, displayName(picked)),
-            Toast.LENGTH_SHORT,
-        ).show()
+        AppToast.show(ctx, ctx.getString(R.string.items_panel_toast_picked_up, displayName(picked)))
     }
 
     /**
@@ -246,6 +430,7 @@ class ItemsScreen(
     private fun displayName(drop: LootDrop): String = when (drop) {
         is LootDrop.IngredientDrop -> drop.ingredient.displayName
         is LootDrop.MeleeWeaponDrop -> drop.tier.displayMeleeName(drop.weapon)
+        is LootDrop.FloorKeyDrop -> drop.key.displayName()
     }
 
     /**

@@ -36,13 +36,11 @@ data class Weapon(
 
     companion object {
         /**
-         * Range a crude starter bow grants. Set to 2 deliberately:
-         * one cell more than melee so the archer feels distinct
-         * from the start, but enough headroom for later bow tiers
-         * to scale up to 3 / 4 without making the starter feel
-         * already-maxed.
+         * Range a crude starter bow grants. Set to 3 so the archer
+         * can engage from a distance while leaving headroom for
+         * later bow tiers to scale higher.
          */
-        const val CRUDE_BOW_RANGE: Int = 2
+        const val CRUDE_BOW_RANGE: Int = 3
 
         /**
          * Range for crude melee weapons (sword / dagger / staff).
@@ -68,7 +66,7 @@ data class Weapon(
          *   - FIGHTER -> Crude Sword (range 1)
          *   - THIEF   -> Crude Dagger (range 1)
          *   - MAGE    -> Crude Staff (range 1)
-         *   - ARCHER  -> Crude Bow (range 2, the only ranged starter)
+         *   - ARCHER  -> Crude Bow (range 3, the only ranged starter)
          *
          * All four return weapons with [attackBonus] = 0 so the
          * baseline damage drops to pure STR until proper loot

@@ -104,29 +104,36 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
             WeaponFxKind.DAGGER_COMBO -> {
                 drawDaggerCombo(canvas, attacker, defender, aimDeg, scale, elapsedMs)
             }
-            WeaponFxKind.BOW_SHOT -> {
-                drawBowShot(
-                    canvas = canvas,
-                    attacker = attacker,
-                    defender = defender,
-                    aimDeg = aimDeg,
-                    scale = scale,
-                    cellPx = cellPx,
-                    elapsed = elapsedMs,
-                    arrowAsset = "arrow",
-                )
-            }
-            WeaponFxKind.FIRE_PROJECTILE -> {
-                drawBowShot(
-                    canvas = canvas,
-                    attacker = attacker,
-                    defender = defender,
-                    aimDeg = aimDeg,
-                    scale = scale,
-                    cellPx = cellPx,
-                    elapsed = elapsedMs,
-                    arrowAsset = "fire_arrow",
-                )
+            WeaponFxKind.BOW_SHOT, WeaponFxKind.FIRE_PROJECTILE -> {
+                val arrowAsset = if (request.kind == WeaponFxKind.FIRE_PROJECTILE) {
+                    "fire_arrow"
+                } else {
+                    "arrow"
+                }
+                val plan = request.bowVolleyPlan
+                if (plan != null) {
+                    drawBowVolleys(
+                        canvas = canvas,
+                        attacker = attacker,
+                        defender = defender,
+                        aimDeg = aimDeg,
+                        scale = scale,
+                        cellPx = cellPx,
+                        elapsed = elapsedMs,
+                        plan = plan,
+                    )
+                } else {
+                    drawBowShot(
+                        canvas = canvas,
+                        attacker = attacker,
+                        defender = defender,
+                        aimDeg = aimDeg,
+                        scale = scale,
+                        cellPx = cellPx,
+                        elapsed = elapsedMs,
+                        arrowAsset = arrowAsset,
+                    )
+                }
             }
             WeaponFxKind.CHARGE_SWORD_HOLD -> {
                 bitmap("sword")?.let {
@@ -156,12 +163,16 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
     private fun canPlay(request: WeaponFxRequest): Boolean = when (request.kind) {
         WeaponFxKind.DAGGER_COMBO ->
             bitmap("dagger_r") != null && bitmap("dagger_l") != null
-        WeaponFxKind.BOW_SHOT ->
-            WeaponFxCatalog.BOW_FRAMES.all { bitmap(it) != null } && bitmap("arrow") != null
-        WeaponFxKind.FIRE_PROJECTILE ->
-            WeaponFxCatalog.BOW_FRAMES.all { bitmap(it) != null } && bitmap("fire_arrow") != null
+        WeaponFxKind.BOW_SHOT -> bowAssetsReady("arrow", request.bowVolleyPlan)
+        WeaponFxKind.FIRE_PROJECTILE -> bowAssetsReady("fire_arrow", request.bowVolleyPlan)
         WeaponFxKind.CHARGE_SWORD_HOLD -> bitmap("sword") != null
         else -> bitmap(primaryAsset(request)) != null
+    }
+
+    private fun bowAssetsReady(arrowAsset: String, plan: BowVolleyPlan?): Boolean {
+        if (!WeaponFxCatalog.BOW_FRAMES.all { bitmap(it) != null }) return false
+        if (bitmap(arrowAsset) == null) return false
+        return true
     }
 
     private fun primaryAsset(request: WeaponFxRequest): String = when (request.kind) {
@@ -177,15 +188,28 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
     private fun durationMs(request: WeaponFxRequest): Long {
         val override = request.durationMsOverride
         if (override != null) return override.coerceAtLeast(1L)
+        request.bowVolleyPlan?.let { return bowVolleyDurationMs(it) }
         return when (request.kind) {
             WeaponFxKind.MELEE_ARC, WeaponFxKind.STAFF_MELEE_ARC -> MELEE_ARC_MS
             WeaponFxKind.SPEAR_THRUST -> SPEAR_MS
             WeaponFxKind.STAFF_SPELL_RISE -> STAFF_SPELL_MS
             WeaponFxKind.DAGGER_COMBO -> DAGGER_HIT_MS * 2L
-            WeaponFxKind.BOW_SHOT -> BOW_DRAW_MS + BOW_HOLD_MS + ARROW_FLIGHT_MS
-            WeaponFxKind.FIRE_PROJECTILE -> BOW_DRAW_MS + BOW_HOLD_MS + ARROW_FLIGHT_MS
+            WeaponFxKind.BOW_SHOT, WeaponFxKind.FIRE_PROJECTILE -> singleBowShotMs()
             WeaponFxKind.CHARGE_SWORD_HOLD -> CHARGE_HOLD_MS
         }
+    }
+
+    private fun singleBowShotMs(): Long = BOW_DRAW_MS + BOW_HOLD_MS + ARROW_FLIGHT_MS
+
+    private fun bowVolleyDurationMs(plan: BowVolleyPlan): Long {
+        var total = 0L
+        for (volley in plan.volleys) {
+            total += when (volley) {
+                is BowVolley.Parallel -> singleBowShotMs()
+                is BowVolley.Sequential -> singleBowShotMs() * volley.arrowCount
+            }
+        }
+        return total.coerceAtLeast(1L)
     }
 
     private fun bitmap(name: String): Bitmap? =
@@ -294,6 +318,132 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
     }
 
     /**
+     * Plays [plan] back-to-back: parallel volleys draw once and launch
+     * offset arrows together; sequential volleys repeat the full cycle.
+     */
+    private fun drawBowVolleys(
+        canvas: Canvas,
+        attacker: Pair<Float, Float>,
+        defender: Pair<Float, Float>,
+        aimDeg: Float,
+        scale: Float,
+        cellPx: Float,
+        elapsed: Long,
+        plan: BowVolleyPlan,
+    ) {
+        var remaining = elapsed
+        for (volley in plan.volleys) {
+            val volleyDuration = when (volley) {
+                is BowVolley.Parallel -> singleBowShotMs()
+                is BowVolley.Sequential -> singleBowShotMs() * volley.arrowCount
+            }
+            if (remaining < volleyDuration) {
+                when (volley) {
+                    is BowVolley.Parallel -> drawBowParallelVolley(
+                        canvas = canvas,
+                        attacker = attacker,
+                        defender = defender,
+                        aimDeg = aimDeg,
+                        scale = scale,
+                        cellPx = cellPx,
+                        elapsed = remaining,
+                        arrowCount = volley.arrowCount,
+                        arrowAsset = plan.arrowAsset,
+                    )
+                    is BowVolley.Sequential -> {
+                        val shotIndex = (remaining / singleBowShotMs()).toInt()
+                            .coerceIn(0, volley.arrowCount - 1)
+                        val shotElapsed = remaining - shotIndex * singleBowShotMs()
+                        drawBowShot(
+                            canvas = canvas,
+                            attacker = attacker,
+                            defender = defender,
+                            aimDeg = aimDeg,
+                            scale = scale,
+                            cellPx = cellPx,
+                            elapsed = shotElapsed,
+                            arrowAsset = plan.arrowAsset,
+                        )
+                    }
+                }
+                return
+            }
+            remaining -= volleyDuration
+        }
+    }
+
+    /**
+     * One draw cycle; [arrowCount] projectiles fly in parallel with a
+     * slight lateral spread perpendicular to the aim line.
+     */
+    private fun drawBowParallelVolley(
+        canvas: Canvas,
+        attacker: Pair<Float, Float>,
+        defender: Pair<Float, Float>,
+        aimDeg: Float,
+        scale: Float,
+        cellPx: Float,
+        elapsed: Long,
+        arrowCount: Int,
+        arrowAsset: String,
+    ) {
+        drawBowShot(
+            canvas = canvas,
+            attacker = attacker,
+            defender = defender,
+            aimDeg = aimDeg,
+            scale = scale,
+            cellPx = cellPx,
+            elapsed = elapsed,
+            arrowAsset = arrowAsset,
+            drawArrows = false,
+        )
+
+        val arrowBmp = bitmap(arrowAsset) ?: return
+        val aimRad = Math.toRadians(aimDeg.toDouble())
+        val perpX = -sin(aimRad).toFloat()
+        val perpY = cos(aimRad).toFloat()
+        val spread = cellPx * 0.14f
+
+        if (elapsed < BOW_DRAW_MS + BOW_HOLD_MS) {
+            for (i in 0 until arrowCount) {
+                val lane = parallelLaneOffset(i, arrowCount)
+                val backOffset = bowDrawBackOffset(elapsed, cellPx)
+                val ax = attacker.first - cos(aimRad).toFloat() * backOffset + perpX * spread * lane
+                val ay = attacker.second - sin(aimRad).toFloat() * backOffset + perpY * spread * lane
+                drawWeaponAtPivot(canvas, arrowBmp, ax, ay, aimDeg, scale * 0.85f)
+            }
+            return
+        }
+
+        val flightStart = BOW_DRAW_MS + BOW_HOLD_MS
+        val local = elapsed - flightStart
+        val t = (local.toFloat() / ARROW_FLIGHT_MS).coerceIn(0f, 1f)
+        val eased = easeInQuad(t)
+        for (i in 0 until arrowCount) {
+            val lane = parallelLaneOffset(i, arrowCount)
+            val baseX = lerp(attacker.first, defender.first, eased)
+            val baseY = lerp(attacker.second, defender.second, eased)
+            val ax = baseX + perpX * spread * lane
+            val ay = baseY + perpY * spread * lane
+            drawWeaponAtPivot(canvas, arrowBmp, ax, ay, aimDeg, scale * 0.85f)
+        }
+    }
+
+    /** Centers parallel arrows around the aim line (-0.5, +0.5 for a pair). */
+    private fun parallelLaneOffset(index: Int, count: Int): Float {
+        if (count <= 1) return 0f
+        return index - (count - 1) / 2f
+    }
+
+    private fun bowDrawBackOffset(elapsed: Long, cellPx: Float): Float = when {
+        elapsed < BOW_FRAME_1_MS -> 0f
+        elapsed < BOW_FRAME_1_MS + BOW_FRAME_2_MS -> cellPx * 0.06f
+        elapsed < BOW_DRAW_MS -> cellPx * 0.14f
+        else -> 0f
+    }
+
+    /**
      * bow1 (0.25s) -> bow2 (0.25s) -> bow3 (0.5s) -> bow1 hold while
      * [arrowAsset] flies to the defender. The projectile sits on the bow and
      * eases backward through the draw frames.
@@ -307,6 +457,7 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         cellPx: Float,
         elapsed: Long,
         arrowAsset: String,
+        drawArrows: Boolean = true,
     ) {
         val bowFrame = when {
             elapsed < BOW_FRAME_1_MS -> "bow1"
@@ -317,14 +468,11 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         val bowBmp = bitmap(bowFrame) ?: return
         drawWeaponAtPivot(canvas, bowBmp, attacker.first, attacker.second, aimDeg, scale)
 
+        if (!drawArrows) return
+
         val arrowBmp = bitmap(arrowAsset) ?: return
         val aimRad = Math.toRadians(aimDeg.toDouble())
-        val backOffset = when {
-            elapsed < BOW_FRAME_1_MS -> 0f
-            elapsed < BOW_FRAME_1_MS + BOW_FRAME_2_MS -> cellPx * 0.06f
-            elapsed < BOW_DRAW_MS -> cellPx * 0.14f
-            else -> 0f
-        }
+        val backOffset = bowDrawBackOffset(elapsed, cellPx)
         if (elapsed < BOW_DRAW_MS + BOW_HOLD_MS) {
             val ax = attacker.first - cos(aimRad).toFloat() * backOffset
             val ay = attacker.second - sin(aimRad).toFloat() * backOffset

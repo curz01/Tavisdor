@@ -3,9 +3,7 @@ package com.tavisdor.app.ui
 import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Typeface
-import android.graphics.drawable.AnimationDrawable
 import android.util.TypedValue
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
@@ -24,35 +22,22 @@ import com.tavisdor.app.skills.SkillCatalog
  * Modal skill picker launched from the bottom hero panel's ACT / GRD
  * buttons.
  *
- * Unlike a vanilla [AlertDialog.Builder.setItems] list, tapping a row
- * here does NOT immediately fire the skill. Instead the chosen [Skill]
- * is staged on [Game.setSelectedSkill] for the hero in [slot]; the
- * row picks up a blinking border to make the selection obvious:
- *
- *   - Green blink when [Skill.costsAction] is true (normal skill).
- *   - Yellow blink when [Skill.costsAction] is false (free-action skill).
- *
- * The actual "fire the staged skill" trigger is the top-level Action
- * button that will be added when the combat system lands. Tapping the
- * already-selected row toggles the selection off. Tapping a passive
- * skill is a no-op (passives are always active and never staged).
- *
- * Construct fresh on every open; selection persists in [Game], so
- * reopening the same hero / button shows the previous pick already lit.
+ * Tapping a row stages the skill without firing it. Main-action skills
+ * get a green border; [NA] free-action skills get a yellow border. Both
+ * can be staged at once.
  */
 class SkillPickerDialog(
     private val context: Context,
     private val game: Game,
 ) {
 
-    /** Rows keyed by [Skill.id] so we can quickly restyle on selection swap. */
     private val rowsBySkillId: MutableMap<String, View> = mutableMapOf()
-    private var currentSelectionId: String? = null
     private var slot: Int = -1
+    private var hero: Hero? = null
 
     fun show(slot: Int, hero: Hero, button: SkillButton) {
         this.slot = slot
-        this.currentSelectionId = game.selectedSkillFor(slot)?.id
+        this.hero = hero
         this.rowsBySkillId.clear()
 
         val skills: List<Skill> = hero.knownSkillsFor(button)
@@ -73,22 +58,12 @@ class SkillPickerDialog(
             .setView(content)
             .setNegativeButton(R.string.hero_skill_popup_close) { d, _ -> d.dismiss() }
             .setOnDismissListener {
-                // Stop any blinking animation drawables so they don't keep
-                // ticking in the background after the window's gone.
-                stopAllBlinks()
                 rowsBySkillId.clear()
             }
             .show()
 
-        // Restart the blink on the currently-selected row AFTER the
-        // dialog is attached - AnimationDrawable.start() before the
-        // window is shown silently no-ops on some devices.
-        currentSelectionId?.let { id ->
-            rowsBySkillId[id]?.post { startBlink(id) }
-        }
+        refreshSelectionHighlight()
     }
-
-    // ---- View construction ----
 
     private fun buildContentView(skills: List<Skill>): View {
         val scroll = ScrollView(context).apply {
@@ -111,17 +86,9 @@ class SkillPickerDialog(
         return scroll
     }
 
-    /**
-     * Single skill row. Outer container exists separately from the inner
-     * `body` so the blinking AnimationDrawable can sit on a view whose
-     * size doesn't change with content, and so toggling the border never
-     * forces a relayout of the text inside.
-     */
     private fun buildSkillRow(skill: Skill): View {
         val outer = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            // The blink frames already include their own corners + stroke;
-            // padding here is what keeps the text from kissing the border.
             setPadding(dp(8), dp(6), dp(8), dp(6))
             val lp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -132,10 +99,9 @@ class SkillPickerDialog(
             layoutParams = lp
             isClickable = true
             isFocusable = true
-            // Material ripple touch feedback even when no background is set.
             val outValue = TypedValue()
             context.theme.resolveAttribute(
-                android.R.attr.selectableItemBackground, outValue, true
+                android.R.attr.selectableItemBackground, outValue, true,
             )
             foreground = AppCompatResources.getDrawable(context, outValue.resourceId)
         }
@@ -165,14 +131,6 @@ class SkillPickerDialog(
         }
 
         outer.setOnClickListener { onRowTapped(skill, outer) }
-
-        // Initial visual state: if Game already has this skill staged,
-        // light up the border now (we'll start() the animation after the
-        // dialog attaches, see show()).
-        if (skill.id == currentSelectionId) {
-            applySelectionBackground(outer, skill)
-        }
-
         return outer
     }
 
@@ -192,100 +150,67 @@ class SkillPickerDialog(
         return sb.toString()
     }
 
-    // ---- Selection logic ----
-
     private fun onRowTapped(skill: Skill, row: View) {
-        // Passive skills can't be staged - the row's "passive" tag
-        // and the lack of selection feedback communicate that on
-        // its own; no toast needed.
         if (skill.castType == SkillCastType.PASSIVE) return
 
-        // Tapping the already-selected row reverts to the default
-        // basic Attack (never to "nothing staged"). Tapping Attack
-        // while Attack is already selected is a no-op.
-        if (skill.id == currentSelectionId) {
-            if (skill.id == SkillCatalog.BASIC_ATTACK_ID) return
-            revertToDefault()
+        if (game.isSkillStaged(slot, skill)) {
+            if (skill.id == SkillCatalog.BASIC_ATTACK_ID && skill.costsAction) return
+            game.unstageSkill(slot, skill)
+            refreshSelectionHighlight()
             return
         }
 
-        // Otherwise: clear the previously selected row's border and
-        // stage the new skill. The new row's blinking border IS the
-        // feedback - no toast needed.
-        currentSelectionId?.let { oldId ->
-            rowsBySkillId[oldId]?.let { clearSelectionBackground(it) }
+        if (!game.canAffordStagedSkills(slot, skill)) {
+            AppToast.show(context, context.getString(R.string.hero_skill_assign_insufficient_mp))
+            return
         }
-        currentSelectionId = skill.id
-        applySelectionBackground(row, skill)
-        startBlink(skill.id)
-        game.setSelectedSkill(slot, skill)
+
+        if (!game.stageSkill(slot, skill)) {
+            AppToast.show(context, context.getString(R.string.hero_skill_assign_insufficient_mp))
+            return
+        }
+
+        if (!skill.costsAction && !game.hasExplicitMainStaged(slot)) {
+            AppToast.show(
+                context,
+                context.getString(R.string.hero_skill_assign_need_main_action),
+                duration = android.widget.Toast.LENGTH_LONG,
+            )
+        }
+
+        refreshSelectionHighlight()
     }
 
-    /**
-     * Snaps the selection back to the hero's basic Attack. If the
-     * Attack row exists in this picker (only true when [SkillButton.ACTION]
-     * is showing) it picks up the green blink immediately; otherwise
-     * the dialog just goes quiet and the panel's white border tracks
-     * the underlying [Game] state which is now Attack-staged again.
-     */
-    private fun revertToDefault() {
-        // Remove the current row's border so the dialog reads as
-        // "nothing in this picker is staged right now".
-        currentSelectionId?.let { oldId ->
-            rowsBySkillId[oldId]?.let { clearSelectionBackground(it) }
-        }
-        // Passing null asks Game to fall back to the slot's default
-        // (basic Attack). We then read it back so the picker's local
-        // state stays in lock-step with the game state.
-        game.setSelectedSkill(slot, null)
-        val newDefault = game.selectedSkillFor(slot)
-        currentSelectionId = newDefault?.id
+    private fun refreshSelectionHighlight() {
+        val h = hero ?: game.party?.heroes?.getOrNull(slot) ?: return
+        val mainSkill = game.stagedMainSkillOrNull(slot) ?: h.basicAttackSkill
+        val freeId = game.selectedFreeActionSkillFor(slot)?.id
 
-        // If we're currently looking at the ACT bucket, the Attack
-        // row lives in this dialog - light it up so the player sees
-        // exactly what's staged now. That blink IS the feedback;
-        // no toast needed.
-        if (newDefault != null) {
-            rowsBySkillId[newDefault.id]?.let { row ->
-                applySelectionBackground(row, newDefault)
-                row.post { startBlink(newDefault.id) }
+        rowsBySkillId.values.forEach { clearSelectionBackground(it) }
+
+        rowsBySkillId[mainSkill.id]?.let { row ->
+            applySelectionBackground(row, mainSkill)
+        }
+        freeId?.let { id ->
+            val freeSkill = h.knownSkills.find { it.id == id } ?: return@let
+            rowsBySkillId[id]?.let { row ->
+                applySelectionBackground(row, freeSkill)
             }
         }
     }
 
-    // ---- Background swap helpers ----
-
     private fun applySelectionBackground(row: View, skill: Skill) {
         val res = if (skill.costsAction) {
-            R.drawable.skill_select_border_green_blink
+            R.drawable.skill_select_border_green_on
         } else {
-            R.drawable.skill_select_border_yellow_blink
+            R.drawable.skill_select_border_yellow_on
         }
         row.setBackgroundResource(res)
     }
 
     private fun clearSelectionBackground(row: View) {
-        (row.background as? AnimationDrawable)?.stop()
         row.background = null
     }
-
-    private fun startBlink(skillId: String) {
-        val row = rowsBySkillId[skillId] ?: return
-        (row.background as? AnimationDrawable)?.let {
-            // Some Android versions don't auto-start a freshly attached
-            // AnimationDrawable until the view has been laid out.
-            it.stop()
-            it.start()
-        }
-    }
-
-    private fun stopAllBlinks() {
-        rowsBySkillId.values.forEach { row ->
-            (row.background as? AnimationDrawable)?.stop()
-        }
-    }
-
-    // ---- Misc helpers ----
 
     private fun dp(value: Int): Int =
         (value * context.resources.displayMetrics.density).toInt()

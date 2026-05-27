@@ -17,16 +17,18 @@ import com.tavisdor.app.dungeon.Cell
 import com.tavisdor.app.game.Game
 import com.tavisdor.app.party.HeroDraft
 import com.tavisdor.app.save.SaveStore
+import com.tavisdor.app.combat.CombatTargeting
 import com.tavisdor.app.combat.HealResolver
+import com.tavisdor.app.enemies.Enemy
 import com.tavisdor.app.skills.Skill
-import com.tavisdor.app.skills.SkillButton
 import com.tavisdor.app.skills.SkillCatalog
+import com.tavisdor.app.ui.AppToast
 import com.tavisdor.app.ui.ClassSelectScreen
 import com.tavisdor.app.ui.HealTargetDialog
 import com.tavisdor.app.ui.HeroDetailScreen
+import com.tavisdor.app.ui.HeroSkillAssignScreen
 import com.tavisdor.app.ui.ItemsScreen
 import com.tavisdor.app.ui.InGameMenuDialog
-import com.tavisdor.app.ui.SkillPickerDialog
 import com.tavisdor.app.ui.TitleScreen
 import com.tavisdor.app.ui.TurnOrderBarView
 
@@ -35,7 +37,8 @@ import com.tavisdor.app.ui.TurnOrderBarView
  *   - [R.id.titleOverlay]       - title screen ([TitleScreen])
  *   - [R.id.classSelectOverlay] - new-game class assignment ([ClassSelectScreen])
  *   - [R.id.gameRoot]           - in-dungeon UI ([GameView] + [HeroPanelView])
- *   - [R.id.heroDetailOverlay]  - modal hero info / equipment ([HeroDetailScreen])
+ *   - [R.id.heroDetailOverlay]      - modal hero info / equipment ([HeroDetailScreen])
+ *   - [R.id.heroSkillAssignOverlay] - skill staging for Action button
  *
  * Screen transitions are pure visibility toggles; no Fragments / Navigation lib
  * involved. The shared [Game] state lives on this Activity and is handed to the
@@ -55,6 +58,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var titleOverlay: View
     private lateinit var classSelectOverlay: View
     private lateinit var heroDetailOverlay: ViewGroup
+    private lateinit var heroSkillAssignOverlay: ViewGroup
     private lateinit var itemsOverlay: ViewGroup
 
     private lateinit var gameView: GameView
@@ -69,6 +73,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var titleScreen: TitleScreen
     private lateinit var classSelectScreen: ClassSelectScreen
     private lateinit var heroDetailScreen: HeroDetailScreen
+    private lateinit var heroSkillAssignScreen: HeroSkillAssignScreen
     private lateinit var itemsScreen: ItemsScreen
 
     // Action bar (Menu / Action / Items) sits above the hero panel.
@@ -78,16 +83,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Edge-to-edge + status-bar hidden for a clean game canvas.
-        // We tell the window not to fit system bars so the dungeon
-        // view can paint behind them, then explicitly hide just the
-        // top status bar (time / battery / signal). The nav bar at
-        // the bottom is left visible so the player still has Back /
-        // Home / Recents without having to remember an edge swipe.
-        // Behavior = SHOW_TRANSIENT_BARS_BY_SWIPE so a swipe from
-        // the top edge peeks the bar back briefly (notifications)
-        // and it auto-hides again - matches the immersive-game
-        // norm on Android.
+        // Edge-to-edge with system bars hidden for a full-screen game canvas.
+        // Swipe from the top or bottom edge briefly peeks status / nav
+        // bars (SHOW_TRANSIENT_BARS_BY_SWIPE); they auto-hide again.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         applyImmersiveMode()
         setContentView(R.layout.activity_main)
@@ -109,6 +107,7 @@ class MainActivity : AppCompatActivity() {
         titleOverlay = findViewById(R.id.titleOverlay)
         classSelectOverlay = findViewById(R.id.classSelectOverlay)
         heroDetailOverlay = findViewById(R.id.heroDetailOverlay)
+        heroSkillAssignOverlay = findViewById(R.id.heroSkillAssignOverlay)
         itemsOverlay = findViewById(R.id.itemsOverlay)
         gameView = findViewById(R.id.gameView)
         heroPanel = findViewById(R.id.heroPanel)
@@ -152,10 +151,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         heroPanel.attachGame(game)
-        heroPanel.onHeroPortraitTapped = { slot -> onHeroPortraitTapped(slot) }
-        heroPanel.onHeroActionButtonTapped = { slot, button ->
-            onHeroActionButtonTapped(slot, button)
-        }
+        heroPanel.onHeroCellTapped = { slot -> onHeroCellTapped(slot) }
 
         btnActionBarMenu.setOnClickListener { onActionBarMenuTapped() }
         btnActionBarAction.setOnClickListener { onActionBarActionTapped() }
@@ -176,7 +172,27 @@ class MainActivity : AppCompatActivity() {
         )
 
         heroDetailScreen = HeroDetailScreen(root = heroDetailOverlay)
-        itemsScreen = ItemsScreen(root = itemsOverlay)
+        heroSkillAssignScreen = HeroSkillAssignScreen(
+            root = heroSkillAssignOverlay,
+            game = game,
+        ).also {
+            it.onSelectionChanged = {
+                heroPanel.invalidate()
+                gameView.invalidate()
+            }
+        }
+        game.onCombatTargetSelectionChanged = {
+            gameView.invalidate()
+            if (game.isCombatTargetSelectionActive()) {
+                AppToast.show(this, R.string.combat_target_pick_enemy)
+            }
+        }
+        game.onCombatTargetConfirmed = { slot, enemy ->
+            commitStagedCombatAction(slot, enemy)
+        }
+        itemsScreen = ItemsScreen(root = itemsOverlay).also {
+            it.onPartyEquipmentChanged = { heroPanel.invalidate() }
+        }
 
         // Turn-order strip taps:
         //   - Hero portrait -> mark that hero active, mirroring a
@@ -217,6 +233,8 @@ class MainActivity : AppCompatActivity() {
                     // overlays the dungeon, hero detail overlays
                     // both) - close the topmost first.
                     itemsScreen.isVisible -> itemsScreen.hide()
+                    game.isCombatTargetSelectionActive() -> game.endCombatTargetSelection()
+                    heroSkillAssignScreen.isVisible -> heroSkillAssignScreen.commitAndDismiss()
                     heroDetailScreen.isVisible -> heroDetailScreen.hide()
                     classSelectOverlay.visibility == View.VISIBLE -> showTitle()
                     titleOverlay.visibility == View.VISIBLE -> finish()
@@ -228,26 +246,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Routed from [HeroPanelView] when a portrait square is tapped. Opens
-     * the modal info / equipment panel for that slot's hero; ignored if
-     * the slot is empty (e.g. before a party has been created).
+     * Routed from [HeroPanelView] when any part of a hero cell is tapped.
+     * Opens the skill-assignment panel so the player can stage the skill
+     * committed by the top Action button.
      */
-    private fun onHeroPortraitTapped(slot: Int) {
+    private fun onHeroCellTapped(slot: Int) {
+        game.endCombatTargetSelection()
         val hero = game.party?.heroes?.getOrNull(slot) ?: return
-        heroDetailScreen.show(hero)
-    }
-
-    /**
-     * Routed from [HeroPanelView] when a hero's ACT / GRD / SPL button
-     * is tapped. Opens the [SkillPickerDialog], which lets the player
-     * STAGE a skill (green blink for action-cost, yellow blink for
-     * free-action). The staged skill lives on [Game] until the future
-     * top-level Action button commits it; for now nothing fires
-     * automatically.
-     */
-    private fun onHeroActionButtonTapped(slot: Int, button: SkillButton) {
-        val hero = game.party?.heroes?.getOrNull(slot) ?: return
-        SkillPickerDialog(this, game).show(slot, hero, button)
+        heroSkillAssignScreen.show(slot, hero)
     }
 
     // ---------------------------------------------------------------------
@@ -291,49 +297,76 @@ class MainActivity : AppCompatActivity() {
         if (!controller.awaitingHeroInput) return
         val slot = controller.currentHeroSlot ?: return
         val caster = game.party?.heroes?.getOrNull(slot) ?: return
-        val staged = game.selectedSkillFor(slot)
+        val freeAction = game.selectedFreeActionSkillFor(slot)
+        val stagedMain = game.stagedMainSkillOrNull(slot)
+        val main = game.selectedSkillFor(slot) ?: caster.basicAttackSkill
 
-        // Heal spells need an explicit target hero; pop the picker
-        // instead of going straight through commitHeroAction (which
-        // rejects heals outright). Caster's basic-attack fallback
-        // is never a heal so the elvis chain below is safe.
-        val resolved = staged ?: caster.basicAttackSkill
-        if (HealResolver.isHeal(resolved)) {
-            // Up-front MP check so we don't open a dialog the
-            // player can't actually commit. Silent no-op matches
-            // the rest of the action-bar contract.
-            if (resolved.mpCost > caster.mp) return
-            showHealTargetPicker(slot, resolved)
+        if (game.projectedStagedMpCost(slot) > caster.mp) return
+
+        if (game.selectedFreeActionSkillFor(slot) != null && !game.hasExplicitMainStaged(slot)) {
+            AlertDialog.Builder(this)
+                .setMessage(R.string.hero_skill_assign_need_main_action)
+                .setPositiveButton(R.string.hero_skill_assign_passive_ok, null)
+                .show()
             return
         }
 
-        // Auto-fallback: if the player tapped Action with the
-        // default basic Attack staged but no enemy is within
-        // range / LOS, the hero braces with the universal Defend
-        // skill instead of swinging at empty air. Only fires for
-        // the AUTO-staged default - manually-picked melee skills
-        // still get the explicit "out of range" feedback so the
-        // player can choose to reposition or re-pick on purpose.
-        if (staged == null && !controller.anyEnemyReachable(resolved)) {
+        if (HealResolver.isHeal(main)) {
+            if (main.mpCost > caster.mp) return
+            showHealTargetPicker(slot, main)
+            return
+        }
+
+        if (stagedMain == null && freeAction == null &&
+            !controller.anyEnemyReachable(main)
+        ) {
             if (!controller.commitHeroDefend(slot, auto = true)) return
-            game.setSelectedSkill(slot, null)
-            gameView.invalidate()
-            heroPanel.invalidate()
-            turnOrderBar.invalidate()
+            game.clearSkillStaging(slot)
+            refreshCombatViews()
             return
         }
 
-        // Player-selected enemy (or the auto-pick fallback that
-        // followed the most-recent KO) is the preferred target.
-        // The controller validates range + LOS before committing
-        // so an out-of-range tap returns false without consuming
-        // the turn, letting the player reposition or re-pick.
-        if (!controller.commitHeroAction(slot, staged, game.selectedEnemy)) return
-        // Reset stage so next turn defaults back to basic Attack.
-        game.setSelectedSkill(slot, null)
-        // The commit advanced the turn order and started the
-        // strip's leave animation; nudge the views so they don't
-        // wait an extra frame to reflect the new HP / highlight.
+        if (CombatTargeting.requiresEnemyTargetSelection(main)) {
+            val floor = game.floor
+            val selected = game.selectedEnemy
+            if (selected != null && floor != null &&
+                CombatTargeting.isTargetableEnemyCell(
+                    floor,
+                    floor.partyCell,
+                    main,
+                    selected.cell,
+                )
+            ) {
+                game.endCombatTargetSelection()
+                commitStagedCombatAction(slot, selected)
+                return
+            }
+            game.beginCombatTargetSelection(slot, main)
+            return
+        }
+
+        commitStagedCombatAction(slot, game.selectedEnemy)
+    }
+
+    /**
+     * Fires the staged free-action (if any) then the main skill against
+     * [preferredTarget]. Clears staging and refreshes HUD views on success.
+     */
+    private fun commitStagedCombatAction(slot: Int, preferredTarget: Enemy?) {
+        val controller = game.combatController ?: return
+        val freeAction = game.selectedFreeActionSkillFor(slot)
+        val stagedMain = game.stagedMainSkillOrNull(slot)
+
+        if (freeAction != null) {
+            if (!controller.commitHeroAction(slot, freeAction, preferredTarget)) return
+        }
+        if (!controller.commitHeroAction(slot, stagedMain, preferredTarget)) return
+        game.clearSkillStaging(slot)
+        game.endCombatTargetSelection()
+        refreshCombatViews()
+    }
+
+    private fun refreshCombatViews() {
         gameView.invalidate()
         heroPanel.invalidate()
         turnOrderBar.invalidate()
@@ -363,7 +396,7 @@ class MainActivity : AppCompatActivity() {
             onTargetChosen = { targetSlot ->
                 if (game.commitHeroHealInCombat(casterSlot, skill, targetSlot)) {
                     // Reset stage so next turn defaults back to basic Attack.
-                    game.setSelectedSkill(casterSlot, null)
+                    game.clearSkillStaging(casterSlot)
                     // Nudge views so the new HP / highlight reflect
                     // immediately instead of waiting a frame.
                     gameView.invalidate()
@@ -384,8 +417,8 @@ class MainActivity : AppCompatActivity() {
      */
     private fun onActionBarActionTappedExploring() {
         val slot = game.activeHeroSlot ?: return
-        if (game.selectedSkillFor(slot) == null) return
-        game.setSelectedSkill(slot, null)
+        if (!game.hasSkillStaging(slot)) return
+        game.clearSkillStaging(slot)
     }
 
     /**
@@ -582,26 +615,42 @@ class MainActivity : AppCompatActivity() {
      * silently dismisses so the player can re-tap to try again.
      */
     private fun showLockedDoorDialog(cell: Cell) {
-        val items = arrayOf(
-            getString(R.string.door_action_use_key),
-            getString(R.string.door_action_pick_lock),
-            getString(R.string.door_action_force_open),
-        )
-        AlertDialog.Builder(this)
+        val state = game.lockedDoorUiOptions(cell) ?: return
+        val content = layoutInflater.inflate(R.layout.dialog_locked_door, null)
+        val btnKick = content.findViewById<MaterialButton>(R.id.btnDoorKickDown)
+        val btnPick = content.findViewById<MaterialButton>(R.id.btnDoorPickLock)
+        val btnKey = content.findViewById<MaterialButton>(R.id.btnDoorUseKey)
+
+        fun styleOption(button: MaterialButton, enabled: Boolean) {
+            button.isEnabled = enabled
+            button.alpha = if (enabled) 1f else 0.38f
+        }
+        styleOption(btnKick, state.canKickDown)
+        styleOption(btnPick, state.canPickLock)
+        styleOption(btnKey, state.canUseKey)
+
+        val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.door_locked_title)
-            .setMessage(R.string.door_locked_message)
-            .setItems(items) { dialog, which ->
-                val outcome = when (which) {
-                    0 -> game.useKeyOnDoor(cell)
-                    1 -> game.tryPickLock(cell)
-                    2 -> game.tryForceDoor(cell)
-                    else -> Game.DoorOutcome.NO_DOOR
-                }
-                onDoorOutcome(outcome, which)
-                dialog.dismiss()
-            }
+            .setView(content)
             .setNegativeButton(R.string.door_action_cancel) { d, _ -> d.dismiss() }
-            .show()
+            .create()
+
+        btnKick.setOnClickListener {
+            if (!state.canKickDown) return@setOnClickListener
+            onDoorOutcome(game.tryForceDoor(cell))
+            dialog.dismiss()
+        }
+        btnPick.setOnClickListener {
+            if (!state.canPickLock) return@setOnClickListener
+            onDoorOutcome(game.tryPickLock(cell))
+            dialog.dismiss()
+        }
+        btnKey.setOnClickListener {
+            if (!state.canUseKey) return@setOnClickListener
+            onDoorOutcome(game.useKeyOnDoor(cell))
+            dialog.dismiss()
+        }
+        dialog.show()
     }
 
     /**
@@ -633,7 +682,7 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun onDoorOutcome(outcome: Game.DoorOutcome, @Suppress("UNUSED_PARAMETER") actionIndex: Int) {
+    private fun onDoorOutcome(outcome: Game.DoorOutcome) {
         when (outcome) {
             Game.DoorOutcome.OPENED, Game.DoorOutcome.ALREADY_UNLOCKED -> {
                 gameView.invalidate()
@@ -642,11 +691,61 @@ class MainActivity : AppCompatActivity() {
                 // player doesn't have to re-tap after unlocking.
                 game.continueMove()
             }
-            // Failures (pick / force) and no-op closes: silent. The
-            // dialog dismissed itself; the player can re-tap the
-            // door to try again.
-            Game.DoorOutcome.FAILED, Game.DoorOutcome.NO_DOOR -> Unit
+            Game.DoorOutcome.FAILED_NO_LOCK_PICK,
+            Game.DoorOutcome.FAILED_NO_SHARD,
+            Game.DoorOutcome.FAILED_DEX_CHECK,
+            Game.DoorOutcome.FAILED_STR_ALREADY_TRIED,
+            Game.DoorOutcome.FAILED_STR_CHECK,
+            Game.DoorOutcome.FAILED_BRUTE_DAMAGED,
+            Game.DoorOutcome.FAILED_NO_KEY,
+            -> showDoorResultMessage(outcome)
+            Game.DoorOutcome.NO_DOOR -> Unit
         }
+    }
+
+    private fun showDoorResultMessage(outcome: Game.DoorOutcome) {
+        val message = when (outcome) {
+            Game.DoorOutcome.FAILED_NO_LOCK_PICK ->
+                getString(R.string.door_result_no_lock_pick)
+            Game.DoorOutcome.FAILED_NO_SHARD ->
+                getString(R.string.door_result_no_shard)
+            Game.DoorOutcome.FAILED_DEX_CHECK -> {
+                val check = game.lastLockPickCheck
+                if (check != null) {
+                    getString(
+                        R.string.door_result_failed_pick_dex,
+                        check.total,
+                        check.lockLevel,
+                    )
+                } else {
+                    getString(R.string.door_result_failed_pick)
+                }
+            }
+            Game.DoorOutcome.FAILED_STR_ALREADY_TRIED ->
+                getString(R.string.door_result_str_already_tried)
+            Game.DoorOutcome.FAILED_STR_CHECK -> {
+                val check = game.lastStrForceCheck
+                if (check != null) {
+                    getString(
+                        R.string.door_result_failed_force_str,
+                        check.total,
+                        check.lockLevel,
+                    )
+                } else {
+                    getString(R.string.door_result_failed_force)
+                }
+            }
+            Game.DoorOutcome.FAILED_BRUTE_DAMAGED ->
+                getString(R.string.door_result_brute_damaged)
+            Game.DoorOutcome.FAILED_NO_KEY ->
+                getString(R.string.door_result_no_key)
+            else -> return
+        }
+        AlertDialog.Builder(this)
+            .setMessage(message)
+            .setPositiveButton(R.string.hero_skill_assign_passive_ok, null)
+            .show()
+        gameView.invalidate()
     }
 
     // Audio focus is acquired while Tavisdor is foreground-visible so any other
@@ -676,14 +775,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Hides the top status bar (time / battery / signal) and
-     * arms the swipe-from-edge "peek then auto-hide" behavior.
-     * The bottom navigation bar stays visible. Safe to call
-     * repeatedly - the controller is idempotent.
+     * Hides the status bar and bottom navigation / gesture bar.
+     * Swiping from the screen edge briefly shows them, then they hide again.
      */
     private fun applyImmersiveMode() {
         val controller = WindowInsetsControllerCompat(window, window.decorView)
-        controller.hide(WindowInsetsCompat.Type.statusBars())
+        controller.hide(
+            WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars(),
+        )
         controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }

@@ -19,8 +19,9 @@ import com.tavisdor.app.game.Game
 import com.tavisdor.app.party.Gender
 import com.tavisdor.app.party.Hero
 import com.tavisdor.app.party.HeroClass
+import com.tavisdor.app.skills.Skill
 import com.tavisdor.app.skills.SkillButton
-
+import kotlin.math.min
 /**
  * Draws the persistent bottom 2x2 hero panel inside
  * [com.tavisdor.app.HeroPanelView]. Top row = front line (slots 0, 1),
@@ -31,16 +32,15 @@ import com.tavisdor.app.skills.SkillButton
  *   +---------+---------------------------+
  *   Name - Class          Threat Level: N   <- label row (combat)
  *   +---------+---------------------------+
- *   |         | [ACT] [GRD]               |   <- 2 same-size buttons
- *   |   PRT   | ======= HP =======        |   <- HP bar (green)
- *   |         | ======= MP =======        |   <- MP bar (blue)
+ *   |         | staged action icon(s)   |   <- top 1/3 (action_attack / action_guard)
+ *   |   PRT   | ======= HP =======        |   <- HP bar (green), 1/3 height
+ *   |         | ======= MP =======        |   <- MP bar (blue), 1/3 height
  *   +---------+---------------------------+
  *
- *   - ACT  : yellow button, taps open the action picker
- *   - GRD  : yellow button, taps open the guard picker
- *   - Threat level: right-aligned text on the name row when the
- *           player has an enemy selected in combat; hidden outside
- *           combat or before tap-to-select.
+ *   HP + MP bars together occupy the lower 2/3 of the cell's inner
+ *   height; the upper 1/3 is reserved for future ailment / buff icons.
+ *   Threat level: right-aligned text on the name row when the player
+ *   has an enemy selected in combat.
  *
  * Construct with an [AssetManager] for portrait sprites; set [density]
  * (px / dp) before calling [draw] so layout scales correctly on any screen.
@@ -76,23 +76,6 @@ class HeroPanelRenderer(private val assets: AssetManager) {
     private val portraitFillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val portraitInitialPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#FFEFE7D0")
-        textAlign = Paint.Align.CENTER
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-    }
-
-    private val buttonFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FFE6C12C")
-    }
-    private val buttonEmptyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FF3A3220")
-    }
-    private val buttonBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FF5A4F38")
-        style = Paint.Style.STROKE
-        strokeWidth = 1.5f
-    }
-    private val buttonLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FF2A1F10")
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
@@ -182,6 +165,9 @@ class HeroPanelRenderer(private val assets: AssetManager) {
      */
     private val portraitSets: MutableMap<PortraitKey, PortraitSet> = HashMap()
 
+    private val actionIconBitmapCache: MutableMap<String, Bitmap?> = HashMap()
+    private val actionIconPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
     /**
      * Per-slot snapshot of the hero whose portrait we're tracking
      * and that hero's last-seen HP. Compared every frame to detect
@@ -207,18 +193,17 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), panelBgPaint)
 
         // Text sizes depend on density, set every frame (cheap).
-        cellLabelPaint.textSize = dp(11f)
-        cellLabelDimPaint.textSize = dp(11f)
-        cellLabelThreatPaint.textSize = dp(11f)
+        cellLabelPaint.textSize = dp(13f)
+        cellLabelDimPaint.textSize = dp(13f)
+        cellLabelThreatPaint.textSize = dp(13f)
         portraitInitialPaint.textSize = dp(22f)
-        buttonLabelPaint.textSize = dp(9f)
         activeBorderPaint.strokeWidth = dp(2.5f)
         // Bar overlay text + its black halo - keep size synced so the
         // halo sits exactly under the white glyphs.
-        val barText = dp(10f)
+        val barText = dp(14f)
         barTextPaint.textSize = barText
         barTextHaloPaint.textSize = barText
-        barTextHaloPaint.strokeWidth = dp(1.5f)
+        barTextHaloPaint.strokeWidth = dp(2f)
 
         val layout = computeLayout(width, height)
         val party = game?.party
@@ -244,7 +229,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
                 hero = heroes?.getOrNull(slot),
                 hateContext = hateContext,
             )
-            drawHeroCell(canvas, layout.cells[slot], slot, heroes?.getOrNull(slot))
+            drawHeroCell(canvas, layout.cells[slot], slot, heroes?.getOrNull(slot), game)
         }
 
         // Highlight overlay drawn LAST so it sits on top of cell +
@@ -316,86 +301,51 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         return RectF(innerL, innerT, innerL + portraitSize, innerB)
     }
 
-    /**
-     * Result of [hitTestActionButton]: which hero slot's button was tapped
-     * and which of the two buttons (ACT / GRD).
-     */
-    data class ActionButtonHit(val slot: Int, val button: SkillButton)
+    // ----- Layout (shared by draw + hit-test so they stay in lock-step) -----
 
     /**
-     * Returns the (slot, button) the point ([x], [y]) lands on for the
-     * 2 ACT / GRD buttons in a hero cell, or null if the tap missed
-     * every button.
+     * Right-hand column geometry inside a hero cell: status strip
+     * (top 1/3, reserved for buffs / ailments) + HP / MP bars
+     * (bottom 2/3, split evenly).
      */
-    fun hitTestActionButton(x: Float, y: Float, width: Int, height: Int): ActionButtonHit? {
-        val layout = computeLayout(width, height)
-        for (slot in 0..3) {
-            val slots = buttonRowRectsIn(layout.cells[slot])
-            for (i in slots.indices) {
-                val rect = slots[i]
-                if (x in rect.left..rect.right && y in rect.top..rect.bottom) {
-                    return ActionButtonHit(slot, BUTTON_ORDER[i])
-                }
-            }
-        }
-        return null
-    }
+    private data class RightColumnLayout(
+        val statusRect: RectF,
+        val hpRect: RectF,
+        val mpRect: RectF,
+    )
 
-    /**
-     * Geometry of the 2 ACT / GRD slots inside a hero cell's
-     * button row. Buttons are no longer constrained to squares -
-     * the strip fills the entire right-column width so the two
-     * buttons + their gap span exactly the same horizontal extent
-     * as the HP and MP bars beneath them. Mirrors the math in
-     * [drawHeroCell] + [drawButtonRow] so the hit-test stays in
-     * lock-step with the drawn slots.
-     *
-     * Returns exactly [ACTION_BUTTON_COUNT] rects (or [emptyArray]
-     * when the cell is too small to fit any slot). Threat level is
-     * drawn on the label row (see [drawCellLabel]), not part of this strip.
-     */
-    private fun buttonRowRectsIn(cell: RectF): Array<RectF> {
+    private fun rightColumnLayout(cell: RectF): RightColumnLayout? {
         val pad = dp(5f)
         val innerL = cell.left + pad
         val innerT = cell.top + pad
         val innerR = cell.right - pad
         val innerB = cell.bottom - pad
         val innerH = innerB - innerT
-        if (innerH <= 0f) return emptyArray()
+        if (innerH <= 0f) return null
 
         val portraitSize = innerH
         val rightL = innerL + portraitSize + dp(6f)
         val rightR = innerR
-        val rowW = rightR - rightL
-        if (rowW <= 0f) return emptyArray()
+        if (rightR <= rightL) return null
 
-        val buttonRowH = innerH * 0.48f
-        val gapV = innerH * 0.06f
-        val barH = innerH * 0.17f
-        val totalContentH = buttonRowH + gapV * 2 + barH * 2
-        val topSlack = (innerH - totalContentH) / 2f
-        val btnRowTop = innerT + topSlack
+        val statusH = innerH / 3f
+        val barsRegionTop = innerT + statusH
+        val barsRegionH = innerH * 2f / 3f
+        val barGap = dp(4f)
+        val barH = (barsRegionH - barGap) / 2f
+        if (barH <= 0f) return null
 
-        val btnGap = dp(5f)
-        // Each button takes half of (row width minus the single
-        // gap between them) - so the strip's outer extent matches
-        // the HP / MP bars below.
-        val btnWidth = (rowW - btnGap * (ACTION_BUTTON_COUNT - 1)) / ACTION_BUTTON_COUNT.toFloat()
-        if (btnWidth <= 0f) return emptyArray()
+        val hpTop = barsRegionTop
+        val hpBottom = hpTop + barH
+        val mpTop = hpBottom + barGap
+        val mpBottom = mpTop + barH
 
-        return Array(ACTION_BUTTON_COUNT) { i ->
-            val l = rightL + i * (btnWidth + btnGap)
-            RectF(l, btnRowTop, l + btnWidth, btnRowTop + buttonRowH)
-        }
+        return RightColumnLayout(
+            statusRect = RectF(rightL, innerT, rightR, innerT + statusH),
+            hpRect = RectF(rightL, hpTop, rightR, hpBottom),
+            mpRect = RectF(rightL, mpTop, rightR, mpBottom),
+        )
     }
-
-    /** Index -> button: ACT (0), GRD (1). */
-    private val BUTTON_ORDER = arrayOf(
-        SkillButton.ACTION,
-        SkillButton.GUARD,
-    )
-
-    // ----- Layout (shared by draw + hit-test so they stay in lock-step) -----
 
     private data class PanelLayout(
         val outerPad: Float,
@@ -415,7 +365,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         val outerPad = dp(10f)
         val rowVGap = dp(8f)
         val cellHGap = dp(8f)
-        val labelH = dp(14f)
+        val labelH = dp(16f)
         val labelToCellGap = dp(2f)
 
         val cellsTotalH = height - outerPad * 2 - rowVGap - labelH * 2 - labelToCellGap * 2
@@ -492,7 +442,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         canvas.drawText(displayName, cell.left, baseline, cellLabelPaint)
     }
 
-    /** Shared vertical centering for the 14dp label band. */
+    /** Shared vertical centering for the label band above each hero cell. */
     private fun labelBaseline(labelY: Float, labelH: Float, paint: Paint): Float {
         return labelY + labelH - (paint.descent() + paint.ascent()) / 2f - labelH / 2f
     }
@@ -507,6 +457,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         cell: RectF,
         heroSlot: Int,
         hero: Hero?,
+        game: Game?,
     ) {
         val cellRadius = dp(6f)
         canvas.drawRoundRect(cell, cellRadius, cellRadius, cellFillPaint)
@@ -524,41 +475,18 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         val portrait = RectF(innerL, innerT, innerL + portraitSize, innerB)
         drawPortrait(canvas, portrait, heroSlot, hero)
 
-        // Right column: starts after portrait + an inner gap, runs to right edge.
-        val rightL = portrait.right + dp(6f)
-        val rightR = innerR
-        if (rightR <= rightL) return // cell too narrow, skip details
-
-        // Vertical split of the right column:
-        //   buttonRowH : ~48% of innerH
-        //   gap        : ~6%
-        //   hpBarH     : ~17%
-        //   gap        : ~6%
-        //   mpBarH     : ~17%   (= 94%, the remaining 6% is even top/bottom slack)
-        val buttonRowH = innerH * 0.48f
-        val gapV = innerH * 0.06f
-        val barH = innerH * 0.17f
-        val totalContentH = buttonRowH + gapV * 2 + barH * 2
-        val topSlack = (innerH - totalContentH) / 2f
-
-        val btnRowTop = innerT + topSlack
-        val btnRowBottom = btnRowTop + buttonRowH
-        val hpTop = btnRowBottom + gapV
-        val hpBottom = hpTop + barH
-        val mpTop = hpBottom + gapV
-        val mpBottom = mpTop + barH
-
-        drawButtonRow(canvas, cell, hero)
+        val column = rightColumnLayout(cell) ?: return
+        drawStagedActionIcons(canvas, heroSlot, column.statusRect, game)
         drawBar(
             canvas = canvas,
-            rect = RectF(rightL, hpTop, rightR, hpBottom),
+            rect = column.hpRect,
             value = hero?.hp,
             max = hero?.maxHp,
             fillPaint = hpBarFillPaint,
         )
         drawBar(
             canvas = canvas,
-            rect = RectF(rightL, mpTop, rightR, mpBottom),
+            rect = column.mpRect,
             value = hero?.mp,
             max = hero?.maxMp,
             fillPaint = mpBarFillPaint,
@@ -728,38 +656,6 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         HeroClass.ARCHER -> Color.parseColor("#FFA08232")
     }
 
-    // ----- Button row (ACT / GRD) -----
-
-    private val buttonLabels = arrayOf("ACT", "GRD")
-
-    /**
-     * Draws the 2-square ACT / GRD strip on the right side of a
-     * hero cell. Threat level is on the label row via [drawCellLabel].
-     */
-    private fun drawButtonRow(
-        canvas: Canvas,
-        cell: RectF,
-        hero: Hero?,
-    ) {
-        val slots = buttonRowRectsIn(cell)
-        if (slots.isEmpty()) return
-
-        val labelOffsetY = -(buttonLabelPaint.descent() + buttonLabelPaint.ascent()) / 2f
-        val radius = dp(3f)
-
-        for (i in slots.indices) {
-            val btn = slots[i]
-            val fill = if (hero != null) buttonFillPaint else buttonEmptyPaint
-            canvas.drawRoundRect(btn, radius, radius, fill)
-            canvas.drawRoundRect(btn, radius, radius, buttonBorderPaint)
-            if (hero != null) {
-                val cx = (btn.left + btn.right) / 2f
-                val cy = (btn.top + btn.bottom) / 2f + labelOffsetY
-                canvas.drawText(buttonLabels[i], cx, cy, buttonLabelPaint)
-            }
-        }
-    }
-
     /**
      * Snapshot of "which enemy's hate are we displaying right now,
      * and where do we look up the numbers?" - resolved once per
@@ -783,6 +679,58 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         if (enemyIdx < 0) return null
         return HateRenderContext(enemyIdx = enemyIdx, hate = combat.hate)
     }
+
+    // ----- Staged action icons -----
+
+    /**
+     * Draws `action_attack` / `action_guard` in the status strip above the
+     * HP bar, left-aligned with the bars. Shown after the player stages
+     * skills in the assignment panel.
+     */
+    private fun drawStagedActionIcons(
+        canvas: Canvas,
+        heroSlot: Int,
+        statusRect: RectF,
+        game: Game?,
+    ) {
+        val g = game ?: return
+        val staged = g.stagedSkillsForPanel(heroSlot)
+        if (staged.isEmpty()) return
+
+        val maxH = statusRect.height()
+        if (maxH <= 0f) return
+
+        val gap = dp(4f)
+        val count = staged.size
+        val slotW = (statusRect.width() - gap * (count - 1).coerceAtLeast(0)) / count
+        val iconSize = min(maxH, slotW)
+        if (iconSize <= 0f) return
+
+        var x = statusRect.left
+        val y = statusRect.top + (maxH - iconSize) / 2f
+        val dst = RectF()
+
+        for (skill in staged) {
+            val asset = actionIconAssetFor(skill) ?: continue
+            val bmp = loadActionIcon(asset) ?: continue
+            dst.set(x, y, x + iconSize, y + iconSize)
+            canvas.drawBitmap(bmp, actionIconSrcRect(bmp), dst, actionIconPaint)
+            x += iconSize + gap
+        }
+    }
+
+    private fun actionIconAssetFor(skill: Skill): String? = when (skill.button) {
+        SkillButton.ACTION -> ACTION_ATTACK_ASSET
+        SkillButton.GUARD -> ACTION_GUARD_ASSET
+    }
+
+    private fun loadActionIcon(asset: String): Bitmap? =
+        actionIconBitmapCache.getOrPut(asset) {
+            tryLoadBitmap(assets, "sprites/$asset.png")
+        }
+
+    private fun actionIconSrcRect(bmp: Bitmap): Rect =
+        Rect(0, 0, bmp.width, bmp.height)
 
     // ----- Bars (HP / MP) -----
 
@@ -851,24 +799,26 @@ class HeroPanelRenderer(private val assets: AssetManager) {
     companion object {
         private const val TAG = "HeroPanelRenderer"
 
+        private const val ACTION_ATTACK_ASSET = "action_attack"
+        private const val ACTION_GUARD_ASSET = "action_guard"
+
         /** Always 4 hero slots; cached so the per-slot state arrays stay sized correctly. */
         private const val MAX_SLOTS: Int = 4
 
         /**
          * Milliseconds each idle portrait frame stays on screen
-         * before the cycle advances. 500ms gives a 1s loop for the
-         * 2-frame fighter / thief / archer and a 2s loop for the
-         * 4-frame mage - both read as a calm, breathing idle.
+         * before the cycle advances. 625ms gives a ~1.25s loop for the
+         * 2-frame fighter / thief / archer and ~2.5s for the 4-frame mage.
          */
-        private const val CYCLE_FRAME_MS: Long = 500L
+        private const val CYCLE_FRAME_MS: Long = 625L
 
         /**
          * Milliseconds between hurt-blink flashes (one hurt frame +
          * one idle frame = two consecutive flash slots). Combined
          * with [HURT_BLINK_COUNT] this controls the "ouch" pacing:
-         * 3 blinks x (100ms hurt + 100ms idle) = 600ms total.
+         * 3 blinks x (125ms hurt + 125ms idle) = 750ms total.
          */
-        private const val HURT_BLINK_FLASH_MS: Long = 100L
+        private const val HURT_BLINK_FLASH_MS: Long = 125L
 
         /** Number of times the hurt sprite flashes before the cycle resumes. */
         private const val HURT_BLINK_COUNT: Int = 3
@@ -880,12 +830,6 @@ class HeroPanelRenderer(private val assets: AssetManager) {
          * HP drop.
          */
         private const val HURT_BLINK_TOTAL_MS: Long = HURT_BLINK_FLASH_MS * HURT_BLINK_COUNT * 2L
-
-        /**
-         * Number of interactive buttons in the hero cell's
-         * right-side strip: ACT + GRD = 2.
-         */
-        private const val ACTION_BUTTON_COUNT: Int = 2
 
         /**
          * Asset-decode helper. Mirrors the one in [DungeonRenderer] -

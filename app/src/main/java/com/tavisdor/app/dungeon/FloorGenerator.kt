@@ -182,6 +182,7 @@ object FloorGenerator {
         // the one-room-ahead lookahead now that every adjacent
         // placement is in place.
         floor.applyAdjacentLookahead()
+        floor.assignLockKeyCarriers(rng)
 
         return floor
     }

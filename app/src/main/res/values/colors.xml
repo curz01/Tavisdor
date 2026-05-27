@@ -32,6 +32,7 @@
     <color name="skill_picker_row_desc">#FFC9BC97</color>
     <color name="skill_picker_free_tag">#FFE6C12C</color>
     <color name="skill_picker_passive_tag">#FF8C7A52</color>
+    <color name="hero_skill_assign_divider">#FF8C7A52</color>
 
     <!-- Items panel: shares the scrim + parchment palette with the
          hero detail overlay so the two modals read as the same
@@ -45,4 +46,19 @@
     <color name="items_panel_gold">#FFE6C12C</color>
     <color name="items_panel_hint">#FFC9BC97</color>
     <color name="items_panel_row_text">#FFEFE7D0</color>
+
+    <!-- Inventory side tabs (binder-style dividers on the panel edge). -->
+    <color name="inventory_tab_pickup">#FF3D8B52</color>
+    <color name="inventory_tab_pickup_selected">#FF52B06A</color>
+    <color name="inventory_tab_equipment">#FF3D5F9E</color>
+    <color name="inventory_tab_equipment_selected">#FF5A82C8</color>
+    <color name="inventory_tab_ingredients">#FFC47A28</color>
+    <color name="inventory_tab_ingredients_selected">#FFE89A42</color>
+    <color name="inventory_tab_label">#FF1A1610</color>
+
+    <!-- Combat target-picker overlay (dim out-of-range, tint in-range). -->
+    <color name="combat_target_dim">#AA000000</color>
+    <color name="combat_target_in_range">#3348B06A</color>
+    <color name="combat_target_enemy">#66E6C12C</color>
+    <color name="combat_target_splash">#6648A0E8</color>
 </resources>

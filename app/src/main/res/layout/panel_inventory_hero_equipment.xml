@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/itemsHeroEquipPanel"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_hero_detail_panel"
+    android:clipToOutline="true"
+    android:orientation="vertical"
+    android:padding="@dimen/items_panel_padding"
+    android:visibility="gone"
+    tools:visibility="visible">
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <TextView
+            android:id="@+id/tvInventoryHeroEquipHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_vertical"
+            android:layout_marginEnd="48dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/hero_detail_value"
+            android:textSize="@dimen/inventory_summary_header_text"
+            android:textStyle="bold"
+            tools:text="Aldric - Fighter" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnInventoryHeroEquipClose"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end|center_vertical"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="8dp"
+            android:text="@string/inventory_hero_equip_close"
+            android:textColor="@color/hero_detail_value"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+  <!-- 3x3 paper-doll: helmet / weapon / armor / off-hand / boots -->
+    <GridLayout
+        android:id="@+id/inventoryHeroEquipGrid"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="12dp"
+        android:columnCount="3"
+        android:rowCount="3">
+
+        <Space
+            android:layout_width="@dimen/inventory_equip_slot_size"
+            android:layout_height="@dimen/inventory_equip_slot_size"
+            android:layout_marginEnd="@dimen/inventory_equip_grid_gap"
+            android:layout_marginBottom="@dimen/inventory_equip_grid_gap" />
+
+        <TextView
+            android:id="@+id/inventoryEquipSlotHelmet"
+            android:layout_width="@dimen/inventory_equip_slot_size"
+            android:layout_height="@dimen/inventory_equip_slot_size"
+            android:layout_marginEnd="@dimen/inventory_equip_grid_gap"
+            android:layout_marginBottom="@dimen/inventory_equip_grid_gap"
+            android:background="@drawable/bg_equip_slot"
+            android:gravity="center"
+            android:padding="6dp"
+            android:textColor="@color/hero_detail_slot_label"
+            android:textSize="12sp"
+            tools:text="Helmet\n(empty)" />
+
+        <Space
+            android:layout_width="@dimen/inventory_equip_slot_size"
+            android:layout_height="@dimen/inventory_equip_slot_size"
+            android:layout_marginBottom="@dimen/inventory_equip_grid_gap" />
+
+        <TextView
+            android:id="@+id/inventoryEquipSlotWeapon1"
+            android:layout_width="@dimen/inventory_equip_slot_size"
+            android:layout_height="@dimen/inventory_equip_slot_size"
+            android:layout_marginEnd="@dimen/inventory_equip_grid_gap"
+            android:layout_marginBottom="@dimen/inventory_equip_grid_gap"
+            android:background="@drawable/bg_equip_slot"
+            android:gravity="center"
+            android:padding="6dp"
+            android:textColor="@color/hero_detail_slot_label"
+            android:textSize="12sp"
+            tools:text="Weapon\nCrude Sword" />
+
+        <TextView
+            android:id="@+id/inventoryEquipSlotArmor"
+            android:layout_width="@dimen/inventory_equip_slot_size"
+            android:layout_height="@dimen/inventory_equip_slot_size"
+            android:layout_marginEnd="@dimen/inventory_equip_grid_gap"
+            android:layout_marginBottom="@dimen/inventory_equip_grid_gap"
+            android:background="@drawable/bg_equip_slot"
+            android:gravity="center"
+            android:padding="6dp"
+            android:textColor="@color/hero_detail_slot_label"
+            android:textSize="12sp"
+            tools:text="Armor\n(empty)" />
+
+        <TextView
+            android:id="@+id/inventoryEquipSlotWeapon2"
+            android:layout_width="@dimen/inventory_equip_slot_size"
+            android:layout_height="@dimen/inventory_equip_slot_size"
+            android:layout_marginBottom="@dimen/inventory_equip_grid_gap"
+            android:background="@drawable/bg_equip_slot"
+            android:gravity="center"
+            android:padding="6dp"
+            android:textColor="@color/hero_detail_slot_label"
+            android:textSize="12sp"
+            tools:text="Off-hand\n(empty)" />
+
+        <Space
+            android:layout_width="@dimen/inventory_equip_slot_size"
+            android:layout_height="@dimen/inventory_equip_slot_size"
+            android:layout_marginEnd="@dimen/inventory_equip_grid_gap" />
+
+        <TextView
+            android:id="@+id/inventoryEquipSlotBoots"
+            android:layout_width="@dimen/inventory_equip_slot_size"
+            android:layout_height="@dimen/inventory_equip_slot_size"
+            android:layout_marginEnd="@dimen/inventory_equip_grid_gap"
+            android:background="@drawable/bg_equip_slot"
+            android:gravity="center"
+            android:padding="6dp"
+            android:textColor="@color/hero_detail_slot_label"
+            android:textSize="12sp"
+            tools:text="Boots\n(empty)" />
+
+        <Space
+            android:layout_width="@dimen/inventory_equip_slot_size"
+            android:layout_height="@dimen/inventory_equip_slot_size" />
+    </GridLayout>
+</LinearLayout>

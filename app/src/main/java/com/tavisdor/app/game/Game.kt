@@ -4,9 +4,14 @@ import android.content.Context
 import com.tavisdor.app.combat.Combat
 import com.tavisdor.app.combat.CombatController
 import com.tavisdor.app.combat.CombatLog
+import com.tavisdor.app.combat.CombatTargeting
 import com.tavisdor.app.dungeon.Cell
 import com.tavisdor.app.enemies.Enemy
 import com.tavisdor.app.dungeon.Floor
+import com.tavisdor.app.items.Ingredient
+import com.tavisdor.app.locks.LockPick
+import com.tavisdor.app.party.Hero
+import com.tavisdor.app.party.HeroClass
 import com.tavisdor.app.dungeon.FloorGenerator
 import com.tavisdor.app.dungeon.Pathfinder
 import com.tavisdor.app.dungeon.TemplateLibrary
@@ -214,6 +219,31 @@ class Game(
     var onSelectedEnemyChanged: ((Enemy?) -> Unit)? = null
 
     /**
+     * When non-null, the player is picking an enemy tile for the staged
+     * skill in [CombatTargetSelection.skill]. The dungeon view dims cells
+     * outside range and highlights valid targets.
+     */
+    data class CombatTargetSelection(
+        val heroSlot: Int,
+        val skill: Skill,
+    )
+
+    var combatTargetSelection: CombatTargetSelection? = null
+        private set
+
+    /** Fired when [combatTargetSelection] starts or ends (redraw dungeon). */
+    var onCombatTargetSelectionChanged: (() -> Unit)? = null
+
+    /** Fired when any hero's staged action / guard skills change (hero panel icons). */
+    var onSkillStagingChanged: (() -> Unit)? = null
+
+    /**
+     * Fired when the player taps a valid enemy cell during target selection.
+     * MainActivity commits the staged combat action here.
+     */
+    var onCombatTargetConfirmed: ((heroSlot: Int, enemy: Enemy) -> Unit)? = null
+
+    /**
      * Replace the active encounter. Pass null to clear combat. The
      * change-listener fires AFTER the field is updated so observers
      * see the new value during their callback.
@@ -255,7 +285,13 @@ class Game(
                     // default; player taps in the strip / panel
                     // override this until the next turn advance
                     // writes through again.
-                    onActorChanged = { slot -> setActiveHeroSlot(slot) },
+                    onActorChanged = { slot ->
+                        setActiveHeroSlot(slot)
+                        val pending = combatTargetSelection
+                        if (pending != null && slot != pending.heroSlot) {
+                            endCombatTargetSelection()
+                        }
+                    },
                     weaponFx = weaponFxGateway,
                     partyLunge = partyLungeGateway,
                 )
@@ -269,8 +305,45 @@ class Game(
             // No active encounter -> nothing to show hate for.
             // Clear the selection so the hate slots render empty.
             setSelectedEnemy(null)
+            endCombatTargetSelection()
         }
         onCombatChanged?.invoke(next)
+    }
+
+    fun beginCombatTargetSelection(slot: Int, skill: Skill) {
+        require(slot in 0 until PARTY_SIZE) { "Invalid party slot: $slot" }
+        combatTargetSelection = CombatTargetSelection(heroSlot = slot, skill = skill)
+        onCombatTargetSelectionChanged?.invoke()
+    }
+
+    fun endCombatTargetSelection() {
+        if (combatTargetSelection == null) return
+        combatTargetSelection = null
+        onCombatTargetSelectionChanged?.invoke()
+    }
+
+    fun isCombatTargetSelectionActive(): Boolean = combatTargetSelection != null
+
+    /**
+     * Handles a dungeon tap while [combatTargetSelection] is active.
+     * Returns true when the touch was consumed (including ignored taps
+     * inside target mode so movement / enemy-select don't fire).
+     */
+    fun handleCombatTargetTap(cell: Cell): Boolean {
+        val selection = combatTargetSelection ?: return false
+        val f = floor ?: return true
+        if (cell !in f.floorCells) return true
+
+        val enemy = CombatTargeting.livingEnemyAt(f, cell)
+        if (enemy != null &&
+            CombatTargeting.isTargetableEnemyCell(f, f.partyCell, selection.skill, cell)
+        ) {
+            setSelectedEnemy(enemy)
+            onCombatTargetConfirmed?.invoke(selection.heroSlot, enemy)
+            endCombatTargetSelection()
+            return true
+        }
+        return true
     }
 
     /**
@@ -281,10 +354,25 @@ class Game(
      * makes no sense.
      */
     fun setSelectedEnemy(enemy: Enemy?) {
-        val next = if (enemy != null && !enemy.isAlive) null else enemy
+        val next = when {
+            enemy != null && !enemy.isAlive -> null
+            enemy != null && mode == Mode.EXPLORATION -> {
+                val f = floor
+                if (f == null || !f.isVisibleToParty(enemy.cell)) null else enemy
+            }
+            else -> enemy
+        }
         if (selectedEnemy === next) return
         selectedEnemy = next
         onSelectedEnemyChanged?.invoke(next)
+    }
+
+    /** Clears exploration selection when the enemy is behind a closed door. */
+    private fun pruneSelectedEnemyIfHidden() {
+        if (mode != Mode.EXPLORATION) return
+        val sel = selectedEnemy ?: return
+        val f = floor ?: return
+        if (!f.isVisibleToParty(sel.cell)) setSelectedEnemy(null)
     }
 
     /**
@@ -333,24 +421,61 @@ class Game(
      */
     var onLockedDoorPrompt: ((Cell) -> Unit)? = null
 
-    enum class DoorOutcome { ALREADY_UNLOCKED, OPENED, FAILED, NO_DOOR }
+    enum class DoorOutcome {
+        ALREADY_UNLOCKED,
+        OPENED,
+        NO_DOOR,
+        /** No living Thief in the party with Lock Pick. */
+        FAILED_NO_LOCK_PICK,
+        /** Thief tried but party has no Stone Shard. */
+        FAILED_NO_SHARD,
+        /** DEX + 1d3 did not meet the lock level; shard was consumed. */
+        FAILED_DEX_CHECK,
+        /** STR force already attempted on this lock. */
+        FAILED_STR_ALREADY_TRIED,
+        /** STR + 1d6 did not meet the lock level. */
+        FAILED_STR_CHECK,
+        /** Lock was broken by force; only a matching key can open it now. */
+        FAILED_BRUTE_DAMAGED,
+        /** No matching [FloorKey] for this door on this depth. */
+        FAILED_NO_KEY,
+    }
+
+    /** Which locked-door actions are available (others show disabled in the dialog). */
+    data class LockedDoorUiOptions(
+        val canKickDown: Boolean,
+        val canPickLock: Boolean,
+        val canUseKey: Boolean,
+    )
+
+    /** Last DEX pick breakdown for UI feedback after [tryPickLock] / [tryPickLockedContainer]. */
+    var lastLockPickCheck: LockPick.DexCheckResult? = null
+        private set
+
+    /** Last STR force breakdown for UI feedback after [tryForceDoor]. */
+    var lastStrForceCheck: LockPick.StrCheckResult? = null
+        private set
 
     // ---- Pending skill selection ----
     //
-    // Selecting a skill from the ACT / GRD / SPL picker does NOT fire it.
-    // The skill is staged here until the player taps the top-of-screen
-    // Action button. One slot per hero (0..3).
+    // Selecting a skill from the assignment panel does NOT fire it.
+    // Skills are staged until the player taps the top-of-screen Action
+    // button. Each hero slot (0..3) can hold:
+    //   - one main-action skill (green border; consumes the turn)
+    //   - one optional [Skill.costsAction] == false skill (yellow border)
     //
-    // Default value is the class's basic Attack so an over-eager tap on
-    // Action in combat at least swings a sword - never a no-op. Firing
-    // any staged skill resets the slot back to the basic Attack via
-    // [setSelectedSkill] called with `null`.
+    // When no main skill is explicitly staged, Action resolves to the
+    // hero's basic Attack. Clearing staging via [clearSkillStaging] drops
+    // both picks.
     //
-    // Selections are intentionally non-persistent across save / load: a
-    // run that was saved between floors should never auto-fire a stale
-    // skill the moment combat starts.
+    // Selections are intentionally non-persistent across save / load.
 
-    private val selectedSkillsBySlot: Array<Skill?> = arrayOfNulls(PARTY_SIZE)
+    private data class HeroSkillStaging(
+        var main: Skill? = null,
+        var freeAction: Skill? = null,
+    )
+
+    private val skillStagingBySlot = Array(PARTY_SIZE) { HeroSkillStaging() }
 
     /**
      * Hero slot the top-of-screen ACTION button currently targets.
@@ -403,22 +528,137 @@ class Game(
         onActiveHeroSlotChanged?.invoke(slot)
     }
 
-    /** Currently staged skill for hero in [slot], or null if no selection. */
+    /**
+     * Main action the Action button will commit for [slot]. When the
+     * player has not explicitly picked a main skill, returns the hero's
+     * basic Attack so Action never no-ops.
+     */
     fun selectedSkillFor(slot: Int): Skill? {
         require(slot in 0 until PARTY_SIZE) { "Invalid party slot: $slot" }
-        return selectedSkillsBySlot[slot]
+        val staging = skillStagingBySlot[slot]
+        return staging.main ?: defaultSkillFor(slot)
+    }
+
+    /** Explicit main-action pick, or null when only the basic Attack default applies. */
+    fun stagedMainSkillOrNull(slot: Int): Skill? {
+        require(slot in 0 until PARTY_SIZE) { "Invalid party slot: $slot" }
+        return skillStagingBySlot[slot].main
+    }
+
+    /** Optional [NA] skill staged alongside the main action, if any. */
+    fun selectedFreeActionSkillFor(slot: Int): Skill? {
+        require(slot in 0 until PARTY_SIZE) { "Invalid party slot: $slot" }
+        return skillStagingBySlot[slot].freeAction
+    }
+
+    fun hasExplicitMainStaged(slot: Int): Boolean =
+        skillStagingBySlot[slot].main != null
+
+    fun hasSkillStaging(slot: Int): Boolean {
+        val staging = skillStagingBySlot[slot]
+        return staging.main != null || staging.freeAction != null
     }
 
     /**
-     * Stages [skill] as the hero's next action. Passing `null` reverts
-     * the slot to the hero's default (basic Attack). Returns the
-     * previous selection so callers can render "you replaced X with Y"
-     * affordances later.
+     * Skills to show on the hero panel after the player stages picks in
+     * the assignment UI: explicit main (or implied basic Attack when only
+     * [NA] is staged) plus any free-action skill.
+     */
+    fun stagedSkillsForPanel(slot: Int): List<Skill> {
+        require(slot in 0 until PARTY_SIZE) { "Invalid party slot: $slot" }
+        if (!hasSkillStaging(slot)) return emptyList()
+        val staging = skillStagingBySlot[slot]
+        val out = ArrayList<Skill>(2)
+        val main = staging.main ?: defaultSkillFor(slot)
+        if (main != null) out += main
+        staging.freeAction?.let { free ->
+            if (out.none { it.id == free.id }) out += free
+        }
+        return out
+    }
+
+    private fun notifySkillStagingChanged() {
+        onSkillStagingChanged?.invoke()
+    }
+
+    fun isSkillStaged(slot: Int, skill: Skill): Boolean {
+        val staging = skillStagingBySlot[slot]
+        return if (skill.costsAction) {
+            staging.main?.id == skill.id
+        } else {
+            staging.freeAction?.id == skill.id
+        }
+    }
+
+    /**
+     * Total MP that would be spent if both staged skills fire this turn.
+     */
+    fun projectedStagedMpCost(slot: Int, withSkill: Skill? = null): Int {
+        val hero = party?.heroes?.getOrNull(slot) ?: return 0
+        val staging = skillStagingBySlot[slot]
+        val main = when {
+            withSkill != null && withSkill.costsAction -> withSkill
+            staging.main != null -> staging.main!!
+            else -> hero.basicAttackSkill
+        }
+        val free = when {
+            withSkill != null && !withSkill.costsAction -> withSkill
+            else -> staging.freeAction
+        }
+        return main.mpCost + (free?.mpCost ?: 0)
+    }
+
+    fun canAffordStagedSkills(slot: Int, adding: Skill): Boolean {
+        val hero = party?.heroes?.getOrNull(slot) ?: return false
+        return hero.mp >= projectedStagedMpCost(slot, adding)
+    }
+
+    /**
+     * Stages [skill] in the main or free-action slot. Returns false when
+     * the hero cannot afford the combined MP cost with their current pick.
+     */
+    fun stageSkill(slot: Int, skill: Skill): Boolean {
+        require(slot in 0 until PARTY_SIZE) { "Invalid party slot: $slot" }
+        if (!canAffordStagedSkills(slot, skill)) return false
+        val staging = skillStagingBySlot[slot]
+        if (skill.costsAction) {
+            staging.main = skill
+        } else {
+            staging.freeAction = skill
+        }
+        notifySkillStagingChanged()
+        return true
+    }
+
+    fun unstageSkill(slot: Int, skill: Skill) {
+        require(slot in 0 until PARTY_SIZE) { "Invalid party slot: $slot" }
+        val staging = skillStagingBySlot[slot]
+        if (skill.costsAction) {
+            if (staging.main?.id == skill.id) staging.main = null
+        } else if (staging.freeAction?.id == skill.id) {
+            staging.freeAction = null
+        }
+        notifySkillStagingChanged()
+    }
+
+    fun clearSkillStaging(slot: Int) {
+        require(slot in 0 until PARTY_SIZE) { "Invalid party slot: $slot" }
+        skillStagingBySlot[slot] = HeroSkillStaging()
+        notifySkillStagingChanged()
+    }
+
+    /**
+     * Legacy hook: stages [skill] in the appropriate slot, or clears all
+     * staging when [skill] is null.
      */
     fun setSelectedSkill(slot: Int, skill: Skill?): Skill? {
         require(slot in 0 until PARTY_SIZE) { "Invalid party slot: $slot" }
-        val prev = selectedSkillsBySlot[slot]
-        selectedSkillsBySlot[slot] = skill ?: defaultSkillFor(slot)
+        val prev = selectedSkillFor(slot)
+        if (skill == null) {
+            clearSkillStaging(slot)
+            return prev
+        }
+        stageSkill(slot, skill)
         return prev
     }
 
@@ -430,7 +670,7 @@ class Game(
     private fun defaultSkillFor(slot: Int): Skill? {
         val hero = party?.heroes?.getOrNull(slot) ?: return null
         // Weapon-aware basic attack so the staged auto-Attack
-        // shows the correct range (e.g. Range: 2 for an Archer with
+        // shows the correct range (e.g. Range: 3 for an Archer with
         // a crude bow) in the picker.
         return hero.basicAttackSkill
     }
@@ -442,8 +682,8 @@ class Game(
      * encounter / floor.
      */
     private fun resetSelectedSkillsToDefault() {
-        for (i in selectedSkillsBySlot.indices) {
-            selectedSkillsBySlot[i] = defaultSkillFor(i)
+        for (i in skillStagingBySlot.indices) {
+            clearSkillStaging(i)
         }
     }
 
@@ -617,6 +857,7 @@ class Game(
         // Fog of war reveal lives inside recordVisited too via the
         // one-room-ahead lookahead.
         f.recordVisited(next)
+        pruneSelectedEnemyIfHidden()
         camera.centerOn(next.x, next.y)
 
         // Note: runtime tap-to-extend is intentionally absent. Floors
@@ -640,40 +881,108 @@ class Game(
     // numbers - when class stats (Thief dexterity, Fighter strength) and
     // an inventory exist, these are the choke points to update.
 
-    /** Always succeeds for now; later: gated by [Party] key inventory. */
+    fun lockedDoorUiOptions(cell: Cell): LockedDoorUiOptions? {
+        val f = floor ?: return null
+        val door = f.doorAt(cell) ?: return null
+        if (!door.locked) return null
+        val p = party ?: return null
+        return LockedDoorUiOptions(
+            canKickDown = f.canAttemptStrForceOn(cell),
+            canPickLock = canPartyPickLocks() &&
+                p.inventory.hasIngredient(Ingredient.STONE_SHARD) &&
+                f.canAttemptDexPickOn(cell),
+            canUseKey = p.inventory.hasFloorKey(f.depth, door.lockId),
+        )
+    }
+
     fun useKeyOnDoor(cell: Cell): DoorOutcome {
         val f = floor ?: return DoorOutcome.NO_DOOR
-        if (!f.isDoor(cell)) return DoorOutcome.NO_DOOR
-        if (!f.isLockedDoor(cell)) return DoorOutcome.ALREADY_UNLOCKED
+        val door = f.doorAt(cell) ?: return DoorOutcome.NO_DOOR
+        if (!door.locked) return DoorOutcome.ALREADY_UNLOCKED
+        val p = party ?: return DoorOutcome.FAILED_NO_KEY
+        if (!p.inventory.consumeFloorKey(f.depth, door.lockId)) {
+            return DoorOutcome.FAILED_NO_KEY
+        }
         f.unlockDoor(cell)
+        pruneSelectedEnemyIfHidden()
         return DoorOutcome.OPENED
     }
 
-    /** ~50% success. On failure the door stays locked; the player can try again. */
+    /** True when a living Thief knows [SkillCatalog.THIEF_LOCK_PICK_ID]. */
+    fun canPartyPickLocks(): Boolean = partyLockPicker() != null
+
+    /**
+     * Thief lock pick on a door (DEX + 1d3 vs lock level, one Stone Shard
+     * per attempt). On failure the door stays locked.
+     */
     fun tryPickLock(cell: Cell): DoorOutcome {
         val f = floor ?: return DoorOutcome.NO_DOOR
-        if (!f.isDoor(cell)) return DoorOutcome.NO_DOOR
-        if (!f.isLockedDoor(cell)) return DoorOutcome.ALREADY_UNLOCKED
-        return if (runtimeRng.nextFloat() < PICK_LOCK_CHANCE) {
-            f.unlockDoor(cell)
-            DoorOutcome.OPENED
-        } else {
-            DoorOutcome.FAILED
-        }
+        val door = f.doorAt(cell) ?: return DoorOutcome.NO_DOOR
+        if (!door.locked) return DoorOutcome.ALREADY_UNLOCKED
+        if (door.bruteDamaged) return DoorOutcome.FAILED_BRUTE_DAMAGED
+        if (!f.canAttemptDexPickOn(cell)) return DoorOutcome.FAILED_BRUTE_DAMAGED
+        return attemptPartyLockPick { f.unlockDoor(cell) }
     }
 
-    /** ~70% success. Later: should cost party HP on failure (bashing damage). */
+    /**
+     * Same rules as [tryPickLock] for a locked chest or other container.
+     * Call [unlock] to open the chest when the check succeeds.
+     */
+    fun tryPickLockedContainer(unlock: () -> Unit): DoorOutcome =
+        attemptPartyLockPick(unlock)
+
+    private fun attemptPartyLockPick(onSuccess: () -> Unit): DoorOutcome {
+        lastLockPickCheck = null
+        val picker = partyLockPicker() ?: return DoorOutcome.FAILED_NO_LOCK_PICK
+        val p = party ?: return DoorOutcome.FAILED_NO_LOCK_PICK
+        val depth = floor?.depth ?: 1
+        if (!p.inventory.hasIngredient(Ingredient.STONE_SHARD)) {
+            return DoorOutcome.FAILED_NO_SHARD
+        }
+        val check = LockPick.rollDexPick(picker.dexterity, depth, runtimeRng)
+        lastLockPickCheck = check
+        if (!p.inventory.consumeIngredient(Ingredient.STONE_SHARD)) {
+            return DoorOutcome.FAILED_NO_SHARD
+        }
+        if (!check.success) return DoorOutcome.FAILED_DEX_CHECK
+        onSuccess()
+        pruneSelectedEnemyIfHidden()
+        return DoorOutcome.OPENED
+    }
+
+    private fun partyLockPicker(): Hero? {
+        val p = party ?: return null
+        return p.heroes
+            .filter { it.isAlive && it.heroClass == HeroClass.THIEF }
+            .filter { hero ->
+                hero.knownSkills.any { it.id == SkillCatalog.THIEF_LOCK_PICK_ID }
+            }
+            .maxByOrNull { it.dexterity }
+    }
+
+    /**
+     * STR + 1d6 vs lock level (highest party STR). One attempt per lock;
+     * success opens the door and prevents future lock picking.
+     */
     fun tryForceDoor(cell: Cell): DoorOutcome {
         val f = floor ?: return DoorOutcome.NO_DOOR
-        if (!f.isDoor(cell)) return DoorOutcome.NO_DOOR
-        if (!f.isLockedDoor(cell)) return DoorOutcome.ALREADY_UNLOCKED
-        return if (runtimeRng.nextFloat() < FORCE_DOOR_CHANCE) {
-            f.unlockDoor(cell)
-            DoorOutcome.OPENED
-        } else {
-            DoorOutcome.FAILED
-        }
+        val door = f.doorAt(cell) ?: return DoorOutcome.NO_DOOR
+        if (!door.locked) return DoorOutcome.ALREADY_UNLOCKED
+        if (door.strForceAttempted) return DoorOutcome.FAILED_STR_ALREADY_TRIED
+        door.strForceAttempted = true
+        lastStrForceCheck = null
+        val strength = partyMaxStrength()
+        val check = LockPick.rollStrForce(strength, f.depth, runtimeRng)
+        lastStrForceCheck = check
+        if (!check.success) return DoorOutcome.FAILED_STR_CHECK
+        door.bruteDamaged = true
+        f.unlockDoor(cell)
+        pruneSelectedEnemyIfHidden()
+        return DoorOutcome.OPENED
     }
+
+    private fun partyMaxStrength(): Int =
+        party?.heroes?.filter { it.isAlive }?.maxOfOrNull { it.strength } ?: 0
 
     /**
      * Combat trigger fired each step of [advanceOneStep] when the
@@ -703,7 +1012,8 @@ class Game(
         if (mode != Mode.EXPLORATION) return false
         val f = floor ?: return false
         val p = party ?: return false
-        val livingEnemies = f.enemiesInRoomOf(cell).filter { it.hp > 0 }
+        val livingEnemies = f.enemiesInRoomOf(cell)
+            .filter { it.hp > 0 && f.isVisibleToParty(it.cell) }
         if (livingEnemies.isEmpty()) return false
         val encounter = Combat(
             party = p,
@@ -839,15 +1149,10 @@ class Game(
          */
         private const val MOVE_STEP_SEC: Float = 0.12f
 
-        /** Placeholder pick-lock success rate; replace with Thief skill. */
-        private const val PICK_LOCK_CHANCE: Float = 0.50f
-
-        /** Placeholder force-open success rate; replace with Fighter strength. */
-        private const val FORCE_DOOR_CHANCE: Float = 0.70f
 
         /**
          * Mirrors [Party.create]'s fixed-4 contract; centralised here
-         * because [selectedSkillsBySlot] needs the same fixed size and
+         * because [skillStagingBySlot] needs the same fixed size and
          * shouldn't dangle if [Party] ever changes shape.
          */
         const val PARTY_SIZE: Int = 4

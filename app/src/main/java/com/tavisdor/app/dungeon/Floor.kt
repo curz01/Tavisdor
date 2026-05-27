@@ -1,5 +1,6 @@
 package com.tavisdor.app.dungeon
 
+import android.util.Log
 import com.tavisdor.app.enemies.Enemy
 import kotlin.random.Random
 
@@ -241,7 +242,63 @@ class Floor(
     }
 
     /** Current location of the party token. */
-    var partyCell: Cell = initialPartyCell
+    private var _partyCell: Cell = initialPartyCell
+    var partyCell: Cell
+        get() = _partyCell
+        set(value) {
+            if (_partyCell != value) {
+                _partyCell = value
+                invalidatePartyVisibility()
+            }
+        }
+
+    /**
+     * Cells the party can currently see: reachable walkable floor from
+     * [partyCell] without crossing a locked door. Locked doors act as
+     * walls for fog and enemy visibility.
+     */
+    private var _visibleToPartyCache: HashSet<Cell>? = null
+
+    fun isVisibleToParty(c: Cell): Boolean {
+        ensureVisibleToPartyCache()
+        return c in _visibleToPartyCache!!
+    }
+
+    private fun invalidatePartyVisibility() {
+        _visibleToPartyCache = null
+    }
+
+    private fun ensureVisibleToPartyCache() {
+        if (_visibleToPartyCache != null) return
+        val visible = HashSet<Cell>()
+        if (_partyCell !in _floorCells) {
+            _visibleToPartyCache = visible
+            return
+        }
+        val queue = ArrayDeque<Cell>()
+        visible += _partyCell
+        queue.addLast(_partyCell)
+        while (queue.isNotEmpty()) {
+            val cur = queue.removeFirst()
+            for (delta in CARDINAL_NEIGHBORS) {
+                val n = Cell(cur.x + delta.x, cur.y + delta.y)
+                if (n in visible) continue
+                if (isLockedDoor(n)) continue
+                if (n !in _floorCells) continue
+                visible += n
+                queue.addLast(n)
+            }
+        }
+        // Closed doors sit on the frontier: show the tile so the player
+        // can unlock it, but do not flood through into the room beyond.
+        for (c in visible.toList()) {
+            for (delta in CARDINAL_NEIGHBORS) {
+                val n = Cell(c.x + delta.x, c.y + delta.y)
+                if (isLockedDoor(n)) visible += n
+            }
+        }
+        _visibleToPartyCache = visible
+    }
 
     fun isFloor(c: Cell): Boolean = c in _floorCells
     fun isOpenConnector(c: Cell): Boolean = c in _openConnectors
@@ -252,10 +309,89 @@ class Floor(
     fun isLockedDoor(c: Cell): Boolean = _doors[c]?.locked == true
     fun doorAt(c: Cell): Door? = _doors[c]
 
+    fun isDoorBruteDamaged(c: Cell): Boolean = _doors[c]?.bruteDamaged == true
+
+    fun canAttemptStrForceOn(c: Cell): Boolean {
+        val door = _doors[c] ?: return false
+        return door.locked && !door.strForceAttempted
+    }
+
+    fun canAttemptDexPickOn(c: Cell): Boolean {
+        val door = _doors[c] ?: return false
+        return door.locked && !door.bruteDamaged
+    }
+
     /** Permanently unlocks the door at [c]. No-op if [c] is not a door. */
     fun unlockDoor(c: Cell) {
-        _doors[c]?.locked = false
+        val door = _doors[c] ?: return
+        if (!door.locked) return
+        door.locked = false
+        invalidatePartyVisibility()
     }
+
+    /**
+     * Assigns each locked door a matching [FloorKey] carrier on an enemy
+     * reachable from [partyCell] without crossing another locked door.
+     */
+    fun assignLockKeyCarriers(rng: Random) {
+        val lockedCells = _doors.filterValues { it.locked }.keys.toList()
+        if (lockedCells.isEmpty()) return
+
+        val eligible = _enemies.filter { enemy ->
+            isReachableWithoutLockedDoors(partyCell, enemy.cell)
+        }
+        if (eligible.isEmpty()) {
+            Log.w(TAG, "assignLockKeyCarriers: ${lockedCells.size} locked door(s) but no eligible enemies.")
+            return
+        }
+
+        val shuffledLocks = lockedCells.shuffled(rng)
+        val carriers = eligible.shuffled(rng).toMutableList()
+        for (cell in shuffledLocks) {
+            if (carriers.isEmpty()) carriers += eligible.shuffled(rng)
+            val enemy = carriers.removeAt(0)
+            val lockId = _doors[cell]?.lockId ?: continue
+            if (lockId !in enemy.floorKeyLockIds) {
+                enemy.floorKeyLockIds += lockId
+            }
+        }
+        Log.d(
+            TAG,
+            "Assigned ${shuffledLocks.size} floor key(s) across ${eligible.size} eligible enemy(ies).",
+        )
+    }
+
+    private fun isReachableWithoutLockedDoors(from: Cell, to: Cell): Boolean {
+        if (from == to) return true
+        if (to !in _floorCells) return false
+        val seen = HashSet<Cell>()
+        val queue = ArrayDeque<Cell>()
+        seen += from
+        queue.addLast(from)
+        while (queue.isNotEmpty()) {
+            val cur = queue.removeFirst()
+            if (cur == to) return true
+            for (delta in CARDINAL_NEIGHBORS) {
+                val n = Cell(cur.x + delta.x, cur.y + delta.y)
+                if (n in seen) continue
+                if (isLockedDoor(n)) continue
+                if (n !in _floorCells) continue
+                seen += n
+                queue.addLast(n)
+            }
+        }
+        return false
+    }
+
+    private fun newDoor(cell: Cell, locked: Boolean): Door =
+        Door(
+            locked = locked,
+            axis = inferDoorAxis(cell, _floorCells),
+            lockId = lockIdForCell(depth, cell),
+        )
+
+    private fun lockIdForCell(floorDepth: Int, cell: Cell): String =
+        "d${floorDepth}_${cell.x}_${cell.y}"
 
     /**
      * Marks [cell] as explored. Called from the per-step move loop.
@@ -529,7 +665,10 @@ class Floor(
             // doors aren't connectors) would otherwise re-roll on every
             // overlap.
             if (world !in _doors) {
-                _doors[world] = Door(locked = rng.nextFloat() < DOOR_LOCK_CHANCE)
+                _doors[world] = newDoor(
+                    world,
+                    locked = rng.nextFloat() < DOOR_LOCK_CHANCE,
+                )
             }
         }
         for (local in template.staircases) {
@@ -722,6 +861,8 @@ class Floor(
         fun staircaseThresholdForDepth(depth: Int): Int =
             STAIRCASE_BASE_THRESHOLD + STAIRCASE_THRESHOLD_PER_DEPTH * (depth - 1)
 
+        private const val TAG = "Floor"
+
         private val CARDINAL_NEIGHBORS = arrayOf(
             Cell(0, -1),
             Cell(0, 1),
@@ -742,7 +883,12 @@ class Floor(
             val partyStart = entrance.floorCells.first()
             val doors = HashMap<Cell, Door>()
             for (cell in entrance.doors) {
-                doors[cell] = Door(locked = rng.nextFloat() < DOOR_LOCK_CHANCE)
+                val locked = rng.nextFloat() < DOOR_LOCK_CHANCE
+                doors[cell] = Door(
+                    locked = locked,
+                    axis = inferDoorAxis(cell, entrance.floorCells),
+                    lockId = "d${depth}_${cell.x}_${cell.y}",
+                )
             }
             return Floor(
                 depth = depth,

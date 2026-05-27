@@ -17,10 +17,21 @@ import com.tavisdor.app.save.HeroSaveData
  * combat targeting and the bottom HUD layout, never physical positioning.
  */
 class Party private constructor(
-    val heroes: List<Hero>,
+    heroes: List<Hero>,
 ) {
+    private val _heroes: MutableList<Hero> = heroes.toMutableList()
+
+    val heroes: List<Hero> get() = _heroes
+
     init {
-        require(heroes.size == 4) { "Party must contain exactly 4 heroes." }
+        require(_heroes.size == 4) { "Party must contain exactly 4 heroes." }
+    }
+
+    /** Replaces one party member (equipment changes, etc.). */
+    fun replaceHero(index: Int, hero: Hero) {
+        require(index in _heroes.indices)
+        _heroes[index] = hero
+        inventory.notifyOwnerChanged()
     }
 
     val frontLine: List<Hero> get() = heroes.subList(0, 2)

@@ -7,15 +7,15 @@ package com.tavisdor.app.party
  *   Level | Mage          | Fighter        | Thief          | Archer
  *   ------+---------------+----------------+----------------+---------------
  *      1  | 1 / 1 / 3     | 2 / 2 / 1      | 1 / 2 / 2      | 1 / 3 / 1
- *      2  | 1 / 1 / 5     | 4 / 2 / 1      | 2 / 3 / 2      | 1 / 5 / 1
- *      3  | 2 / 2 / 6     | 5 / 3 / 2      | 3 / 5 / 2      | 2 / 6 / 2
- *      4  | 2 / 2 / 8     | 7 / 3 / 2      | 4 / 6 / 2      | 2 / 8 / 2
- *      5  | 3 / 3 / 9     | 8 / 4 / 3      | 5 / 8 / 2      | 3 / 9 / 3
- *      6  | 3 / 3 / 11    | 10 / 4 / 3     | 6 / 9 / 3      | 3 / 11 / 3
- *      7  | 4 / 4 / 12    | 11 / 5 / 4     | 7 / 11 / 3     | 4 / 12 / 4
- *      8  | 4 / 4 / 14    | 13 / 5 / 4     | 8 / 12 / 3     | 4 / 14 / 4
- *      9  | 5 / 5 / 15    | 14 / 6 / 5     | 9 / 14 / 3     | 5 / 15 / 5
- *     10  | 5 / 5 / 17    | 16 / 6 / 5     | 10 / 15 / 3    | 5 / 17 / 5
+ *      2  | 1 / 1 / 5     | 4 / 2 / 1      | 2 / 3 / 2      | 1 / 4 / 2
+ *      3  | 1 / 2 / 7     | 6 / 3 / 1      | 3 / 5 / 2      | 1 / 5 / 3
+ *      4  | 2 / 2 / 9     | 7 / 3 / 2      | 4 / 6 / 2      | 2 / 7 / 3
+ *      5  | 2 / 3 / 11    | 9 / 4 / 2      | 5 / 8 / 3      | 2 / 8 / 4
+ *      6  | 3 / 3 / 13    | 11 / 4 / 2     | 6 / 9 / 3      | 3 / 10 / 5
+ *      7  | 3 / 4 / 15    | 12 / 5 / 3     | 7 / 11 / 4     | 3 / 11 / 6
+ *      8  | 3 / 4 / 17    | 14 / 5 / 3     | 8 / 12 / 4     | 4 / 13 / 6
+ *      9  | 4 / 5 / 18    | 15 / 6 / 4     | 8 / 13 / 5     | 4 / 14 / 7
+ *     10  | 4 / 5 / 19    | 17 / 7 / 4     | 9 / 14 / 5     | 5 / 15 / 8
  *
  * Values are read STR / DEX / INT in that order. Stats outside this
  * table (level > [LevelProgression.MAX_LEVEL]) cannot happen because
@@ -35,27 +35,27 @@ object ClassStats {
     private val MAGE: Array<Stats> = arrayOf(
         Stats(1, 1, 3),
         Stats(1, 1, 5),
-        Stats(2, 2, 6),
-        Stats(2, 2, 8),
-        Stats(3, 3, 9),
-        Stats(3, 3, 11),
-        Stats(4, 4, 12),
-        Stats(4, 4, 14),
-        Stats(5, 5, 15),
-        Stats(5, 5, 17),
+        Stats(1, 2, 7),
+        Stats(2, 2, 9),
+        Stats(2, 3, 11),
+        Stats(3, 3, 13),
+        Stats(3, 4, 15),
+        Stats(3, 4, 17),
+        Stats(4, 5, 18),
+        Stats(4, 5, 19),
     )
 
     private val FIGHTER: Array<Stats> = arrayOf(
         Stats(2, 2, 1),
         Stats(4, 2, 1),
-        Stats(5, 3, 2),
+        Stats(6, 3, 1),
         Stats(7, 3, 2),
-        Stats(8, 4, 3),
-        Stats(10, 4, 3),
-        Stats(11, 5, 4),
-        Stats(13, 5, 4),
-        Stats(14, 6, 5),
-        Stats(16, 6, 5),
+        Stats(9, 4, 2),
+        Stats(11, 4, 2),
+        Stats(12, 5, 3),
+        Stats(14, 5, 3),
+        Stats(15, 6, 4),
+        Stats(17, 7, 4),
     )
 
     private val THIEF: Array<Stats> = arrayOf(
@@ -63,25 +63,25 @@ object ClassStats {
         Stats(2, 3, 2),
         Stats(3, 5, 2),
         Stats(4, 6, 2),
-        Stats(5, 8, 2),
+        Stats(5, 8, 3),
         Stats(6, 9, 3),
-        Stats(7, 11, 3),
-        Stats(8, 12, 3),
-        Stats(9, 14, 3),
-        Stats(10, 15, 3),
+        Stats(7, 11, 4),
+        Stats(8, 12, 4),
+        Stats(8, 13, 5),
+        Stats(9, 14, 5),
     )
 
     private val ARCHER: Array<Stats> = arrayOf(
         Stats(1, 3, 1),
-        Stats(1, 5, 1),
-        Stats(2, 6, 2),
-        Stats(2, 8, 2),
-        Stats(3, 9, 3),
-        Stats(3, 11, 3),
-        Stats(4, 12, 4),
-        Stats(4, 14, 4),
-        Stats(5, 15, 5),
-        Stats(5, 17, 5),
+        Stats(1, 4, 2),
+        Stats(1, 5, 3),
+        Stats(2, 7, 3),
+        Stats(2, 8, 4),
+        Stats(3, 10, 5),
+        Stats(3, 11, 6),
+        Stats(4, 13, 6),
+        Stats(4, 14, 7),
+        Stats(5, 15, 8),
     )
 
     init {

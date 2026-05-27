@@ -35,6 +35,11 @@ data class Enemy(
      * index entries.
      */
     var cell: Cell,
+    /**
+     * Floor-lock ids this enemy drops on defeat. Assigned at floor gen
+     * for enemies reachable without crossing a locked door.
+     */
+    val floorKeyLockIds: MutableList<String> = mutableListOf(),
 ) {
     // ----- Forwarded authoring fields (convenience accessors) -----
 

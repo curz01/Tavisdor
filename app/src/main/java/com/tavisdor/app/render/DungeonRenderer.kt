@@ -16,7 +16,9 @@ import kotlin.math.min
 import kotlin.math.sin
 import com.tavisdor.app.dungeon.Cell
 import com.tavisdor.app.dungeon.Door
+import com.tavisdor.app.dungeon.DoorAxis
 import com.tavisdor.app.dungeon.Floor
+import com.tavisdor.app.combat.CombatTargeting
 import com.tavisdor.app.enemies.Enemy
 import com.tavisdor.app.game.Game
 
@@ -30,9 +32,9 @@ import com.tavisdor.app.game.Game
  *     special-cell overlays drawn on top.
  *   - Staircase cells get the `assets/sprites/tile_stairs_down.png`
  *     sprite drawn on top of the floor sprite.
- *   - Door cells get the `assets/sprites/tile_door.png` sprite drawn on
- *     top of the floor sprite. Locked doors additionally get a small
- *     brass lock dot so locked / unlocked is still readable at a glance.
+ *   - Door cells get axis- and state-specific sprites
+ *     (`tile_door_ns_*` / `tile_door_ew_*`, closed vs opened) drawn on
+ *     top of the floor sprite.
  *   - Open connectors (un-merged red pixels) get a small red square so the
  *     player knows where the dungeon can grow.
  *   - The party token is drawn as a placeholder ring on top of its cell.
@@ -77,10 +79,14 @@ class DungeonRenderer(private val assets: AssetManager) {
         ?.let { Rect(0, 0, it.width, it.height) }
         ?: Rect(0, 0, 1, 1)
 
-    private val tileDoor: Bitmap? = tryLoadBitmap(assets, "sprites/tile_door.png")
-    private val tileDoorSrc: Rect = tileDoor
-        ?.let { Rect(0, 0, it.width, it.height) }
-        ?: Rect(0, 0, 1, 1)
+    private val tileDoorNsClosed: Bitmap? =
+        tryLoadBitmap(assets, "sprites/tile_door_ns_closed.png")
+    private val tileDoorNsOpened: Bitmap? =
+        tryLoadBitmap(assets, "sprites/tile_door_ns_opened.png")
+    private val tileDoorEwClosed: Bitmap? =
+        tryLoadBitmap(assets, "sprites/tile_door_ew_closed.png")
+    private val tileDoorEwOpened: Bitmap? =
+        tryLoadBitmap(assets, "sprites/tile_door_ew_opened.png")
 
     private val tileStairs: Bitmap? = tryLoadBitmap(assets, "sprites/tile_stairs_down.png")
     private val tileStairsSrc: Rect = tileStairs
@@ -174,6 +180,28 @@ class DungeonRenderer(private val assets: AssetManager) {
         color = Color.parseColor("#FF6E5A46")
     }
 
+    private val targetDimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#AA000000")
+        style = Paint.Style.FILL
+    }
+    private val targetInRangePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#3348B06A")
+        style = Paint.Style.FILL
+    }
+    private val targetEnemyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#66E6C12C")
+        style = Paint.Style.FILL
+    }
+    private val targetSplashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#6648A0E8")
+        style = Paint.Style.FILL
+    }
+    private val targetEnemyStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#CCE6C12C")
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+    }
+
     private val staircaseFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#FF5060A0")
         alpha = 200
@@ -248,10 +276,6 @@ class DungeonRenderer(private val assets: AssetManager) {
         style = Paint.Style.STROKE
         strokeWidth = 2f
     }
-    private val doorLockDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FF1A0F05")
-    }
-
     private val partyRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#FFEFE7D0")
     }
@@ -327,13 +351,11 @@ class DungeonRenderer(private val assets: AssetManager) {
         val maxCy = (cy + halfCellsY).toInt() + 1
 
         // ----- Draw floor cells -----
-        // Fog-of-war: skip any cell whose owning room/hallway hasn't
-        // been entered yet. The party always stands on a revealed cell
-        // (recordVisited fires before every camera recenter), and
-        // previously-explored placements stay revealed for the run.
+        // Fog-of-war: draw only cells the party can reach without crossing
+        // a locked door (plus the usual placement reveal bookkeeping).
         for (c in floor.floorCells) {
             if (c.x < minCx || c.x > maxCx || c.y < minCy || c.y > maxCy) continue
-            if (!floor.isRevealed(c)) continue
+            if (!floor.isVisibleToParty(c)) continue
             val sx = (c.x - cx) * cellPx + viewCx
             val sy = (c.y - cy) * cellPx + viewCy
             dstRect.set(sx, sy, sx + cellPx, sy + cellPx)
@@ -344,6 +366,21 @@ class DungeonRenderer(private val assets: AssetManager) {
                 canvas.drawRect(dstRect, floorFallbackPaint)
             }
         }
+
+        drawCombatTargetOverlay(
+            canvas = canvas,
+            game = game,
+            floor = floor,
+            cx = cx,
+            cy = cy,
+            cellPx = cellPx,
+            viewCx = viewCx,
+            viewCy = viewCy,
+            minCx = minCx,
+            maxCx = maxCx,
+            minCy = minCy,
+            maxCy = maxCy,
+        )
 
         // ----- Exit indicators (red triangle pointing into unexplored area) -----
         // Two cases, both drawn the same way: a revealed cell at the
@@ -375,6 +412,7 @@ class DungeonRenderer(private val assets: AssetManager) {
         val connectorLiveCache = HashMap<Cell, Boolean>()
         for (c in floor.revealedCells) {
             if (c.x < minCx || c.x > maxCx || c.y < minCy || c.y > maxCy) continue
+            if (!floor.isVisibleToParty(c)) continue
             val isOpenConnector = c in floor.openConnectors
             // Direction-agnostic "!" marker: this cell is an exit IFF
             // either (a) a cardinal neighbor is a placed-but-hidden
@@ -386,7 +424,7 @@ class DungeonRenderer(private val assets: AssetManager) {
             for (d in CARDINAL_DIRECTIONS) {
                 val neighbor = Cell(c.x + d.x, c.y + d.y)
                 val neighborIsFloor = neighbor in floor.floorCells
-                if (neighborIsFloor && !floor.isRevealed(neighbor)) {
+                if (neighborIsFloor && !floor.isVisibleToParty(neighbor)) {
                     shouldMark = true
                     break
                 }
@@ -412,21 +450,21 @@ class DungeonRenderer(private val assets: AssetManager) {
         // open connectors until a staircase-bearing template is placed.
         for (c in floor.staircases) {
             if (c.x < minCx || c.x > maxCx || c.y < minCy || c.y > maxCy) continue
-            if (!floor.isRevealed(c)) continue
+            if (!floor.isVisibleToParty(c)) continue
             drawStaircase(canvas, c, cx, cy, cellPx, viewCx, viewCy)
         }
 
         // ----- Stairs UP (yellow pixel; back to previous floor) -----
         for (c in floor.stairsUp) {
             if (c.x < minCx || c.x > maxCx || c.y < minCy || c.y > maxCy) continue
-            if (!floor.isRevealed(c)) continue
+            if (!floor.isVisibleToParty(c)) continue
             drawStairsUp(canvas, c, cx, cy, cellPx, viewCx, viewCy)
         }
 
         // ----- Doors -----
         for ((cell, door) in floor.doors) {
             if (cell.x < minCx || cell.x > maxCx || cell.y < minCy || cell.y > maxCy) continue
-            if (!floor.isRevealed(cell)) continue
+            if (!floor.isVisibleToParty(cell)) continue
             drawDoor(canvas, cell, door, cx, cy, cellPx, viewCx, viewCy)
         }
 
@@ -440,7 +478,7 @@ class DungeonRenderer(private val assets: AssetManager) {
             if (enemy.hp <= 0) continue
             val ec = enemy.cell
             if (ec.x < minCx || ec.x > maxCx || ec.y < minCy || ec.y > maxCy) continue
-            if (!floor.isRevealed(ec)) continue
+            if (!floor.isVisibleToParty(ec)) continue
             val spriteRect = drawEnemy(canvas, game, enemy, cx, cy, cellPx, viewCx, viewCy)
             drawEnemyHealthBar(canvas, spriteRect, enemy.hp, enemy.maxHp)
         }
@@ -451,9 +489,9 @@ class DungeonRenderer(private val assets: AssetManager) {
         // selected enemy being alive AND on-screen so we don't
         // animate something the player can't see.
         val selected = game.selectedEnemy
-        if (selected != null && selected.isAlive) {
+        if (selected != null && selected.isAlive && !game.isCombatTargetSelectionActive()) {
             val sc = selected.cell
-            if (sc.x in minCx..maxCx && sc.y in minCy..maxCy && floor.isRevealed(sc)) {
+            if (sc.x in minCx..maxCx && sc.y in minCy..maxCy && floor.isVisibleToParty(sc)) {
                 syncSelectionMarkerClock(selected)
                 if (isSelectionMarkerAnimating()) {
                     drawSelectionMarker(canvas, sc, cx, cy, cellPx, viewCx, viewCy)
@@ -476,6 +514,54 @@ class DungeonRenderer(private val assets: AssetManager) {
 
         // ----- Weapon attack FX (above party + enemies) -----
         game.drawWeaponAttackFx(canvas, cx, cy, cellPx, viewCx, viewCy)
+    }
+
+    /**
+     * Dims revealed tiles outside the staged skill's range and tints
+     * tiles the attack can reach. Enemy cells that can be targeted
+     * get a stronger highlight + stroke (see [CombatTargeting]).
+     */
+    private fun drawCombatTargetOverlay(
+        canvas: Canvas,
+        game: Game,
+        floor: Floor,
+        cx: Float,
+        cy: Float,
+        cellPx: Float,
+        viewCx: Float,
+        viewCy: Float,
+        minCx: Int,
+        maxCx: Int,
+        minCy: Int,
+        maxCy: Int,
+    ) {
+        val selection = game.combatTargetSelection ?: return
+        val overlay = CombatTargeting.buildOverlayMap(
+            floor = floor,
+            origin = floor.partyCell,
+            skill = selection.skill,
+        )
+        val inset = cellPx * 0.06f
+        for (cell in floor.revealedCells) {
+            if (cell.x < minCx || cell.x > maxCx || cell.y < minCy || cell.y > maxCy) continue
+            if (!floor.isVisibleToParty(cell)) continue
+            val highlight = CombatTargeting.highlightForCell(overlay, cell)
+            val sx = (cell.x - cx) * cellPx + viewCx
+            val sy = (cell.y - cy) * cellPx + viewCy
+            dstRect.set(sx + inset, sy + inset, sx + cellPx - inset, sy + cellPx - inset)
+            when (highlight) {
+                CombatTargeting.TileHighlight.DIMMED ->
+                    canvas.drawRect(dstRect, targetDimPaint)
+                CombatTargeting.TileHighlight.IN_RANGE ->
+                    canvas.drawRect(dstRect, targetInRangePaint)
+                CombatTargeting.TileHighlight.TARGETABLE_ENEMY -> {
+                    canvas.drawRect(dstRect, targetEnemyPaint)
+                    canvas.drawRect(dstRect, targetEnemyStrokePaint)
+                }
+                CombatTargeting.TileHighlight.SPLASH ->
+                    canvas.drawRect(dstRect, targetSplashPaint)
+            }
+        }
     }
 
     private fun drawPartyTokenAt(
@@ -639,29 +725,47 @@ class DungeonRenderer(private val assets: AssetManager) {
         val sy = (cell.y - camCy) * cellPx + viewCy
         dstRect.set(sx, sy, sx + cellPx, sy + cellPx)
 
-        val sprite = tileDoor
+        val sprite = doorSprite(door)
         if (sprite != null) {
-            canvas.drawBitmap(sprite, tileDoorSrc, dstRect, drawBitmapPaint)
+            doorSpriteSrc.set(0, 0, sprite.width, sprite.height)
+            canvas.drawBitmap(sprite, doorSpriteSrc, dstRect, drawBitmapPaint)
         } else {
-            // Fallback when tile_door.png failed to load: the older
-            // procedural vertical bar so doors are still visible.
-            val barW = cellPx * 0.34f
-            val padY = cellPx * 0.08f
-            val left = sx + (cellPx - barW) / 2f
-            val top = sy + padY
-            dstRect.set(left, top, left + barW, sy + cellPx - padY)
-            canvas.drawRect(dstRect, if (door.locked) doorLockedPaint else doorUnlockedPaint)
-            canvas.drawRect(dstRect, doorOutlinePaint)
+            drawDoorFallback(canvas, door, sx, sy, cellPx)
         }
+    }
 
-        if (door.locked) {
-            // Small brass keyhole dot drawn on top of the sprite so locked
-            // and unlocked states are still distinguishable at a glance.
-            val cxd = sx + cellPx / 2f
-            val cyd = sy + cellPx / 2f
-            canvas.drawCircle(cxd, cyd, cellPx * 0.10f, doorLockedPaint)
-            canvas.drawCircle(cxd, cyd, cellPx * 0.10f, doorOutlinePaint)
+    private val doorSpriteSrc = Rect(0, 0, 1, 1)
+
+    private fun doorSprite(door: Door): Bitmap? = when (door.axis) {
+        DoorAxis.NS -> if (door.locked) tileDoorNsClosed else tileDoorNsOpened
+        DoorAxis.EW -> if (door.locked) tileDoorEwClosed else tileDoorEwOpened
+    }
+
+    /** Procedural placeholder when door art is missing. */
+    private fun drawDoorFallback(
+        canvas: Canvas,
+        door: Door,
+        sx: Float,
+        sy: Float,
+        cellPx: Float,
+    ) {
+        val pad = cellPx * 0.08f
+        when (door.axis) {
+            DoorAxis.NS -> {
+                val barH = cellPx * 0.34f
+                val left = sx + pad
+                val top = sy + (cellPx - barH) / 2f
+                dstRect.set(left, top, sx + cellPx - pad, top + barH)
+            }
+            DoorAxis.EW -> {
+                val barW = cellPx * 0.34f
+                val left = sx + (cellPx - barW) / 2f
+                val top = sy + pad
+                dstRect.set(left, top, left + barW, sy + cellPx - pad)
+            }
         }
+        canvas.drawRect(dstRect, if (door.locked) doorLockedPaint else doorUnlockedPaint)
+        canvas.drawRect(dstRect, doorOutlinePaint)
     }
 
     /**

@@ -21,14 +21,15 @@ object LootTableCatalog {
         // ----- Spear Goblin -----
         // From the design chart:
         //   50% chance to drop a Level 1 random ingredient.
+        //   50% chance to drop a Stone Shard (Poison Arrow reagent).
         //   10% chance to drop a (random) melee weapon at the
         //   floor's current material tier.
-        // Rolls are independent: a kill can yield BOTH on the same
-        // corpse (worst case 0.5 * 0.1 = 5% jackpot).
+        // Rolls are independent.
         LootTable(
             id = "spear_goblin",
             entries = listOf(
                 LootEntry.RandomIngredient(chance = 0.50f, potency = 1),
+                LootEntry.FixedIngredient(chance = 0.50f, ingredient = Ingredient.STONE_SHARD),
                 LootEntry.RandomMeleeWeapon(chance = 0.10f),
             ),
         ),

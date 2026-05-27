@@ -67,4 +67,32 @@ sealed class LootEntry {
             return LootDrop.MeleeWeaponDrop(weapon, tier)
         }
     }
+
+    /** Drops a specific [ingredient] with probability [chance]. */
+    data class FixedIngredient(
+        override val chance: Float,
+        val ingredient: Ingredient,
+    ) : LootEntry() {
+        override fun roll(rng: Random, dungeonDepth: Int): LootDrop? {
+            if (rng.nextFloat() >= chance) return null
+            return LootDrop.IngredientDrop(ingredient)
+        }
+    }
+
+    /**
+     * Drops a random elemental item at [potency] (1 = shard,
+     * 2 = cluster, 3 = core) from the Flame / Stone / Wind / Hydro
+     * families.
+     */
+    data class RandomElementalShard(
+        override val chance: Float,
+        val potency: Int = 1,
+    ) : LootEntry() {
+        override fun roll(rng: Random, dungeonDepth: Int): LootDrop? {
+            if (rng.nextFloat() >= chance) return null
+            val candidates = Ingredient.elementalAtPotency(potency)
+            if (candidates.isEmpty()) return null
+            return LootDrop.IngredientDrop(candidates.random(rng))
+        }
+    }
 }

@@ -47,7 +47,7 @@
     <dimen name="action_bar_button_gap">8dp</dimen>
 
     <!-- Hero panel (persistent bottom 2x2 grid in-game). -->
-    <dimen name="hero_panel_height">200dp</dimen>
+    <dimen name="hero_panel_height">224dp</dimen>
     <dimen name="hero_panel_slot_size">80dp</dimen>
     <dimen name="hero_panel_slot_h_gap">10dp</dimen>
     <dimen name="hero_panel_slot_v_gap">8dp</dimen>
@@ -55,13 +55,38 @@
 
     <!-- Hero detail overlay (modal opened by tapping a portrait). -->
     <dimen name="hero_detail_panel_padding">16dp</dimen>
+    <dimen name="hero_skill_assign_body_height">540dp</dimen>
+    <dimen name="hero_skill_assign_panel_width">368dp</dimen>
+    <dimen name="hero_skill_assign_row_gap">10dp</dimen>
+    <dimen name="hero_skill_assign_row_pad_h">8dp</dimen>
+    <dimen name="hero_skill_assign_row_pad_v">8dp</dimen>
+    <dimen name="hero_skill_assign_name_text">16sp</dimen>
+    <dimen name="hero_skill_assign_meta_text">13sp</dimen>
+    <dimen name="hero_skill_assign_section_text">14sp</dimen>
+    <dimen name="hero_skill_assign_header_text">17sp</dimen>
     <dimen name="hero_detail_equip_slot_size">64dp</dimen>
     <dimen name="hero_detail_equip_grid_gap">8dp</dimen>
 
-    <!-- Items panel (modal: action-bar Items button + post-combat auto-open). -->
+    <!-- Inventory panel (modal: action-bar Inventory button + post-combat auto-open). -->
     <dimen name="items_panel_width">320dp</dimen>
     <dimen name="items_panel_padding">16dp</dimen>
     <dimen name="items_panel_section_gap">14dp</dimen>
+    <!-- Fixed tab body height so the panel stays the same size as the old three stacked sections. -->
+    <dimen name="items_panel_tab_body_height">264dp</dimen>
+    <!-- Top tab strip on the inventory panel (horizontal, right-aligned, 80% width). -->
+    <dimen name="items_panel_top_tab_height">32dp</dimen>
+    <dimen name="items_panel_top_tab_overlap">-1dp</dimen>
+    <dimen name="items_panel_summary_gap">8dp</dimen>
+    <dimen name="items_panel_host_margin_horizontal">12dp</dimen>
+    <dimen name="items_panel_summary_cell_gap">6dp</dimen>
+    <dimen name="items_panel_summary_cell_gap_half">3dp</dimen>
+    <dimen name="inventory_summary_card_padding">9dp</dimen>
+    <dimen name="inventory_summary_header_text">15sp</dimen>
+    <dimen name="inventory_summary_stat_text">14sp</dimen>
+    <dimen name="inventory_summary_block_margin">6dp</dimen>
+    <dimen name="inventory_summary_xp_margin_top">5dp</dimen>
+    <dimen name="inventory_equip_slot_size">72dp</dimen>
+    <dimen name="inventory_equip_grid_gap">8dp</dimen>
     <dimen name="items_panel_row_v_gap">2dp</dimen>
     <dimen name="items_panel_row_padding">6dp</dimen>
 </resources>

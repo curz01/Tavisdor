@@ -1,6 +1,7 @@
 package com.tavisdor.app.skills
 
 import com.tavisdor.app.enemies.Element
+import com.tavisdor.app.items.Ingredient
 import com.tavisdor.app.party.HeroClass
 
 /**
@@ -84,6 +85,12 @@ data class Skill(
      * cast-type heuristic decide.
      */
     val buttonOverride: SkillButton? = null,
+    /**
+     * When set, one matching ingredient (e.g. Flame Shard) is
+     * consumed from party inventory when the skill is committed in
+     * combat. Only potency-1 shards satisfy arrow skills today.
+     */
+    val requiredShard: Ingredient? = null,
     /**
      * Authored base damage. Interpretation depends on whether this
      * skill is a spell:

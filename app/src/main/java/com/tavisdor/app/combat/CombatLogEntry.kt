@@ -228,6 +228,16 @@ sealed class CombatLogEntry {
         val target: String,
     ) : CombatLogEntry()
 
+    /**
+     * Hero tried to use a skill that consumes an elemental shard
+     * but the party had none in Ingredients. Turn is not consumed.
+     */
+    data class MissingShard(
+        val attacker: String,
+        val skillName: String,
+        val shardName: String,
+    ) : CombatLogEntry()
+
     /** Catch-all info line, e.g. "The Spear Goblin waits.". */
     data class Info(val text: String) : CombatLogEntry()
 }

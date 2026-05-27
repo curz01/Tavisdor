@@ -43,6 +43,8 @@ dungeon background.
 | `tile_door.png`    | 64 x 64 | Door tile between rooms / hallways. | Doors are passable; visual is just a hint to the player. |
 | `tile_stairs_down.png` | 64 x 64 | Goal tile that descends to the next floor. | Should be visually distinct -- this is the only objective the player is hunting for each floor. |
 | `monster_placeholder.png` | 64 x 64 | Default monster sprite until per-monster art exists. | Once you add specific monsters (slime, skeleton, etc.) add `monster_<name>.png` files of the same size; this generic file stays as the fallback. |
+| `action_attack.png` | 32 x 32 (suggested) | Staged offensive / ACTION-bucket skill on the hero panel (above HP bar). | Scaled to fit the status strip; keep the glyph readable at small size. |
+| `action_guard.png`  | 32 x 32 (suggested) | Staged defensive / GUARD-bucket skill (e.g. Rapid Fire, Defend). | Same layout as `action_attack`. |
 
 ---
 
