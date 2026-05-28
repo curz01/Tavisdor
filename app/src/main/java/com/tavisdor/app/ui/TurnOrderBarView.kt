@@ -196,11 +196,13 @@ class TurnOrderBarView @JvmOverloads constructor(
         // frame and the group recenters into its new bounds.
         var minSlot = Int.MAX_VALUE
         var maxSlot = Int.MIN_VALUE
-        combat.initiative.forEachIndexed { initIdx, entry ->
-            if (entry in round.removedEntries) return@forEachIndexed
-            val midAnim = round.leavers.any { it.entry === entry }
-            if (isSlotPast(initIdx, round) && !midAnim) return@forEachIndexed
-            val s = round.displayedSlotOf(entry).coerceAtLeast(0)
+        for (initIdx in combat.round.roundQueue) {
+            val entry = combat.initiative[initIdx]
+            if (entry in round.removedEntries) continue
+            val midAnim = round.leavers.any { it.entry === entry } ||
+                (round.waitReinsert?.entry === entry)
+            if (isSlotPast(initIdx, round) && !midAnim) continue
+            val s = displayedSlotFor(entry, round).coerceAtLeast(0)
             if (s < minSlot) minSlot = s
             if (s > maxSlot) maxSlot = s
         }
@@ -213,11 +215,9 @@ class TurnOrderBarView @JvmOverloads constructor(
         // all keep using `leftMargin + renderedSlot * stride`.
         val leftMargin = (width - groupWidth) / 2f - minSlot * stride
 
-        combat.initiative.forEachIndexed { initIdx, entry ->
-            // Permanently removed entries don't render at all -
-            // their DEFEATED animation already finished and the
-            // strip should pretend they were never there.
-            if (entry in round.removedEntries) return@forEachIndexed
+        for (initIdx in combat.round.roundQueue) {
+            val entry = combat.initiative[initIdx]
+            if (entry in round.removedEntries) continue
 
             // Find any active animation on this entry. The hero
             // that just killed an enemy can be carrying a
@@ -234,21 +234,24 @@ class TurnOrderBarView @JvmOverloads constructor(
             // "Past-acted this round" check. Hidden unless the
             // slot has an in-flight TURN_ENDED OR DEFEATED leaver
             // we still need to animate to completion.
-            val midAnim = turnEndLeaver != null || defeatLeaver != null
+            val waitReinsert = round.waitReinsert
+            val midAnim = turnEndLeaver != null || defeatLeaver != null ||
+                waitReinsert?.entry === entry
             if (isSlotPast(initIdx, round) && !midAnim) {
-                return@forEachIndexed
+                continue
             }
 
-            // Horizontal slot position. The shift animation
-            // interpolates between the previously-rendered slot
-            // (captured in shiftFromSlots when a defeat finalized)
-            // and the current displayed slot.
             val currentSlot = round.displayedSlotOf(entry).coerceAtLeast(0)
             val fromSlot = round.shiftFromSlots[entry]?.toFloat() ?: currentSlot.toFloat()
-            val renderedSlot = if (round.shiftProgress < 1f) {
+            var renderedSlot = if (round.shiftProgress < 1f && waitReinsert?.entry !== entry) {
                 lerp(fromSlot, currentSlot.toFloat(), round.shiftProgress)
             } else {
                 currentSlot.toFloat()
+            }
+            if (waitReinsert != null && waitReinsert.entry === entry && turnEndLeaver == null) {
+                val p = waitReinsert.progress.coerceIn(0f, 1f)
+                val target = waitReinsert.toDisplayedSlot.toFloat()
+                renderedSlot = lerp(-WAIT_OFFSCREEN_SLOTS, target, p)
             }
             val baseLeft = leftMargin + renderedSlot * stride
             val baseTop = topMargin
@@ -285,15 +288,14 @@ class TurnOrderBarView @JvmOverloads constructor(
             // The settled portraits remain pickable through any
             // shift animation, since the shift just relocates a
             // slot whose owner is still a valid target.
-            if (turnEndLeaver == null && defeatLeaver == null) {
+            if (turnEndLeaver == null && defeatLeaver == null && waitReinsert?.entry !== entry) {
                 recordHitRect(entry, tmpSlotRect)
             }
 
-            // Active slot border only on the actor who's "up" -
-            // the entry at actingIndex with no leavers on it.
             val isActive = initIdx == round.actingIndex &&
                 turnEndLeaver == null &&
-                defeatLeaver == null
+                defeatLeaver == null &&
+                waitReinsert?.entry !== entry
 
             drawPortrait(
                 canvas = canvas,
@@ -376,15 +378,23 @@ class TurnOrderBarView @JvmOverloads constructor(
     }
 
     /**
-     * True when the combatant at initiative index [slotIdx] has
-     * already acted this round (so the portrait should be hidden
-     * unless it's mid-slide-off). [CombatRound.actingIndex] == -1
-     * means the round just finished and is awaiting trailing
-     * animations - every slot reads as "past" during that window.
+     * True when the combatant at initiative index [initIdx] has
+     * already acted this round (hidden unless mid-animation).
      */
-    private fun isSlotPast(slotIdx: Int, round: CombatRound): Boolean {
-        val acting = round.actingIndex
-        return if (acting < 0) true else slotIdx < acting
+    private fun isSlotPast(initIdx: Int, round: CombatRound): Boolean {
+        if (round.isRoundComplete) return true
+        val qi = round.queueIndexOf(initIdx)
+        if (qi < 0) return true
+        return qi < round.queuePos
+    }
+
+    private fun displayedSlotFor(entry: InitiativeEntry, round: CombatRound): Int {
+        val wr = round.waitReinsert
+        if (wr != null && wr.entry === entry && wr.progress > 0f) {
+            val p = wr.progress.coerceIn(0f, 1f)
+            return lerp(-WAIT_OFFSCREEN_SLOTS, wr.toDisplayedSlot.toFloat(), p).toInt()
+        }
+        return round.displayedSlotOf(entry)
     }
 
     private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t.coerceIn(0f, 1f)
@@ -501,6 +511,7 @@ class TurnOrderBarView @JvmOverloads constructor(
 
         /** Slide distance, expressed in (slot + gap) units. 2 = clears off-screen comfortably. */
         private const val SLIDE_SLOTS_FACTOR = 2f
+        private const val WAIT_OFFSCREEN_SLOTS = 0.9f
 
         /**
          * Drop distance for the DEFEATED slide-down, in slot

@@ -178,10 +178,6 @@ object FloorGenerator {
                 "(should be 0 when end_room_* covers every orientation).",
         )
 
-        // Entrance was revealed before any neighbor existed; fold in
-        // the one-room-ahead lookahead now that every adjacent
-        // placement is in place.
-        floor.applyAdjacentLookahead()
         floor.assignLockKeyCarriers(rng)
 
         return floor

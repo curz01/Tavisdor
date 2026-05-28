@@ -344,6 +344,9 @@ object SkillCatalog {
 
     // ---------- Public lookup API ----------
 
+    const val MAGE_EARTH_1_ID: String = "mage_earth_1"
+    const val MAGE_FIRE_1_ID: String = "mage_fire_1"
+
     /**
      * Stable id of the universal basic Attack every hero knows. Kept
      * as a constant so combat / save-load code can reference it

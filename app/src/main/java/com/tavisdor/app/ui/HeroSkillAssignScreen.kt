@@ -6,6 +6,7 @@ import android.graphics.Typeface
 import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.content.res.AppCompatResources
@@ -30,7 +31,8 @@ import com.tavisdor.app.skills.SkillCastType
  * A hero may stage one main-action skill (green border) and one optional
  * [NA] free-action skill (yellow border) at the same time. Confirm or
  * the upper-right close control commits the staging and dismisses the
- * panel (with a reminder dialog if only a free-action is staged).
+ * panel. When only a free-action is staged, Action still resolves the
+ * hero's basic Attack as the main action.
  */
 class HeroSkillAssignScreen(
     private val root: ViewGroup,
@@ -41,6 +43,7 @@ class HeroSkillAssignScreen(
     private val panelHost: View = root.findViewById(R.id.heroSkillAssignPanelHost)
     private val tvHeader: TextView = root.findViewById(R.id.tvHeroSkillAssignHeader)
     private val tvMana: TextView = root.findViewById(R.id.tvHeroSkillAssignMana)
+    private val btnWait: ImageButton = root.findViewById(R.id.btnHeroSkillAssignWait)
     private val btnClose: MaterialButton = root.findViewById(R.id.btnHeroSkillAssignClose)
     private val btnConfirm: MaterialButton = root.findViewById(R.id.btnHeroSkillAssignConfirm)
     private val listOffensive: LinearLayout = root.findViewById(R.id.heroSkillAssignOffensiveList)
@@ -52,10 +55,17 @@ class HeroSkillAssignScreen(
     private var slot: Int = -1
     private var hero: Hero? = null
 
+    var onWaitTapped: (() -> Unit)? = null
+
     init {
         panelHost.setOnClickListener { /* consume */ }
+        btnWait.setOnClickListener { onWaitTapped?.invoke() }
         btnClose.setOnClickListener { commitAndDismiss() }
         btnConfirm.setOnClickListener { commitAndDismiss() }
+    }
+
+    fun setWaitVisible(visible: Boolean) {
+        btnWait.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
     val isVisible: Boolean get() = root.visibility == View.VISIBLE
@@ -91,21 +101,7 @@ class HeroSkillAssignScreen(
 
     /** Commits staged skills and closes the panel (used by Confirm, X, and back). */
     fun commitAndDismiss() {
-        if (needsMainActionReminder()) {
-            showMainActionReminderDialog()
-            return
-        }
         hide()
-    }
-
-    private fun needsMainActionReminder(): Boolean =
-        game.selectedFreeActionSkillFor(slot) != null && !game.hasExplicitMainStaged(slot)
-
-    private fun showMainActionReminderDialog() {
-        AlertDialog.Builder(ctx)
-            .setMessage(R.string.hero_skill_assign_need_main_action)
-            .setPositiveButton(R.string.hero_skill_assign_passive_ok) { _, _ -> hide() }
-            .show()
     }
 
     private fun populateList(

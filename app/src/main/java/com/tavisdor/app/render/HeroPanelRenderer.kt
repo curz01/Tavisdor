@@ -694,14 +694,18 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         game: Game?,
     ) {
         val g = game ?: return
-        val staged = g.stagedSkillsForPanel(heroSlot)
-        if (staged.isEmpty()) return
+        val icons = ArrayList<String>(3)
+        if (g.isHeroWaiting(heroSlot)) icons += WAIT_ICON_ASSET
+        for (skill in g.stagedSkillsForPanel(heroSlot)) {
+            actionIconAssetFor(skill)?.let { icons += it }
+        }
+        if (icons.isEmpty()) return
 
         val maxH = statusRect.height()
         if (maxH <= 0f) return
 
         val gap = dp(4f)
-        val count = staged.size
+        val count = icons.size
         val slotW = (statusRect.width() - gap * (count - 1).coerceAtLeast(0)) / count
         val iconSize = min(maxH, slotW)
         if (iconSize <= 0f) return
@@ -710,8 +714,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         val y = statusRect.top + (maxH - iconSize) / 2f
         val dst = RectF()
 
-        for (skill in staged) {
-            val asset = actionIconAssetFor(skill) ?: continue
+        for (asset in icons) {
             val bmp = loadActionIcon(asset) ?: continue
             dst.set(x, y, x + iconSize, y + iconSize)
             canvas.drawBitmap(bmp, actionIconSrcRect(bmp), dst, actionIconPaint)
@@ -800,6 +803,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         private const val TAG = "HeroPanelRenderer"
 
         private const val ACTION_ATTACK_ASSET = "action_attack"
+        private const val WAIT_ICON_ASSET = "wait"
         private const val ACTION_GUARD_ASSET = "action_guard"
 
         /** Always 4 hero slots; cached so the per-slot state arrays stay sized correctly. */

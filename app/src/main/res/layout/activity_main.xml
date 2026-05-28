@@ -119,10 +119,14 @@
           between the dungeon view and the hero panel. Equal-weight
           MaterialButtons share the full screen width.
         -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/action_bar_height">
+
         <LinearLayout
             android:id="@+id/actionBar"
             android:layout_width="match_parent"
-            android:layout_height="@dimen/action_bar_height"
+            android:layout_height="match_parent"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingHorizontal="@dimen/action_bar_padding_horizontal"
@@ -154,6 +158,20 @@
                 android:layout_weight="1"
                 android:text="@string/action_bar_items" />
         </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/btnActionBarWait"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="start|center_vertical"
+            android:layout_marginStart="@dimen/action_bar_padding_horizontal"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/combat_wait_button"
+            android:padding="4dp"
+            android:scaleType="fitCenter"
+            android:visibility="gone" />
+
+        </FrameLayout>
 
         <!-- Persistent bottom panel: 2x2 hero portraits, front-line top row, back-line bottom row. -->
         <com.tavisdor.app.HeroPanelView

@@ -63,6 +63,8 @@
     <!-- Action button feedback / errors. -->
     <string name="action_bar_action_no_hero">Tap a hero\'s ACT / GRD / SPL first.</string>
     <string name="action_bar_action_fired">%1$s used %2$s. (combat not implemented yet)</string>
+    <string name="combat_wait_button">Wait</string>
+    <string name="combat_wait_unavailable">No ally is waiting to act after you.</string>
     <string name="action_bar_action_combat_not_your_turn">Wait for your turn.</string>
     <string name="action_bar_action_combat_invalid">Action refused (not enough MP, no target, or not your turn).</string>
     <string name="action_bar_items_unavailable">Inventory - coming soon.</string>
@@ -135,7 +137,7 @@
     <string name="hero_skill_assign_no_action_part">[NA]</string>
     <string name="hero_skill_assign_need_main_action">Select a main action skill as well (green).</string>
     <string name="hero_skill_assign_insufficient_mp">Not enough mana to use both staged skills.</string>
-    <string name="combat_target_pick_enemy">Tap a highlighted enemy to attack.</string>
+    <string name="combat_target_pick_enemy">Tap a highlighted enemy to attack or cast.</string>
 
     <!-- Heal target picker (Action button in combat with a Heal skill
          staged). %1$s is the skill display name (e.g. "Heal II"). -->

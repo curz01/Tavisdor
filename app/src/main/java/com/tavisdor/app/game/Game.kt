@@ -21,6 +21,10 @@ import com.tavisdor.app.render.Camera
 import com.tavisdor.app.render.PartyLungeGateway
 import com.tavisdor.app.render.WeaponAttackFxPlayer
 import com.tavisdor.app.render.WeaponFxGateway
+import com.tavisdor.app.render.DefenderSpellFxGateway
+import com.tavisdor.app.render.EarthIImpactFxPlayer
+import com.tavisdor.app.render.FireIImpactFxPlayer
+import android.graphics.RectF
 import com.tavisdor.app.render.WeaponFxRequest
 import com.tavisdor.app.save.SaveData
 import com.tavisdor.app.save.SaveStore
@@ -61,6 +65,8 @@ class Game(
 
     /** Attack weapon sprites played over the dungeon grid during combat. */
     private val weaponAttackFxPlayer = WeaponAttackFxPlayer(context.assets)
+    private val earthIImpactFxPlayer = EarthIImpactFxPlayer(context.assets)
+    private val fireIImpactFxPlayer = FireIImpactFxPlayer(context.assets)
 
     private data class PartyLungeAnim(
         val from: Cell,
@@ -79,6 +85,50 @@ class Game(
 
         override val isPlaying: Boolean
             get() = weaponAttackFxPlayer.isActive
+    }
+
+    val defenderSpellFxGateway: DefenderSpellFxGateway = object : DefenderSpellFxGateway {
+        override fun startEarthI(target: Enemy, onComplete: () -> Unit): Boolean =
+            earthIImpactFxPlayer.start(target, onComplete)
+
+        override fun startFireI(target: Enemy, onComplete: () -> Unit): Boolean =
+            fireIImpactFxPlayer.start(target, onComplete)
+
+        override val isPlaying: Boolean
+            get() = earthIImpactFxPlayer.isActive || fireIImpactFxPlayer.isActive
+
+        override fun targets(enemy: Enemy): Boolean =
+            earthIImpactFxPlayer.targets(enemy) || fireIImpactFxPlayer.targets(enemy)
+
+        override fun shakeOffsetPx(enemy: Enemy, cellPx: Float): Pair<Float, Float> =
+            earthIImpactFxPlayer.shakeOffsetPx(enemy, cellPx)
+
+        override fun drawBehindEnemy(
+            canvas: android.graphics.Canvas,
+            enemy: Enemy,
+            camCx: Float,
+            camCy: Float,
+            cellPx: Float,
+            viewCx: Float,
+            viewCy: Float,
+        ) {
+            earthIImpactFxPlayer.drawBehindEnemy(canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy)
+        }
+
+        override fun drawInFrontOfEnemy(
+            canvas: android.graphics.Canvas,
+            enemy: Enemy,
+            camCx: Float,
+            camCy: Float,
+            cellPx: Float,
+            viewCx: Float,
+            viewCy: Float,
+            enemySpriteRect: RectF?,
+        ) {
+            fireIImpactFxPlayer.drawInFrontOfEnemy(
+                canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy, enemySpriteRect,
+            )
+        }
     }
 
     private val partyLungeGateway: PartyLungeGateway = object : PartyLungeGateway {
@@ -102,6 +152,11 @@ class Game(
         val y = anim.from.y + (anim.to.y - anim.from.y) * t
         return x to y
     }
+
+    private fun isCombatVisualFxActive(): Boolean =
+        weaponAttackFxPlayer.isActive ||
+            earthIImpactFxPlayer.isActive ||
+            fireIImpactFxPlayer.isActive
 
     /** Drawn by [com.tavisdor.app.render.DungeonRenderer] on top of tokens. */
     fun drawWeaponAttackFx(
@@ -237,6 +292,27 @@ class Game(
     /** Fired when any hero's staged action / guard skills change (hero panel icons). */
     var onSkillStagingChanged: (() -> Unit)? = null
 
+    /** Heroes who used Wait this round (wait icon on the hero panel). */
+    private val heroesWaitingThisRound: MutableSet<Int> = mutableSetOf()
+
+    fun setHeroWaiting(slot: Int) {
+        require(slot in 0 until PARTY_SIZE) { "Invalid party slot: $slot" }
+        if (heroesWaitingThisRound.add(slot)) notifySkillStagingChanged()
+    }
+
+    fun clearHeroWaiting(slot: Int) {
+        if (heroesWaitingThisRound.remove(slot)) notifySkillStagingChanged()
+    }
+
+    fun clearAllHeroWaiting() {
+        if (heroesWaitingThisRound.isNotEmpty()) {
+            heroesWaitingThisRound.clear()
+            notifySkillStagingChanged()
+        }
+    }
+
+    fun isHeroWaiting(slot: Int): Boolean = slot in heroesWaitingThisRound
+
     /**
      * Fired when the player taps a valid enemy cell during target selection.
      * MainActivity commits the staged combat action here.
@@ -259,7 +335,10 @@ class Game(
         combat = next
         combatController = null
         weaponAttackFxPlayer.cancel()
+        earthIImpactFxPlayer.cancel()
+        fireIImpactFxPlayer.cancel()
         partyLungeAnim = null
+        clearAllHeroWaiting()
         if (next != null) {
             mode = Mode.COMBAT
             combatLog.clear()
@@ -293,6 +372,7 @@ class Game(
                         }
                     },
                     weaponFx = weaponFxGateway,
+                    defenderSpellFx = defenderSpellFxGateway,
                     partyLunge = partyLungeGateway,
                 )
             }
@@ -1111,10 +1191,12 @@ class Game(
         // whenever a redraw is warranted so the host can keep its
         // invalidate loop hot.
         if (mode == Mode.COMBAT) {
-            val controller = combatController ?: return weaponAttackFxPlayer.isActive
+            val controller = combatController ?: return isCombatVisualFxActive()
             val deltaMs = (dtSec * 1000f).toLong().coerceAtLeast(0L)
             var redraw = controller.tick(deltaMs)
             weaponAttackFxPlayer.tick(deltaMs)
+            earthIImpactFxPlayer.tick(deltaMs)
+            fireIImpactFxPlayer.tick(deltaMs)
             val lunge = partyLungeAnim
             if (lunge != null) {
                 lunge.elapsedMs += deltaMs
@@ -1123,7 +1205,7 @@ class Game(
                 }
                 redraw = true
             }
-            if (weaponAttackFxPlayer.isActive) redraw = true
+            if (isCombatVisualFxActive()) redraw = true
             return redraw
         }
         // While exploring, the renderer drives an idle "!" bounce

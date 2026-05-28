@@ -33,8 +33,9 @@ object CombatTargeting {
     )
 
     /**
-     * True when confirming this skill should close the assign panel and
-     * open the dungeon target picker (combat only).
+     * True when the player must pick an enemy on the dungeon map after
+     * tapping Action (combat only). Covers weapon attacks, melee skills,
+     * and elemental spells (Fire / Earth / etc.).
      */
     fun requiresEnemyTargetSelection(skill: Skill): Boolean {
         if (HealResolver.isHeal(skill)) return false
@@ -82,11 +83,12 @@ object CombatTargeting {
     }
 
     /**
-     * Builds per-cell highlights for every [Floor.revealedCells] entry.
+     * Builds per-cell highlights for every walkable cell the party can
+     * currently see ([Floor.isVisibleToParty]).
      */
     fun buildOverlayMap(floor: Floor, origin: Cell, skill: Skill): OverlayMap {
         val highlights = HashMap<Cell, TileHighlight>()
-        for (cell in floor.revealedCells) {
+        for (cell in floor.floorCells) {
             if (!floor.isVisibleToParty(cell)) continue
             highlights[cell] = when {
                 isTargetableEnemyCell(floor, origin, skill, cell) ->

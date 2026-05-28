@@ -246,58 +246,22 @@ class Floor(
     var partyCell: Cell
         get() = _partyCell
         set(value) {
-            if (_partyCell != value) {
-                _partyCell = value
-                invalidatePartyVisibility()
-            }
+            _partyCell = value
         }
 
     /**
-     * Cells the party can currently see: reachable walkable floor from
-     * [partyCell] without crossing a locked door. Locked doors act as
-     * walls for fog and enemy visibility.
+     * True when [c] may be drawn or targeted. A cell is visible iff its
+     * placement has been entered ([_revealedCells]), or it is a locked
+     * door on the border of explored territory (so the player can interact).
      */
-    private var _visibleToPartyCache: HashSet<Cell>? = null
-
     fun isVisibleToParty(c: Cell): Boolean {
-        ensureVisibleToPartyCache()
-        return c in _visibleToPartyCache!!
-    }
-
-    private fun invalidatePartyVisibility() {
-        _visibleToPartyCache = null
-    }
-
-    private fun ensureVisibleToPartyCache() {
-        if (_visibleToPartyCache != null) return
-        val visible = HashSet<Cell>()
-        if (_partyCell !in _floorCells) {
-            _visibleToPartyCache = visible
-            return
+        if (c in _revealedCells) return true
+        if (!isLockedDoor(c)) return false
+        for (delta in CARDINAL_NEIGHBORS) {
+            val n = Cell(c.x + delta.x, c.y + delta.y)
+            if (n in _revealedCells) return true
         }
-        val queue = ArrayDeque<Cell>()
-        visible += _partyCell
-        queue.addLast(_partyCell)
-        while (queue.isNotEmpty()) {
-            val cur = queue.removeFirst()
-            for (delta in CARDINAL_NEIGHBORS) {
-                val n = Cell(cur.x + delta.x, cur.y + delta.y)
-                if (n in visible) continue
-                if (isLockedDoor(n)) continue
-                if (n !in _floorCells) continue
-                visible += n
-                queue.addLast(n)
-            }
-        }
-        // Closed doors sit on the frontier: show the tile so the player
-        // can unlock it, but do not flood through into the room beyond.
-        for (c in visible.toList()) {
-            for (delta in CARDINAL_NEIGHBORS) {
-                val n = Cell(c.x + delta.x, c.y + delta.y)
-                if (isLockedDoor(n)) visible += n
-            }
-        }
-        _visibleToPartyCache = visible
+        return false
     }
 
     fun isFloor(c: Cell): Boolean = c in _floorCells
@@ -326,7 +290,6 @@ class Floor(
         val door = _doors[c] ?: return
         if (!door.locked) return
         door.locked = false
-        invalidatePartyVisibility()
     }
 
     /**
@@ -396,37 +359,15 @@ class Floor(
     /**
      * Marks [cell] as explored. Called from the per-step move loop.
      *
-     * Reveal rules:
-     *   1. Reveal every placement containing [cell] (the room(s) the
-     *      party just stepped into - normally one, but two when [cell]
-     *      is a connector shared between two rooms).
-     *   2. ONE-ROOM-AHEAD LOOKAHEAD: also reveal every placement that
-     *      shares any cell (i.e. a merge connector) with a placement
-     *      from step 1. This means as soon as you enter a room you
-     *      can also see every room directly attached to it, so the
-     *      exit arrows always sit on the BOUNDARY of what you can
-     *      see and not on the cell you're standing on. Walking
-     *      forward continuously slides that horizon outward.
+     * Reveal rules: reveal every placement containing [cell] (the room(s)
+     * the party just stepped into — normally one, but both when [cell] is
+     * a merge connector shared between two templates). No peek into
+     * neighboring placements until the party walks in.
      */
     fun recordVisited(cell: Cell) {
         _visitedCells += cell
-        val seed = _cellToPlacements[cell] ?: return
-        // Snapshot the seed indices: revealPlacement is idempotent but
-        // we want a stable list to iterate while we collect neighbors.
-        val direct = seed.toList()
-        for (i in direct) revealPlacement(i)
-        // Look one room ahead through any cell of the just-revealed
-        // placements that participates in more than one placement
-        // (those are the merge cells linking neighboring rooms).
-        for (i in direct) {
-            for (c in _placements[i]) {
-                val others = _cellToPlacements[c] ?: continue
-                if (others.size <= 1) continue
-                for (j in others) {
-                    if (j != i) revealPlacement(j)
-                }
-            }
-        }
+        val placementIndices = _cellToPlacements[cell] ?: return
+        for (i in placementIndices) revealPlacement(i)
     }
 
     /**
@@ -455,29 +396,6 @@ class Floor(
         if (_placementRevealed[idx]) return
         _placementRevealed[idx] = true
         _revealedCells += _placements[idx]
-    }
-
-    /**
-     * Re-applies the one-room-ahead lookahead rule to every currently
-     * revealed placement. Called by [FloorGenerator.generate] AFTER
-     * the pre-grow loop has added all initial rooms, because the
-     * entrance's [revealPlacement] in `init` runs before any
-     * neighbor exists so the lookahead inside [recordVisited]
-     * couldn't have seen them. Idempotent.
-     */
-    fun applyAdjacentLookahead() {
-        val newlyReveal = HashSet<Int>()
-        for (i in _placements.indices) {
-            if (!_placementRevealed[i]) continue
-            for (c in _placements[i]) {
-                val others = _cellToPlacements[c] ?: continue
-                if (others.size <= 1) continue
-                for (j in others) {
-                    if (j != i && !_placementRevealed[j]) newlyReveal.add(j)
-                }
-            }
-        }
-        for (i in newlyReveal) revealPlacement(i)
     }
 
     /**

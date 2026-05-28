@@ -351,8 +351,7 @@ class DungeonRenderer(private val assets: AssetManager) {
         val maxCy = (cy + halfCellsY).toInt() + 1
 
         // ----- Draw floor cells -----
-        // Fog-of-war: draw only cells the party can reach without crossing
-        // a locked door (plus the usual placement reveal bookkeeping).
+        // Fog-of-war: only placements the party has entered are drawn.
         for (c in floor.floorCells) {
             if (c.x < minCx || c.x > maxCx || c.y < minCy || c.y > maxCy) continue
             if (!floor.isVisibleToParty(c)) continue
@@ -424,7 +423,7 @@ class DungeonRenderer(private val assets: AssetManager) {
             for (d in CARDINAL_DIRECTIONS) {
                 val neighbor = Cell(c.x + d.x, c.y + d.y)
                 val neighborIsFloor = neighbor in floor.floorCells
-                if (neighborIsFloor && !floor.isVisibleToParty(neighbor)) {
+                if (neighborIsFloor && !floor.isRevealed(neighbor)) {
                     shouldMark = true
                     break
                 }
@@ -474,13 +473,34 @@ class DungeonRenderer(private val assets: AssetManager) {
         // token stays visually dominant in the rare case the party
         // and an enemy end up on the same cell (shouldn't happen,
         // but safer than the reverse z-order).
+        val defenderFx = game.defenderSpellFxGateway
         for (enemy in floor.enemies) {
             if (enemy.hp <= 0) continue
             val ec = enemy.cell
             if (ec.x < minCx || ec.x > maxCx || ec.y < minCy || ec.y > maxCy) continue
             if (!floor.isVisibleToParty(ec)) continue
-            val spriteRect = drawEnemy(canvas, game, enemy, cx, cy, cellPx, viewCx, viewCy)
+            if (defenderFx.targets(enemy)) {
+                defenderFx.drawBehindEnemy(canvas, enemy, cx, cy, cellPx, viewCx, viewCy)
+            }
+            val shake = defenderFx.shakeOffsetPx(enemy, cellPx)
+            val spriteRect = drawEnemy(
+                canvas = canvas,
+                game = game,
+                enemy = enemy,
+                camCx = cx,
+                camCy = cy,
+                cellPx = cellPx,
+                viewCx = viewCx,
+                viewCy = viewCy,
+                screenOffsetX = shake.first,
+                screenOffsetY = shake.second,
+            )
             drawEnemyHealthBar(canvas, spriteRect, enemy.hp, enemy.maxHp)
+            if (defenderFx.targets(enemy)) {
+                defenderFx.drawInFrontOfEnemy(
+                    canvas, enemy, cx, cy, cellPx, viewCx, viewCy, spriteRect,
+                )
+            }
         }
 
         // ----- Selected-enemy marker -----
@@ -542,7 +562,7 @@ class DungeonRenderer(private val assets: AssetManager) {
             skill = selection.skill,
         )
         val inset = cellPx * 0.06f
-        for (cell in floor.revealedCells) {
+        for (cell in floor.floorCells) {
             if (cell.x < minCx || cell.x > maxCx || cell.y < minCy || cell.y > maxCy) continue
             if (!floor.isVisibleToParty(cell)) continue
             val highlight = CombatTargeting.highlightForCell(overlay, cell)
@@ -789,10 +809,12 @@ class DungeonRenderer(private val assets: AssetManager) {
         camCx: Float, camCy: Float,
         cellPx: Float,
         viewCx: Float, viewCy: Float,
+        screenOffsetX: Float = 0f,
+        screenOffsetY: Float = 0f,
     ): RectF {
         val (vx, vy) = enemyVisualPosition(game, enemy)
-        val cellTopLeftX = (vx - camCx) * cellPx + viewCx
-        val cellTopLeftY = (vy - camCy) * cellPx + viewCy
+        val cellTopLeftX = (vx - camCx) * cellPx + viewCx + screenOffsetX
+        val cellTopLeftY = (vy - camCy) * cellPx + viewCy + screenOffsetY
         val spriteRect = computeEnemySpriteRect(enemy, cellTopLeftX, cellTopLeftY, cellPx)
 
         val sprite = currentWalkSprite(enemy)

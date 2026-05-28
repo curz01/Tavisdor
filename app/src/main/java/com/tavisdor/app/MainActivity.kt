@@ -1,9 +1,11 @@
 package com.tavisdor.app
 
 import android.app.AlertDialog
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageButton
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -80,6 +82,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnActionBarMenu: MaterialButton
     private lateinit var btnActionBarAction: MaterialButton
     private lateinit var btnActionBarItems: MaterialButton
+    private lateinit var btnActionBarWait: ImageButton
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -128,6 +131,8 @@ class MainActivity : AppCompatActivity() {
         btnActionBarMenu = findViewById(R.id.btnActionBarMenu)
         btnActionBarAction = findViewById(R.id.btnActionBarAction)
         btnActionBarItems = findViewById(R.id.btnActionBarItems)
+        btnActionBarWait = findViewById(R.id.btnActionBarWait)
+        loadWaitButtonIcon(btnActionBarWait)
 
         gameView.attachGame(game)
         // Keep the turn-order strip AND the hero panel in lockstep
@@ -149,6 +154,7 @@ class MainActivity : AppCompatActivity() {
             if (needsRedraw && game.combat != null) {
                 turnOrderBar.invalidate()
             }
+            refreshCombatWaitButtons()
         }
         heroPanel.attachGame(game)
         heroPanel.onHeroCellTapped = { slot -> onHeroCellTapped(slot) }
@@ -156,6 +162,7 @@ class MainActivity : AppCompatActivity() {
         btnActionBarMenu.setOnClickListener { onActionBarMenuTapped() }
         btnActionBarAction.setOnClickListener { onActionBarActionTapped() }
         btnActionBarItems.setOnClickListener { onActionBarItemsTapped() }
+        btnActionBarWait.setOnClickListener { onCombatWaitTapped() }
 
         titleScreen = TitleScreen(
             root = titleOverlay,
@@ -180,7 +187,9 @@ class MainActivity : AppCompatActivity() {
                 heroPanel.invalidate()
                 gameView.invalidate()
             }
+            it.onWaitTapped = { onCombatWaitTapped() }
         }
+        loadWaitButtonIcon(heroSkillAssignOverlay.findViewById(R.id.btnHeroSkillAssignWait))
         game.onCombatTargetSelectionChanged = {
             gameView.invalidate()
             if (game.isCombatTargetSelectionActive()) {
@@ -254,6 +263,7 @@ class MainActivity : AppCompatActivity() {
         game.endCombatTargetSelection()
         val hero = game.party?.heroes?.getOrNull(slot) ?: return
         heroSkillAssignScreen.show(slot, hero)
+        refreshCombatWaitButtons()
     }
 
     // ---------------------------------------------------------------------
@@ -303,14 +313,6 @@ class MainActivity : AppCompatActivity() {
 
         if (game.projectedStagedMpCost(slot) > caster.mp) return
 
-        if (game.selectedFreeActionSkillFor(slot) != null && !game.hasExplicitMainStaged(slot)) {
-            AlertDialog.Builder(this)
-                .setMessage(R.string.hero_skill_assign_need_main_action)
-                .setPositiveButton(R.string.hero_skill_assign_passive_ok, null)
-                .show()
-            return
-        }
-
         if (HealResolver.isHeal(main)) {
             if (main.mpCost > caster.mp) return
             showHealTargetPicker(slot, main)
@@ -321,25 +323,28 @@ class MainActivity : AppCompatActivity() {
             !controller.anyEnemyReachable(main)
         ) {
             if (!controller.commitHeroDefend(slot, auto = true)) return
+            game.clearHeroWaiting(slot)
             game.clearSkillStaging(slot)
             refreshCombatViews()
             return
         }
 
         if (CombatTargeting.requiresEnemyTargetSelection(main)) {
-            val floor = game.floor
-            val selected = game.selectedEnemy
-            if (selected != null && floor != null &&
-                CombatTargeting.isTargetableEnemyCell(
-                    floor,
-                    floor.partyCell,
-                    main,
-                    selected.cell,
-                )
-            ) {
-                game.endCombatTargetSelection()
-                commitStagedCombatAction(slot, selected)
-                return
+            val floor = game.floor ?: return
+            val selection = game.combatTargetSelection
+            if (selection != null && selection.heroSlot == slot && selection.skill.id == main.id) {
+                val selected = game.selectedEnemy
+                if (selected != null &&
+                    CombatTargeting.isTargetableEnemyCell(
+                        floor,
+                        floor.partyCell,
+                        main,
+                        selected.cell,
+                    )
+                ) {
+                    commitStagedCombatAction(slot, selected)
+                    return
+                }
             }
             game.beginCombatTargetSelection(slot, main)
             return
@@ -355,21 +360,58 @@ class MainActivity : AppCompatActivity() {
     private fun commitStagedCombatAction(slot: Int, preferredTarget: Enemy?) {
         val controller = game.combatController ?: return
         val freeAction = game.selectedFreeActionSkillFor(slot)
-        val stagedMain = game.stagedMainSkillOrNull(slot)
+        val main = game.selectedSkillFor(slot) ?: return
 
+        game.clearHeroWaiting(slot)
         if (freeAction != null) {
             if (!controller.commitHeroAction(slot, freeAction, preferredTarget)) return
         }
-        if (!controller.commitHeroAction(slot, stagedMain, preferredTarget)) return
+        if (!controller.commitHeroAction(slot, main, preferredTarget)) return
         game.clearSkillStaging(slot)
         game.endCombatTargetSelection()
         refreshCombatViews()
+    }
+
+    private fun onCombatWaitTapped() {
+        val controller = game.combatController ?: return
+        if (!controller.awaitingHeroInput) return
+        val slot = controller.currentHeroSlot ?: return
+        if (!controller.canHeroWait(slot)) {
+            AppToast.show(this, R.string.combat_wait_unavailable)
+            return
+        }
+        if (!controller.commitHeroWait(slot)) return
+        game.setHeroWaiting(slot)
+        game.endCombatTargetSelection()
+        heroSkillAssignScreen.hide()
+        refreshCombatViews()
+    }
+
+    private fun refreshCombatWaitButtons() {
+        val controller = game.combatController
+        val slot = controller?.currentHeroSlot
+        val canWait = controller != null &&
+            slot != null &&
+            controller.awaitingHeroInput &&
+            controller.canHeroWait(slot)
+        val vis = if (canWait) View.VISIBLE else View.GONE
+        btnActionBarWait.visibility = vis
+        heroSkillAssignScreen.setWaitVisible(canWait)
+    }
+
+    private fun loadWaitButtonIcon(button: ImageButton) {
+        runCatching {
+            assets.open("sprites/wait.png").use { stream ->
+                BitmapFactory.decodeStream(stream)?.let { button.setImageBitmap(it) }
+            }
+        }
     }
 
     private fun refreshCombatViews() {
         gameView.invalidate()
         heroPanel.invalidate()
         turnOrderBar.invalidate()
+        refreshCombatWaitButtons()
     }
 
     /**
@@ -395,7 +437,7 @@ class MainActivity : AppCompatActivity() {
             targets = targets,
             onTargetChosen = { targetSlot ->
                 if (game.commitHeroHealInCombat(casterSlot, skill, targetSlot)) {
-                    // Reset stage so next turn defaults back to basic Attack.
+                    game.clearHeroWaiting(casterSlot)
                     game.clearSkillStaging(casterSlot)
                     // Nudge views so the new HP / highlight reflect
                     // immediately instead of waiting a frame.
@@ -514,6 +556,7 @@ class MainActivity : AppCompatActivity() {
         // leave it visible after the encounter ends - the player
         // explicitly wants to be able to scroll back through what
         // just happened, so we don't toggle this back to GONE.
+        refreshCombatWaitButtons()
         if (combat != null) {
             combatLogContainer.visibility = View.VISIBLE
             refreshCombatLogScrollButtons()

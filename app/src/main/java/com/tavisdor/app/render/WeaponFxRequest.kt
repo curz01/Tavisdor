@@ -1,7 +1,10 @@
 package com.tavisdor.app.render
 
+import com.tavisdor.app.combat.HealResolver
 import com.tavisdor.app.dungeon.Cell
+import com.tavisdor.app.enemies.Element
 import com.tavisdor.app.items.WeaponType
+import com.tavisdor.app.skills.Skill
 
 /**
  * Describes one weapon / spell attack visual to play between an
@@ -36,6 +39,13 @@ data class WeaponFxRequest(
     val durationMsOverride: Long? = null,
     /** When set, bow / fire-arrow kinds play multiple volleys instead of one shot. */
     val bowVolleyPlan: BowVolleyPlan? = null,
+    /**
+     * Animated overlay frames drawn at the staff tip during
+     * [WeaponFxKind.STAFF_SPELL_RISE] (e.g. `heali_1`, `earthi_2`).
+     */
+    val spellFlowFrames: List<String> = emptyList(),
+    /** When true, pivot the cast on the party token center instead of the cell center. */
+    val castFromPartyIcon: Boolean = false,
 )
 
 /**
@@ -49,7 +59,7 @@ enum class WeaponFxKind {
     SPEAR_THRUST,
     /** Staff swung as a melee weapon - same arc as [MELEE_ARC]. */
     STAFF_MELEE_ARC,
-    /** Staff spell cast - slow rise with a soft glow pulse. */
+    /** Staff spell cast - upright slow rise from the party icon + flow at the tip. */
     STAFF_SPELL_RISE,
     /** Dagger two-hit: dagger_r thrust, then dagger_l. */
     DAGGER_COMBO,
@@ -78,13 +88,26 @@ object WeaponFxCatalog {
     }
 
     /**
-     * Spell visuals: only Fire Arrow uses [fire_arrow] for now.
-     * Other spell skills reuse staff rise until their own assets land.
+     * Spell visuals: archer Fire Arrow uses [fire_arrow]; mage heals
+     * and elemental spells use [STAFF_SPELL_RISE].
      */
     fun kindForSpell(weaponType: WeaponType?, isFireArrowSkill: Boolean): WeaponFxKind {
         if (isFireArrowSkill) return WeaponFxKind.FIRE_PROJECTILE
-        if (weaponType == WeaponType.STAFF) return WeaponFxKind.STAFF_SPELL_RISE
         return WeaponFxKind.STAFF_SPELL_RISE
+    }
+
+    /** Tip overlay cycle for [WeaponFxKind.STAFF_SPELL_RISE], keyed by spell. */
+    fun spellFlowFrames(skill: Skill): List<String> {
+        if (HealResolver.isHeal(skill)) {
+            return listOf("heali_1", "heali_2")
+        }
+        return when (skill.element) {
+            Element.FIRE -> listOf("fireball1", "fireball2")
+            Element.EARTH -> listOf("earthi_1", "earthi_2", "earthi_3")
+            Element.WATER -> listOf("ice_arrow")
+            Element.AIR -> listOf("thunder_arrow")
+            else -> emptyList()
+        }
     }
 
     fun assetName(kind: WeaponFxKind, phase: String? = null): String = when (kind) {

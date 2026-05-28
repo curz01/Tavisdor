@@ -45,6 +45,18 @@
                 tools:text="Mana: 12/24" />
         </LinearLayout>
 
+        <ImageButton
+            android:id="@+id/btnHeroSkillAssignWait"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="start|center_vertical"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/combat_wait_button"
+            android:padding="4dp"
+            android:scaleType="fitCenter"
+            android:visibility="gone"
+            tools:visibility="visible" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnHeroSkillAssignClose"
             style="@style/Widget.Material3.Button.TextButton"

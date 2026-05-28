@@ -99,7 +99,18 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
                 drawThrust(canvas, "spear", attacker, defender, aimDeg, scale, elapsedMs, SPEAR_MS)
             }
             WeaponFxKind.STAFF_SPELL_RISE -> {
-                drawStaffSpell(canvas, attacker, aimDeg, scale, elapsedMs, STAFF_SPELL_MS, density)
+                drawStaffSpellCast(
+                    canvas = canvas,
+                    pivot = if (request.castFromPartyIcon) {
+                        partyIconCenter(attacker.first, attacker.second, cellPx)
+                    } else {
+                        attacker
+                    },
+                    staffHeight = scale,
+                    flowFrames = request.spellFlowFrames,
+                    elapsed = elapsedMs,
+                    duration = durationMs(request),
+                )
             }
             WeaponFxKind.DAGGER_COMBO -> {
                 drawDaggerCombo(canvas, attacker, defender, aimDeg, scale, elapsedMs)
@@ -270,23 +281,73 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         drawWeaponAtPivot(canvas, bmp, px, py, aimDeg, scale)
     }
 
-    /** Staff rises slowly while a soft glow pulses at the pivot. */
-    private fun drawStaffSpell(
+    /**
+     * Gandalf-style cast: [staff.png] stays upright, rises from the
+     * party icon center to ~98% of its drawn height while flow
+     * frames cycle at the staff tip.
+     */
+    private fun drawStaffSpellCast(
         canvas: Canvas,
         pivot: Pair<Float, Float>,
-        aimDeg: Float,
-        scale: Float,
+        staffHeight: Float,
+        flowFrames: List<String>,
         elapsed: Long,
         duration: Long,
-        density: Float,
     ) {
-        val bmp = bitmap("staff") ?: return
-        val t = (elapsed.toFloat() / duration).coerceIn(0f, 1f)
-        val rise = cellPxEquivalent(scale) * 0.35f * easeInOutQuad(t)
-        val glowR = scale * 0.55f * (0.6f + 0.4f * sin(t * Math.PI.toFloat() * 3f))
-        staffGlowPaint.alpha = (80 + 60 * sin(t * Math.PI.toFloat() * 4f)).toInt().coerceIn(40, 140)
-        canvas.drawCircle(pivot.first, pivot.second - rise * 0.5f, glowR, staffGlowPaint)
-        drawWeaponAtPivot(canvas, bmp, pivot.first, pivot.second - rise, aimDeg, scale)
+        val staffBmp = bitmap("staff") ?: return
+        val t = (elapsed.toFloat() / duration.coerceAtLeast(1L)).coerceIn(0f, 1f)
+        val eased = easeInOutQuad(t)
+        val riseDistance = staffHeight * STAFF_CAST_RISE_HEIGHT_MULTIPLIER * eased
+        val pivotY = pivot.second - riseDistance
+        drawBitmapUpright(canvas, staffBmp, pivot.first, pivotY, staffHeight)
+
+        val tipY = pivotY - staffHeight
+        val loadedFlow = flowFrames.mapNotNull { bitmap(it) }
+        if (loadedFlow.isNotEmpty()) {
+            val frameIdx = (
+                (elapsed / SPELL_FLOW_FRAME_MS).toInt() % loadedFlow.size + loadedFlow.size
+                ) % loadedFlow.size
+            val flowBmp = loadedFlow[frameIdx]
+            val flowH = staffHeight * SPELL_FLOW_HEIGHT_FRACTION
+            drawBitmapUpright(canvas, flowBmp, pivot.first, tipY, flowH)
+        } else {
+            val glowR = staffHeight * 0.22f * (0.7f + 0.3f * sin(t * Math.PI.toFloat() * 4f))
+            staffGlowPaint.alpha = (70 + 50 * sin(t * Math.PI.toFloat() * 5f)).toInt().coerceIn(35, 130)
+            canvas.drawCircle(pivot.first, tipY, glowR, staffGlowPaint)
+        }
+    }
+
+    /** Matches [DungeonRenderer] party token vertical placement. */
+    private fun partyIconCenter(cellCenterX: Float, cellCenterY: Float, cellPx: Float): Pair<Float, Float> {
+        val baseOffset = cellPx * PARTY_ICON_BASE_OFFSET_FRACTION
+        val iconHeight = cellPx * PARTY_ICON_HEIGHT_FRACTION
+        val cellTop = cellCenterY - cellPx * 0.5f
+        val restingBaseY = cellTop + cellPx - baseOffset
+        val iconTop = restingBaseY - iconHeight
+        val centerY = (iconTop + restingBaseY) * 0.5f
+        return cellCenterX to centerY
+    }
+
+    /**
+     * Draws [bmp] upright (file orientation) with its bottom center at
+     * ([pivotX], [pivotY]).
+     */
+    private fun drawBitmapUpright(
+        canvas: Canvas,
+        bmp: Bitmap,
+        pivotX: Float,
+        pivotY: Float,
+        targetHeight: Float,
+    ) {
+        val aspect = bmp.width.toFloat() / bmp.height.coerceAtLeast(1)
+        val h = targetHeight
+        val w = h * aspect
+        canvas.save()
+        canvas.translate(pivotX, pivotY)
+        srcRect.set(0, 0, bmp.width, bmp.height)
+        dstRect.set(-w / 2f, -h, w / 2f, 0f)
+        canvas.drawBitmap(bmp, srcRect, dstRect, drawPaint)
+        canvas.restore()
     }
 
     /** dagger_r thrust, then dagger_l thrust along the aim line. */
@@ -531,8 +592,6 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
     private fun aimDegrees(ax: Float, ay: Float, dx: Float, dy: Float): Float =
         Math.toDegrees(atan2((dy - ay).toDouble(), (dx - ax).toDouble())).toFloat()
 
-    private fun cellPxEquivalent(scale: Float): Float = scale / SPRITE_HEIGHT_FRACTION
-
     private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t
 
     private fun easeOutQuad(t: Float): Float = 1f - (1f - t) * (1f - t)
@@ -554,7 +613,15 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
 
         private const val MELEE_ARC_MS = 420L
         private const val SPEAR_MS = 360L
-        private const val STAFF_SPELL_MS = 880L
+        private const val STAFF_SPELL_MS = 1150L
+        /** Rise distance = staff draw height × this. */
+        private const val STAFF_CAST_RISE_HEIGHT_MULTIPLIER = 0.975f
+        private const val SPELL_FLOW_FRAME_MS = 180L
+        private const val SPELL_FLOW_HEIGHT_FRACTION = 0.55f
+
+        private const val PARTY_ICON_WIDTH_FRACTION = 1.1f
+        private const val PARTY_ICON_HEIGHT_FRACTION = 1.298f
+        private const val PARTY_ICON_BASE_OFFSET_FRACTION = 0.18f
         private const val DAGGER_HIT_MS = 260L
         private const val BOW_FRAME_1_MS = 250L
         private const val BOW_FRAME_2_MS = 250L

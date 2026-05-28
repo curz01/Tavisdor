@@ -45,6 +45,7 @@ dungeon background.
 | `monster_placeholder.png` | 64 x 64 | Default monster sprite until per-monster art exists. | Once you add specific monsters (slime, skeleton, etc.) add `monster_<name>.png` files of the same size; this generic file stays as the fallback. |
 | `action_attack.png` | 32 x 32 (suggested) | Staged offensive / ACTION-bucket skill on the hero panel (above HP bar). | Scaled to fit the status strip; keep the glyph readable at small size. |
 | `action_guard.png`  | 32 x 32 (suggested) | Staged defensive / GUARD-bucket skill (e.g. Rapid Fire, Defend). | Same layout as `action_attack`. |
+| `wait.png`            | 32 x 32 (suggested) | Combat Wait button (skill panel + action bar) and status icon after a hero defers. | Same layout as `action_attack`. |
 
 ---
 

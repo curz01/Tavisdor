@@ -170,14 +170,6 @@ class SkillPickerDialog(
             return
         }
 
-        if (!skill.costsAction && !game.hasExplicitMainStaged(slot)) {
-            AppToast.show(
-                context,
-                context.getString(R.string.hero_skill_assign_need_main_action),
-                duration = android.widget.Toast.LENGTH_LONG,
-            )
-        }
-
         refreshSelectionHighlight()
     }
 

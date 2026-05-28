@@ -11,6 +11,7 @@ import com.tavisdor.app.render.Camera
 import com.tavisdor.app.render.PartyLungeGateway
 import com.tavisdor.app.render.BowVolley
 import com.tavisdor.app.render.BowVolleyPlan
+import com.tavisdor.app.render.DefenderSpellFxGateway
 import com.tavisdor.app.render.WeaponFxCatalog
 import com.tavisdor.app.render.WeaponFxGateway
 import com.tavisdor.app.render.WeaponFxKind
@@ -127,6 +128,7 @@ class CombatController(
      * damage resolution is deferred until the FX completes.
      */
     private val weaponFx: WeaponFxGateway,
+    private val defenderSpellFx: DefenderSpellFxGateway,
     /** Host-owned party lunge tween (used by Fighter Charge). */
     private val partyLunge: PartyLungeGateway,
 ) {
@@ -248,7 +250,7 @@ class CombatController(
         // resolve at a steady cadence.
         if (camera.tick(deltaMs)) redraw = true
 
-        if (weaponFx.isPlaying || attackFxPending) redraw = true
+        if (weaponFx.isPlaying || defenderSpellFx.isPlaying || attackFxPending) redraw = true
 
         // Drive the strip's leave / defeat / shift animations.
         // The view reads CombatRound state for rendering but does
@@ -493,11 +495,11 @@ class CombatController(
      */
     private fun countPendingHeroTurnsAfterCurrent(): Int {
         val round = combat.round
-        val acting = round.actingIndex
-        if (acting < 0) return 0
+        val pos = round.queuePos
+        if (pos !in round.roundQueue.indices) return 0
         var n = 0
-        for (i in (acting + 1) until combat.initiative.size) {
-            val entry = combat.initiative[i]
+        for (i in (pos + 1) until round.roundQueue.size) {
+            val entry = combat.initiative[round.roundQueue[i]]
             if (entry.kind != InitiativeEntry.Kind.HERO) continue
             if (entry in round.removedEntries) continue
             val hero = combat.party.heroes.getOrNull(entry.index) ?: continue
@@ -505,6 +507,34 @@ class CombatController(
             n++
         }
         return n
+    }
+
+    /**
+     * Defer this hero's turn until after every other pending hero
+     * this round. Requires at least one later living hero in the
+     * queue.
+     */
+    fun commitHeroWait(slot: Int): Boolean {
+        if (ended || !awaitingHeroInput || attackFxPending) return false
+        if (currentHeroSlot != slot) return false
+        val hero = combat.party.heroes.getOrNull(slot) ?: return false
+        if (!hero.isAlive) return false
+        if (countPendingHeroTurnsAfterCurrent() <= 0) return false
+        if (!combat.round.completeCurrentActionWithWait()) return false
+
+        log.append(CombatLogEntry.Info("${hero.name} waits."))
+        awaitingHeroInput = false
+        currentHeroSlot = null
+        awaitingLeaver = true
+        return true
+    }
+
+    fun canHeroWait(slot: Int): Boolean {
+        if (ended || !awaitingHeroInput || attackFxPending) return false
+        if (currentHeroSlot != slot) return false
+        val hero = combat.party.heroes.getOrNull(slot) ?: return false
+        if (!hero.isAlive) return false
+        return countPendingHeroTurnsAfterCurrent() > 0
     }
 
     /** Living enemies whose cell is Manhattan-1 to [cell]. */
@@ -652,12 +682,14 @@ class CombatController(
         }
 
         withAttackFx(buildHeroStrikeFx(hero, chosen, target, shotPlan)) {
-            if (multiArrow) {
-                resolveHeroActionMultiArrow(hero, chosen, target, shotPlan)
-            } else {
-                resolveHeroAction(hero, chosen, target)
+            withDefenderSpellFx(chosen, target) {
+                if (multiArrow) {
+                    resolveHeroActionMultiArrow(hero, chosen, target, shotPlan)
+                } else {
+                    resolveHeroAction(hero, chosen, target)
+                }
+                finishCurrentAction()
             }
-            finishCurrentAction()
         }
         return true
     }
@@ -1015,26 +1047,28 @@ class CombatController(
         val amount = HealResolver.amountFor(skill) ?: return false
         if (skill.mpCost > caster.mp) return false
 
-        caster.spendMana(skill.mpCost)
-        val restored = target.heal(amount)
-        log.append(
-            CombatLogEntry.HealCast(
-                caster = caster.name,
-                spellName = skill.displayName,
-                target = target.name,
-                amount = restored,
-            ),
-        )
+        withAttackFx(buildHeroSpellCastFx(caster, skill, floor.partyCell)) {
+            caster.spendMana(skill.mpCost)
+            val restored = target.heal(amount)
+            log.append(
+                CombatLogEntry.HealCast(
+                    caster = caster.name,
+                    spellName = skill.displayName,
+                    target = target.name,
+                    amount = restored,
+                ),
+            )
 
-        // Heal hate bump: every living enemy aggros harder on
-        // the caster (+2, clamped at 5). Fires AFTER the heal so
-        // a hate-1 caster reads as 3 from the next enemy turn.
-        for (eIdx in combat.enemies.indices) {
-            if (!combat.enemies[eIdx].isAlive) continue
-            combat.hate.bumpHate(eIdx, casterSlot, +2)
+            // Heal hate bump: every living enemy aggros harder on
+            // the caster (+2, clamped at 5). Fires AFTER the heal so
+            // a hate-1 caster reads as 3 from the next enemy turn.
+            for (eIdx in combat.enemies.indices) {
+                if (!combat.enemies[eIdx].isAlive) continue
+                combat.hate.bumpHate(eIdx, casterSlot, +2)
+            }
+
+            finishCurrentAction()
         }
-
-        finishCurrentAction()
         return true
     }
 
@@ -1395,6 +1429,32 @@ class CombatController(
         block()
     }
 
+    private fun withDefenderSpellFx(skill: Skill, target: Enemy, block: () -> Unit) {
+        when (skill.id) {
+            SkillCatalog.MAGE_EARTH_1_ID -> {
+                val started = defenderSpellFx.startEarthI(target) {
+                    attackFxPending = false
+                    block()
+                }
+                if (started) {
+                    attackFxPending = true
+                    return
+                }
+            }
+            SkillCatalog.MAGE_FIRE_1_ID -> {
+                val started = defenderSpellFx.startFireI(target) {
+                    attackFxPending = false
+                    block()
+                }
+                if (started) {
+                    attackFxPending = true
+                    return
+                }
+            }
+        }
+        block()
+    }
+
     private fun buildHeroStrikeFx(
         hero: Hero,
         skill: Skill,
@@ -1410,14 +1470,10 @@ class CombatController(
                 durationMsOverride = pendingChargeLungeMs,
             )
         }
-        val kind = if (skill.isSpell) {
-            WeaponFxCatalog.kindForSpell(
-                weaponType = hero.weapon1?.type,
-                isFireArrowSkill = skill.id == FIRE_ARROW_SKILL_ID,
-            )
-        } else {
-            WeaponFxCatalog.kindForWeaponAttack(hero.weapon1?.type) ?: return null
+        if (skill.isSpell) {
+            return buildHeroSpellCastFx(hero, skill, target.cell)
         }
+        val kind = WeaponFxCatalog.kindForWeaponAttack(hero.weapon1?.type) ?: return null
         val bowVolleyPlan = buildBowVolleyPlan(kind, shotPlan)
         return WeaponFxRequest(
             attackerCell = floor.partyCell,
@@ -1425,6 +1481,37 @@ class CombatController(
             kind = kind,
             weaponType = hero.weapon1?.type,
             bowVolleyPlan = bowVolleyPlan,
+        )
+    }
+
+    private fun buildHeroSpellCastFx(hero: Hero, skill: Skill, targetCell: Cell): WeaponFxRequest? {
+        val kind = WeaponFxCatalog.kindForSpell(
+            weaponType = hero.weapon1?.type,
+            isFireArrowSkill = skill.id == FIRE_ARROW_SKILL_ID,
+        )
+        if (kind == WeaponFxKind.FIRE_PROJECTILE) {
+            return WeaponFxRequest(
+                attackerCell = floor.partyCell,
+                defenderCell = targetCell,
+                kind = kind,
+                weaponType = hero.weapon1?.type,
+            )
+        }
+        val flowFrames = if (
+            skill.id == SkillCatalog.MAGE_EARTH_1_ID ||
+            skill.id == SkillCatalog.MAGE_FIRE_1_ID
+        ) {
+            emptyList()
+        } else {
+            WeaponFxCatalog.spellFlowFrames(skill)
+        }
+        return WeaponFxRequest(
+            attackerCell = floor.partyCell,
+            defenderCell = targetCell,
+            kind = WeaponFxKind.STAFF_SPELL_RISE,
+            weaponType = hero.weapon1?.type,
+            spellFlowFrames = flowFrames,
+            castFromPartyIcon = true,
         )
     }
 
