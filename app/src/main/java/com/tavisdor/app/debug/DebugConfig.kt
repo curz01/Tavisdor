@@ -22,6 +22,12 @@ object DebugConfig {
      */
     const val STARTING_HERO_LEVEL: Int = 10
 
+    /**
+     * On new game / continue: seeds utility test ingredients and sets
+     * party HP/MP to 50% of max for recovery-animation testing.
+     */
+    const val GRANT_UTILITY_TEST_INGREDIENTS: Boolean = true
+
     /** True when [STARTING_HERO_LEVEL] is anything other than 1. */
     val isLevelOverrideActive: Boolean
         get() = STARTING_HERO_LEVEL != 1

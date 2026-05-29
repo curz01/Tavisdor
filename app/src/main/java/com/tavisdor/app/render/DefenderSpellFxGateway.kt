@@ -10,7 +10,15 @@ import com.tavisdor.app.enemies.Enemy
 interface DefenderSpellFxGateway {
     fun startEarthI(target: Enemy, onComplete: () -> Unit): Boolean
 
+    fun startEarthII(target: Enemy, onComplete: () -> Unit): Boolean
+
+    fun startEarthIII(target: Enemy, onComplete: () -> Unit): Boolean
+
     fun startFireI(target: Enemy, onComplete: () -> Unit): Boolean
+
+    fun startFireII(target: Enemy, onComplete: () -> Unit): Boolean
+
+    fun startFireIII(target: Enemy, onComplete: () -> Unit): Boolean
 
     val isPlaying: Boolean
 

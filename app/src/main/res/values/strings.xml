@@ -145,6 +145,14 @@
     <string name="heal_picker_row_format">%1$s - %2$s\u00A0\u00A0HP %3$d / %4$d</string>
     <string name="heal_picker_cancel">Cancel</string>
 
+    <string name="utility_missing_ingredient">Need a suitable ingredient in Items.</string>
+    <string name="utility_no_recovery_benefit">No one will recover, but the ingredient will still be used.</string>
+    <string name="utility_cast_busy">Wait for the current action to finish.</string>
+
+    <string name="potion_used_toast">Restored +%1$d MP.</string>
+    <string name="potion_use_failed">Could not use the potion (not your turn, no potion, or MP full).</string>
+    <string name="potion_no_effect">The potion had no effect.</string>
+
     <!-- Locked door dialog -->
     <string name="door_locked_title">Locked Door</string>
     <string name="door_locked_message">A heavy lock holds this door shut. What will you do?</string>
@@ -163,6 +171,11 @@
     <string name="door_result_brute_damaged">The lock was mangled by brute force and cannot be picked. Only the matching dungeon key will open it.</string>
     <string name="door_result_no_key">You need the key that drops on this floor for this lock.</string>
 
+    <!-- Locked treasure chest dialog (same actions as doors). -->
+    <string name="chest_locked_title">Locked Chest</string>
+    <string name="chest_locked_message">A sturdy lock seals this chest. What will you do?</string>
+    <string name="chest_result_opened">The chest opens.</string>
+
     <!-- Combat-mode party-move confirmation. Fired when a tap on
          a legal move target would forfeit the other heroes' turns
          this round. -->
@@ -179,13 +192,18 @@
     <string name="items_panel_section_equipment">Equipment &amp; Weapons</string>
     <string name="items_panel_section_ingredients">Ingredients</string>
     <string name="items_panel_section_pickup">Pickup / Discard</string>
+    <string name="items_panel_chest_gold_format">%1$d gold</string>
     <!-- Short labels for binder-style side tabs (full names stay in-section). -->
     <string name="items_panel_tab_pickup">Loot</string>
-    <string name="items_panel_tab_equipment">Equipment</string>
-    <string name="items_panel_tab_ingredients">Ingredients</string>
+    <string name="items_panel_tab_equip_format">Equip: %1$d/%2$d</string>
+    <string name="items_panel_tab_mat_format">Mat: %1$d/%2$d</string>
     <string name="items_panel_section_empty">(empty)</string>
-    <string name="items_panel_pickup_hint">Tap a row to keep it. Anything left here is discarded when you close.</string>
+    <string name="items_panel_pickup_hint">Review battle loot here. Tap a slot or use Pick Up All. Leftover loot is discarded when you close unless Auto pick up on close is checked.</string>
     <string name="items_panel_pickup_all">Pick Up All</string>
+    <string name="items_panel_auto_pickup">Auto pick up on close</string>
+    <string name="items_panel_inventory_full">That tab is full (%1$d slots).</string>
+    <string name="items_panel_pickup_partial">Picked up %1$s. Some loot did not fit.</string>
+    <string name="items_panel_loot_tab_full">Loot tab full — free a slot or pick up items first.</string>
     <string name="items_panel_close">Close</string>
     <string name="items_panel_toast_picked_up">Picked up %1$s.</string>
     <string name="items_panel_toast_discarded">Discarded %1$d item(s).</string>

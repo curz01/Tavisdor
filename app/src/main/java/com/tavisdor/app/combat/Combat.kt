@@ -18,6 +18,12 @@ class Combat(
     val party: Party,
     val enemies: MutableList<Enemy>,
     rng: Random = Random.Default,
+    /**
+     * When true (camp ambush), every enemy acts before any hero each
+     * round, regardless of DEX. Enemies and heroes are still ordered
+     * among themselves by DEX + tiebreak d6.
+     */
+    enemiesActFirst: Boolean = false,
 ) {
     /**
      * Stable initiative list for the entire encounter. DEX ties
@@ -28,6 +34,7 @@ class Combat(
         heroDex = party.heroes.map { it.dexterity },
         enemyDex = enemies.map { it.dexterity },
         rng = rng,
+        enemiesActFirst = enemiesActFirst,
     )
 
     /**

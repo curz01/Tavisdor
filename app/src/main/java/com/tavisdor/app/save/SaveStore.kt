@@ -62,6 +62,11 @@ class SaveStore(context: Context) {
         val gold = prefs.getInt(KEY_PARTY_GOLD, 0)
         val weapons = decodeWeapons(prefs.getString(KEY_INV_WEAPONS, null))
         val ingredients = decodeIngredients(prefs.getString(KEY_INV_INGREDIENTS, null))
+        val potions = if (schema >= 5) {
+            decodePotions(prefs.getString(KEY_INV_POTIONS, null))
+        } else {
+            emptyList()
+        }
         return SaveData(
             schemaVersion = schema,
             heroes = heroes,
@@ -70,6 +75,7 @@ class SaveStore(context: Context) {
             partyGold = gold,
             inventoryWeapons = weapons,
             inventoryIngredients = ingredients,
+            inventoryPotions = potions,
         )
     }
 
@@ -92,6 +98,7 @@ class SaveStore(context: Context) {
             putInt(KEY_PARTY_GOLD, data.partyGold)
             putString(KEY_INV_WEAPONS, encodeWeapons(data.inventoryWeapons))
             putString(KEY_INV_INGREDIENTS, encodeIngredients(data.inventoryIngredients))
+            putString(KEY_INV_POTIONS, encodePotions(data.inventoryPotions))
             apply()
         }
     }
@@ -152,6 +159,18 @@ class SaveStore(context: Context) {
         }
     }
 
+    /** Comma-separated reagent potency per potion (schema v5). */
+    private fun encodePotions(list: List<com.tavisdor.app.items.Potion>): String =
+        if (list.isEmpty()) "" else list.joinToString(INGREDIENT_SEPARATOR) { it.ingredientPotency.toString() }
+
+    private fun decodePotions(raw: String?): List<com.tavisdor.app.items.Potion> {
+        if (raw.isNullOrEmpty()) return emptyList()
+        return raw.split(INGREDIENT_SEPARATOR).mapNotNull { token ->
+            val potency = token.toIntOrNull() ?: return@mapNotNull null
+            com.tavisdor.app.items.Potion(ingredientPotency = potency)
+        }
+    }
+
     fun clear() {
         prefs.edit().clear().apply()
     }
@@ -168,6 +187,7 @@ class SaveStore(context: Context) {
         private const val KEY_PARTY_GOLD = "party_gold"
         private const val KEY_INV_WEAPONS = "inv_weapons"
         private const val KEY_INV_INGREDIENTS = "inv_ingredients"
+        private const val KEY_INV_POTIONS = "inv_potions"
 
         // Inventory serialization separators. Chosen so the
         // characters never appear in enum names (which are the

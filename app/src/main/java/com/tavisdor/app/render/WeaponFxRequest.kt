@@ -25,8 +25,28 @@ sealed class BowVolley {
     /** One bow draw; [arrowCount] arrows fly side-by-side (Double Shot). */
     data class Parallel(val arrowCount: Int) : BowVolley()
 
-    /** Full draw + flight per arrow, played back-to-back (Rapid Fire). */
-    data class Sequential(val arrowCount: Int) : BowVolley()
+    /**
+     * Full draw + flight per arrow, played back-to-back (Rapid Fire).
+     * [shotDurationMultipliers] shortens later shots (e.g. 1.0, 0.55, 0.35).
+     */
+    data class Sequential(
+        val arrowCount: Int,
+        val shotDurationMultipliers: List<Float>? = null,
+    ) : BowVolley() {
+
+        fun shotDurationMs(shotIndex: Int, baseShotMs: Long): Long {
+            val mult = shotDurationMultipliers?.getOrNull(shotIndex) ?: 1f
+            return (baseShotMs * mult).toLong().coerceAtLeast(1L)
+        }
+
+        fun totalDurationMs(baseShotMs: Long): Long {
+            var sum = 0L
+            for (i in 0 until arrowCount) {
+                sum += shotDurationMs(i, baseShotMs)
+            }
+            return sum.coerceAtLeast(1L)
+        }
+    }
 }
 
 data class WeaponFxRequest(
@@ -41,9 +61,24 @@ data class WeaponFxRequest(
     val bowVolleyPlan: BowVolleyPlan? = null,
     /**
      * Animated overlay frames drawn at the staff tip during
-     * [WeaponFxKind.STAFF_SPELL_RISE] (e.g. `heali_1`, `earthi_2`).
+     * [WeaponFxKind.STAFF_SPELL_RISE] (e.g. `fireball1`, `earthi_2`).
      */
     val spellFlowFrames: List<String> = emptyList(),
+    /**
+     * When non-empty, tip frames follow this exact sequence (utility
+     * casts). Takes precedence over [spellFlowFrames].
+     */
+    val flowFrameSequence: List<String> = emptyList(),
+    /** Milliseconds per entry in [flowFrameSequence]. */
+    val flowStepMs: Long = 130L,
+    /** When false, only flow frames draw (utility camp / rest / etc.). */
+    val showStaffDuringCast: Boolean = true,
+    /** Scales tip overlay height for [flowFrameSequence] / [spellFlowFrames]. */
+    val flowHeightScale: Float = 1f,
+    /** Intro path for utility overlays; null for normal spell casts. */
+    val utilityMotion: UtilityCastMotion? = null,
+    /** Camp slide destination (adjacent tile center). */
+    val utilityFocusCell: Cell? = null,
     /** When true, pivot the cast on the party token center instead of the cell center. */
     val castFromPartyIcon: Boolean = false,
 )
@@ -98,9 +133,7 @@ object WeaponFxCatalog {
 
     /** Tip overlay cycle for [WeaponFxKind.STAFF_SPELL_RISE], keyed by spell. */
     fun spellFlowFrames(skill: Skill): List<String> {
-        if (HealResolver.isHeal(skill)) {
-            return listOf("heali_1", "heali_2")
-        }
+        if (HealResolver.isHeal(skill)) return emptyList()
         return when (skill.element) {
             Element.FIRE -> listOf("fireball1", "fireball2")
             Element.EARTH -> listOf("earthi_1", "earthi_2", "earthi_3")

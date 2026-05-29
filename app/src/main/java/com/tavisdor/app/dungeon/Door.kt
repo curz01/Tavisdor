@@ -12,6 +12,10 @@ package com.tavisdor.app.dungeon
  * [lockId] pairs this door with a [com.tavisdor.app.items.FloorKey] dropped
  * on the same dungeon depth. [bruteDamaged] blocks Thief lock pick after a
  * successful STR force; [strForceAttempted] allows only one STR try per lock.
+ *
+ * [visuallyOpen] is the only flag that selects the opened door sprite.
+ * Unlocking ([locked] = false) does not change the art — the door stays
+ * closed until the party walks through or a template sets [visuallyOpen].
  */
 class Door(
     var locked: Boolean,
@@ -19,6 +23,7 @@ class Door(
     val lockId: String,
     var bruteDamaged: Boolean = false,
     var strForceAttempted: Boolean = false,
+    var visuallyOpen: Boolean = false,
 )
 
 /** Which axis the door's connecting passage runs along. */

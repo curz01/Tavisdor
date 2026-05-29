@@ -179,7 +179,11 @@ class Party private constructor(
                     range = w.range,
                 )
             }
-            party.inventory.restore(weapons = weapons, ingredients = saved.inventoryIngredients)
+            party.inventory.restore(
+                weapons = weapons,
+                ingredients = saved.inventoryIngredients,
+                potions = saved.inventoryPotions,
+            )
             return party
         }
 

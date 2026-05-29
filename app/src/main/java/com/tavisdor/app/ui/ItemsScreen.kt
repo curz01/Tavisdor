@@ -1,19 +1,20 @@
 package com.tavisdor.app.ui
 
 import android.content.Context
-import android.util.TypedValue
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.LinearLayout
-import android.widget.ScrollView
+import android.widget.CheckBox
+import android.widget.GridLayout
 import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import com.tavisdor.app.R
+import com.tavisdor.app.dungeon.TreasureChest
 import com.tavisdor.app.items.FloorKey
 import com.tavisdor.app.items.Ingredient
 import com.tavisdor.app.items.Inventory
+import com.tavisdor.app.items.InventoryCapacity
 import com.tavisdor.app.items.LootDrop
+import com.tavisdor.app.items.Potion
 import com.tavisdor.app.items.Weapon
 import com.tavisdor.app.party.HeroEquipment
 import com.tavisdor.app.party.Party
@@ -22,44 +23,28 @@ import com.tavisdor.app.party.Party
  * Controller for the modal items / inventory panel
  * (`R.layout.activity_main` `itemsOverlay`).
  *
- * Layout summary (see the XML):
- *   - Outer FrameLayout is the scrim; tapping it dismisses the
- *     overlay (with the same "drops in pickup section get
- *     discarded" semantics as the close button).
- *   - Inner ScrollView holds a vertical LinearLayout (the
- *     "panel") that consumes touches so taps inside don't
- *     bubble out to the scrim.
- *   - Top row: gold counter (left) + Close (right).
- *   - Top tab strip (horizontal, right-aligned): Pickup, Gear, Mats.
- *   - Pickup tab: tappable rows, Pick Up All, discard-on-close.
- *   - Below: 2x2 party summary, or per-hero equipment when a card is tapped.
- *
- * Lifecycle:
- *   - Construct once per Activity; reuses the same view tree.
- *   - [bind] points at the active party. Subsequent [show]
- *     calls just refresh the rendering; combat-end deposits
- *     trickle in via the inventory's [Inventory.onChanged]
- *     callback so the panel re-renders the moment a kill drops
- *     loot even if the panel was already on screen.
- *   - [hide] tears down the listener and discards any leftover
- *     pickup rows; [onDismiss] fires last so MainActivity can
- *     clear its own state.
+ * Battle loot sits in [Inventory.pendingPickup] until the player picks
+ * it up manually, taps Pick Up All, or closes the panel with
+ * auto-pickup enabled (items that fit are deposited; the rest are
+ * discarded).
  */
 class ItemsScreen(
     private val root: ViewGroup,
     var onDismiss: (() -> Unit)? = null,
 ) {
-    /** Fired after a hero equips / unequips a weapon so the HUD can refresh. */
     var onPartyEquipmentChanged: (() -> Unit)? = null
+    var onUsePotionSelf: (() -> Int?)? = null
+    /** Refreshes dungeon sprites when chest loot is taken (e.g. empty -> treasure3). */
+    var onChestLootChanged: (() -> Unit)? = null
 
     private data class PendingWeaponEquip(
         val heroSlot: Int,
         val weaponSlot: HeroEquipment.WeaponSlot,
     )
+
     private val ctx: Context get() = root.context
 
     private val panelHost: View = root.findViewById(R.id.itemsPanelHost)
-    private val scroll: ScrollView = root.findViewById(R.id.itemsPanelScroll)
     private val panel: View = root.findViewById(R.id.itemsPanel)
 
     private val sideTabPickup: View = root.findViewById(R.id.itemsSideTabPickup)
@@ -72,12 +57,29 @@ class ItemsScreen(
 
     private val tvGold: TextView = root.findViewById(R.id.tvItemsGold)
     private val tvEquipHint: TextView = root.findViewById(R.id.tvItemsEquipHint)
-    private val equipmentList: LinearLayout = root.findViewById(R.id.itemsEquipmentList)
-    private val ingredientList: LinearLayout = root.findViewById(R.id.itemsIngredientList)
-    private val pickupList: LinearLayout = root.findViewById(R.id.itemsPickupList)
+    private val tvTabPickup: TextView = root.findViewById(R.id.tvItemsTabPickup)
+    private val tvTabEquip: TextView = root.findViewById(R.id.tvItemsTabEquip)
+    private val tvTabMat: TextView = root.findViewById(R.id.tvItemsTabMat)
     private val tvPickupHint: TextView = root.findViewById(R.id.tvItemsPickupHint)
     private val btnClose: MaterialButton = root.findViewById(R.id.btnItemsClose)
     private val btnPickUpAll: MaterialButton = root.findViewById(R.id.btnItemsPickUpAll)
+    private val cbAutoPickup: CheckBox = root.findViewById(R.id.cbItemsAutoPickup)
+
+    private val pickupGrid = InventoryTabGrid(
+        root.findViewById(R.id.itemsPickupGrid),
+        R.drawable.bg_inventory_slot_pickup,
+        R.drawable.bg_inventory_slot_pickup_empty,
+    )
+    private val equipmentGrid = InventoryTabGrid(
+        root.findViewById(R.id.itemsEquipmentGrid),
+        R.drawable.bg_inventory_slot_equipment,
+        R.drawable.bg_inventory_slot_equipment_empty,
+    )
+    private val materialsGrid = InventoryTabGrid(
+        root.findViewById(R.id.itemsMaterialsGrid),
+        R.drawable.bg_inventory_slot_materials,
+        R.drawable.bg_inventory_slot_materials_empty,
+    )
 
     private enum class InventoryTab { PICKUP, EQUIPMENT, INGREDIENTS }
 
@@ -103,33 +105,27 @@ class ItemsScreen(
         it.onSlotClick = { slot -> onEquipSlotClicked(slot) }
     }
 
-    /** When set, the lower host shows [heroEquipPanel] instead of the 2x2 summary. */
     private var selectedHeroSlot: Int? = null
-
-    /** Waiting for the player to pick a weapon from the Gear tab. */
     private var pendingWeaponEquip: PendingWeaponEquip? = null
-
-    /**
-     * Party currently surfaced by the panel. Set via [bind]; the
-     * panel can be opened only after this has been wired (the
-     * Items button is gated by `game.party != null`).
-     */
     private var party: Party? = null
+    private var chestLootSource: TreasureChest? = null
 
-    /**
-     * Latched listener installed on [Inventory.onChanged] while
-     * the panel is visible so a kill-time deposit re-renders the
-     * UI without the activity having to know about it. Stored
-     * here so [hide] can detach it without dangling references.
-     */
+    /** Guards [performPickUpAll] against re-entry via [Inventory.onChanged]. */
+    private var pickUpAllInProgress = false
+
     private val inventoryListener: () -> Unit = { refresh() }
 
     init {
         root.setOnClickListener { hide() }
-        panelHost.setOnClickListener { /* consume so taps on panel/tabs don't dismiss */ }
-        panel.setOnClickListener { /* consume so taps don't dismiss */ }
+        panelHost.setOnClickListener { /* consume */ }
+        panel.setOnClickListener { /* consume */ }
         btnClose.setOnClickListener { hide() }
         btnPickUpAll.setOnClickListener { onPickUpAllTapped() }
+
+        cbAutoPickup.isChecked = isAutoPickupEnabled()
+        cbAutoPickup.setOnCheckedChangeListener { _, checked ->
+            setAutoPickupEnabled(checked)
+        }
 
         sideTabs.forEachIndexed { index, tab ->
             tab.setOnClickListener {
@@ -143,27 +139,30 @@ class ItemsScreen(
         heroSummarySlots.forEachIndexed { index, slot ->
             slot.root.setOnClickListener { openHeroEquipment(index) }
         }
+
+        pickupGrid.setOnSlotClick { index -> onPickupSlotTapped(index) }
+        equipmentGrid.setOnSlotClick { index -> onEquipmentSlotTapped(index) }
+        materialsGrid.setOnSlotClick { index -> onMaterialsSlotTapped(index) }
     }
 
-    /** Wire the panel to [party]. Idempotent. */
     fun bind(party: Party) {
         this.party = party
     }
 
-    /**
-     * Opens the panel and renders the current inventory state.
-     * Subscribes to [Inventory.onChanged] for live updates while
-     * visible (combat is over by the time this fires, but chest
-     * pickups will deposit through the same channel).
-     */
     fun show() {
         val p = party ?: return
         p.inventory.onChanged = inventoryListener
+        cbAutoPickup.isChecked = isAutoPickupEnabled()
         showHeroSummary()
         selectTab(InventoryTab.PICKUP.ordinal)
         refresh()
-        scroll.scrollTo(0, 0)
         root.visibility = View.VISIBLE
+    }
+
+    /** Shows pickup tab loot still inside [chest] (not party pending pickup). */
+    fun showChestLoot(chest: TreasureChest) {
+        chestLootSource = chest
+        show()
     }
 
     private fun showHeroSummary() {
@@ -191,6 +190,7 @@ class ItemsScreen(
         sideTabs.forEachIndexed { i, tab ->
             tab.isSelected = i == index
         }
+        refresh()
     }
 
     private fun showTab(index: Int) {
@@ -199,16 +199,19 @@ class ItemsScreen(
         tabIngredients.visibility = if (index == InventoryTab.INGREDIENTS.ordinal) View.VISIBLE else View.GONE
     }
 
-    /**
-     * Closes the panel. Per the user's spec, anything still in
-     * the pickup / discard section is dropped on the floor (i.e.
-     * removed without depositing anywhere). A toast surfaces
-     * the discard count so the player notices they lost
-     * something rather than wondering where it went.
-     */
     fun hide() {
         if (root.visibility == View.GONE) return
         showHeroSummary()
+        if (chestLootSource != null) {
+            chestLootSource = null
+            party?.inventory?.onChanged = null
+            root.visibility = View.GONE
+            onDismiss?.invoke()
+            return
+        }
+        if (isAutoPickupEnabled()) {
+            performPickUpAll()
+        }
         val discarded = party?.inventory?.discardPendingPickup() ?: 0
         party?.inventory?.onChanged = null
         root.visibility = View.GONE
@@ -221,34 +224,73 @@ class ItemsScreen(
     val isVisible: Boolean get() = root.visibility == View.VISIBLE
 
     private fun onPickUpAllTapped() {
-        val p = party ?: return
-        val collected = p.inventory.pickUpAll()
-        if (collected.isEmpty()) return
-        // refresh() runs via inventoryListener. The toast collapses
-        // a multi-pickup into a single line so the player isn't
-        // showered with N popups; the singular branch keeps the
-        // wording natural ("Picked up Iron Spear.") rather than
-        // "Picked up 1 item.".
+        if (chestLootSource != null) {
+            val collected = performChestPickUpAll()
+            if (collected.isEmpty()) {
+                val chest = chestLootSource
+                if (chest != null && !chest.loot.isEmpty()) {
+                    AppToast.show(
+                        ctx,
+                        ctx.getString(
+                            R.string.items_panel_inventory_full,
+                            InventoryCapacity.SLOTS_PER_TAB,
+                        ),
+                    )
+                }
+            }
+            return
+        }
+        val collected = performPickUpAll()
+        if (collected.isEmpty()) {
+            val inv = party?.inventory
+            if (inv != null && inv.hasPendingPickup) {
+                AppToast.show(
+                    ctx,
+                    ctx.getString(
+                        R.string.items_panel_inventory_full,
+                        InventoryCapacity.SLOTS_PER_TAB,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun performPickUpAll(): List<LootDrop> {
+        if (pickUpAllInProgress) return emptyList()
+        val p = party ?: return emptyList()
+        pickUpAllInProgress = true
+        val remainingBefore = p.inventory.pendingPickup.size
+        val collected = try {
+            p.inventory.pickUpAll(p)
+        } finally {
+            pickUpAllInProgress = false
+        }
+        if (collected.isEmpty()) return emptyList()
+        val remainingAfter = p.inventory.pendingPickup.size
         val label = if (collected.size == 1) {
             displayName(collected.first())
         } else {
             "${collected.size} items"
         }
-        AppToast.show(ctx, ctx.getString(R.string.items_panel_toast_picked_up, label))
+        if (remainingAfter > 0 && remainingBefore > collected.size) {
+            AppToast.show(ctx, ctx.getString(R.string.items_panel_pickup_partial, label))
+        } else {
+            AppToast.show(ctx, ctx.getString(R.string.items_panel_toast_picked_up, label))
+        }
+        return collected
     }
 
-    /**
-     * Repaints every section against the current inventory.
-     * Called on show, on inventory-change notifications, and
-     * after explicit pickups.
-     */
     private fun refresh() {
         val p = party ?: return
+        val inv = p.inventory
         tvGold.text = ctx.getString(R.string.items_panel_gold_format, p.gold)
 
-        renderEquipment(p.inventory.weapons)
-        renderIngredients(p.inventory.ingredients, p.inventory.floorKeys)
-        renderPickup(p.inventory.pendingPickup)
+        bindTabLabels(inv)
+
+        renderPickup(inv)
+        renderEquipment(inv.weapons)
+        renderMaterials(inv.ingredients, inv.potions, inv.floorKeys)
+
         val slot = selectedHeroSlot
         if (slot != null) {
             p.heroes.getOrNull(slot)?.let { heroEquipPanel.bind(it) }
@@ -257,7 +299,21 @@ class ItemsScreen(
         }
     }
 
-    /** Slots 0–1 front row, 2–3 back row — mirrors [HeroPanelView]. */
+    private fun bindTabLabels(inv: Inventory) {
+        tvTabPickup.text = ctx.getString(R.string.items_panel_tab_pickup)
+        val max = InventoryCapacity.SLOTS_PER_TAB
+        tvTabEquip.text = ctx.getString(
+            R.string.items_panel_tab_equip_format,
+            inv.usedEquipmentSlots,
+            max,
+        )
+        tvTabMat.text = ctx.getString(
+            R.string.items_panel_tab_mat_format,
+            inv.usedMaterialsSlots,
+            max,
+        )
+    }
+
     private fun renderHeroSummary(party: Party) {
         party.heroes.forEachIndexed { index, hero ->
             heroSummarySlots[index].bind(hero)
@@ -266,32 +322,50 @@ class ItemsScreen(
 
     private fun renderEquipment(weapons: List<Weapon>) {
         tvEquipHint.visibility = if (pendingWeaponEquip != null) View.VISIBLE else View.GONE
-
-        equipmentList.removeAllViews()
-        if (weapons.isEmpty()) {
-            equipmentList.addView(emptyRow())
-            return
-        }
         val picking = pendingWeaponEquip != null
-        for (group in groupByLabel(weapons) { it.displayName }) {
-            val label = formatStackLabel(group.label, group.count)
-            equipmentList.addView(
-                if (picking) {
-                    gearPickRow(label, group.label)
-                } else {
-                    staticRow(label)
-                },
-            )
-        }
+        equipmentGrid.setOnSlotClick(if (picking) ::onEquipmentSlotTapped else null)
+        equipmentGrid.bind(weapons.map { it.displayName })
     }
 
-    private fun gearPickRow(label: String, displayName: String): View {
-        val tv = baseRow(label)
-        tv.setBackgroundResource(android.R.drawable.list_selector_background)
-        tv.isClickable = true
-        tv.isFocusable = true
-        tv.setOnClickListener { onGearWeaponRowTapped(displayName) }
-        return tv
+    private fun renderMaterials(
+        ingredients: List<Ingredient>,
+        potions: List<Potion>,
+        floorKeys: List<FloorKey>,
+    ) {
+        val labels = buildList {
+            ingredients.forEach { add(it.displayName) }
+            repeat(potions.size) { add(Potion.DISPLAY_NAME) }
+            floorKeys.forEach { add(it.displayName()) }
+        }
+        materialsGrid.bind(labels)
+    }
+
+    private fun renderPickup(inv: Inventory) {
+        val chest = chestLootSource
+        if (chest != null) {
+            val labels = chestPickupLabels(chest)
+            val hasLoot = labels.isNotEmpty()
+            tvPickupHint.visibility = if (hasLoot) View.VISIBLE else View.GONE
+            btnPickUpAll.isEnabled = hasLoot
+            pickupGrid.setOnSlotClick(if (hasLoot) ::onPickupSlotTapped else null)
+            pickupGrid.bind(labels)
+            return
+        }
+        val pending = inv.pendingPickup
+        val hasLoot = pending.isNotEmpty()
+        tvPickupHint.visibility = if (hasLoot) View.VISIBLE else View.GONE
+        btnPickUpAll.isEnabled = hasLoot
+        pickupGrid.setOnSlotClick(if (hasLoot) ::onPickupSlotTapped else null)
+        pickupGrid.bind(pending.map { displayName(it) })
+    }
+
+    private fun chestPickupLabels(chest: TreasureChest): List<String> {
+        val labels = ArrayList<String>()
+        if (chest.loot.gold > 0) {
+            labels += ctx.getString(R.string.items_panel_chest_gold_format, chest.loot.gold)
+        }
+        chest.loot.items.forEach { labels += displayName(it) }
+        return labels
     }
 
     private fun onEquipSlotClicked(slot: InventoryHeroEquipPanel.EquipSlot) {
@@ -306,9 +380,7 @@ class ItemsScreen(
             InventoryHeroEquipPanel.EquipSlot.HELMET,
             InventoryHeroEquipPanel.EquipSlot.ARMOR,
             InventoryHeroEquipPanel.EquipSlot.BOOTS,
-            -> {
-                AppToast.show(ctx, R.string.inventory_toast_armor_not_in_gear)
-            }
+            -> AppToast.show(ctx, R.string.inventory_toast_armor_not_in_gear)
         }
     }
 
@@ -323,15 +395,13 @@ class ItemsScreen(
         }
         pendingWeaponEquip = PendingWeaponEquip(heroSlot, weaponSlot)
         selectTab(InventoryTab.EQUIPMENT.ordinal)
-        refresh()
     }
 
-    private fun onGearWeaponRowTapped(displayName: String) {
-        val pending = pendingWeaponEquip ?: return
+    private fun onEquipmentSlotTapped(index: Int) {
+        if (pendingWeaponEquip == null) return
         val p = party ?: return
-        val idx = p.inventory.indexOfWeaponByDisplayName(displayName)
-        val weapon = p.inventory.weapons.getOrNull(idx) ?: return
-        equipWeapon(pending.heroSlot, pending.weaponSlot, weapon)
+        val weapon = p.inventory.weapons.getOrNull(index) ?: return
+        equipWeapon(pendingWeaponEquip!!.heroSlot, pendingWeaponEquip!!.weaponSlot, weapon)
     }
 
     private fun equipWeapon(heroSlot: Int, weaponSlot: HeroEquipment.WeaponSlot, weapon: Weapon) {
@@ -353,151 +423,147 @@ class ItemsScreen(
 
     private fun unequipWeapon(heroSlot: Int, weaponSlot: HeroEquipment.WeaponSlot, displayName: String) {
         val p = party ?: return
-        if (!HeroEquipment.unequipWeapon(p, heroSlot, weaponSlot)) return
+        if (!HeroEquipment.unequipWeapon(p, heroSlot, weaponSlot)) {
+            AppToast.show(
+                ctx,
+                ctx.getString(
+                    R.string.items_panel_inventory_full,
+                    InventoryCapacity.SLOTS_PER_TAB,
+                ),
+            )
+            return
+        }
         clearPendingWeaponEquip()
         AppToast.show(ctx, ctx.getString(R.string.inventory_toast_unequipped, displayName))
         onPartyEquipmentChanged?.invoke()
         refresh()
     }
 
-    private fun renderIngredients(ingredients: List<Ingredient>, floorKeys: List<FloorKey>) {
-        ingredientList.removeAllViews()
-        if (ingredients.isEmpty() && floorKeys.isEmpty()) {
-            ingredientList.addView(emptyRow())
+    private fun onMaterialsSlotTapped(index: Int) {
+        val inv = party?.inventory ?: return
+        val ingEnd = inv.ingredients.size
+        val potEnd = ingEnd + inv.potions.size
+        if (index in ingEnd until potEnd) {
+            onPotionRowTapped()
+        }
+    }
+
+    private fun onPotionRowTapped() {
+        if (party?.inventory?.potions.isNullOrEmpty()) return
+        val restored = onUsePotionSelf?.invoke()
+        when {
+            restored != null && restored > 0 -> {
+                AppToast.show(ctx, ctx.getString(R.string.potion_used_toast, restored))
+                onPartyEquipmentChanged?.invoke()
+            }
+            restored != null -> AppToast.show(ctx, R.string.potion_no_effect)
+            else -> AppToast.show(ctx, R.string.potion_use_failed)
+        }
+        refresh()
+    }
+
+    private fun onPickupSlotTapped(index: Int) {
+        if (chestLootSource != null) {
+            onChestPickupSlotTapped(index)
             return
         }
-        for (group in groupByLabel(ingredients) { it.displayName }) {
-            ingredientList.addView(staticRow(formatStackLabel(group.label, group.count)))
-        }
-        for (group in groupByLabel(floorKeys) { it.displayName() }) {
-            ingredientList.addView(staticRow(formatStackLabel(group.label, group.count)))
-        }
-    }
-
-    private fun renderPickup(pending: List<LootDrop>) {
-        pickupList.removeAllViews()
-        if (pending.isEmpty()) {
-            pickupList.addView(emptyRow())
-            btnPickUpAll.isEnabled = false
-            tvPickupHint.visibility = View.GONE
-            return
-        }
-        tvPickupHint.visibility = View.VISIBLE
-        btnPickUpAll.isEnabled = true
-        // Pickup rows also stack by display name. Tapping a
-        // stacked row picks up ONE item from the underlying
-        // queue (looked up by label, not by row index) so the
-        // count visibly ticks down on each tap and the player
-        // can still grab a single beer out of three. Use Pick
-        // Up All to drain the whole queue in one go.
-        for (group in groupByLabel(pending) { displayName(it) }) {
-            pickupList.addView(pickupRow(group.label, group.count))
-        }
-    }
-
-    private fun pickupRow(label: String, count: Int): View {
-        val tv = baseRow(formatStackLabel(label, count))
-        tv.setBackgroundResource(android.R.drawable.list_selector_background)
-        tv.isClickable = true
-        tv.isFocusable = true
-        tv.setOnClickListener { onPickupRowTapped(label) }
-        return tv
-    }
-
-    /**
-     * Looks up the first [LootDrop] in [Inventory.pendingPickup]
-     * whose display name matches the tapped row's label and picks
-     * it up. Operating by label (not index) keeps the UI
-     * grouped-by-name without forcing the pickup queue itself to
-     * be a stack-aware data structure - the queue stays a flat
-     * list of individual drops, and the panel does the grouping
-     * purely for display.
-     */
-    private fun onPickupRowTapped(label: String) {
         val p = party ?: return
-        val idx = p.inventory.pendingPickup.indexOfFirst { displayName(it) == label }
-        if (idx < 0) return
-        val picked = p.inventory.pickUpAt(idx) ?: return
-        AppToast.show(ctx, ctx.getString(R.string.items_panel_toast_picked_up, displayName(picked)))
+        val picked = p.inventory.pickUpAt(index, p)
+        when {
+            picked != null ->
+                AppToast.show(ctx, ctx.getString(R.string.items_panel_toast_picked_up, displayName(picked)))
+            p.inventory.pendingPickup.getOrNull(index) != null ->
+                AppToast.show(
+                    ctx,
+                    ctx.getString(
+                        R.string.items_panel_inventory_full,
+                        InventoryCapacity.SLOTS_PER_TAB,
+                    ),
+                )
+        }
     }
 
-    /**
-     * Renders a [LootDrop] as the player-visible label used in
-     * the pickup section. Mirrors the same display name the
-     * destination section will use after pickup so the player
-     * can confirm they're getting what they tapped on.
-     */
+    private fun onChestPickupSlotTapped(index: Int) {
+        val chest = chestLootSource ?: return
+        val p = party ?: return
+        val label = pickUpChestRow(chest, p, index)
+        when {
+            label != null ->
+                AppToast.show(ctx, ctx.getString(R.string.items_panel_toast_picked_up, label))
+            chestPickupLabels(chest).getOrNull(index) != null ->
+                AppToast.show(
+                    ctx,
+                    ctx.getString(
+                        R.string.items_panel_inventory_full,
+                        InventoryCapacity.SLOTS_PER_TAB,
+                    ),
+                )
+        }
+        if (chest.loot.isEmpty()) {
+            onChestLootChanged?.invoke()
+        }
+        refresh()
+    }
+
+    private fun performChestPickUpAll(): List<String> {
+        val chest = chestLootSource ?: return emptyList()
+        val p = party ?: return emptyList()
+        val collected = ArrayList<String>()
+        while (chest.loot.gold > 0) {
+            val taken = chest.loot.removeGold(chest.loot.gold)
+            p.addGold(taken)
+            collected += ctx.getString(R.string.items_panel_chest_gold_format, taken)
+        }
+        val remaining = chest.loot.items.toList()
+        for (drop in remaining) {
+            if (!p.inventory.tryDepositLoot(drop, p)) break
+            chest.loot.items.remove(drop)
+            collected += displayName(drop)
+        }
+        if (chest.loot.isEmpty()) {
+            onChestLootChanged?.invoke()
+        }
+        refresh()
+        return collected
+    }
+
+    private fun pickUpChestRow(chest: TreasureChest, party: Party, index: Int): String? {
+        var cursor = 0
+        if (chest.loot.gold > 0) {
+            if (index == cursor) {
+                val taken = chest.loot.removeGold(chest.loot.gold)
+                party.addGold(taken)
+                return ctx.getString(R.string.items_panel_chest_gold_format, taken)
+            }
+            cursor++
+        }
+        val itemIndex = index - cursor
+        val drop = chest.loot.items.getOrNull(itemIndex) ?: return null
+        if (!party.inventory.tryDepositLoot(drop, party)) return null
+        chest.loot.items.removeAt(itemIndex)
+        return displayName(drop)
+    }
+
     private fun displayName(drop: LootDrop): String = when (drop) {
         is LootDrop.IngredientDrop -> drop.ingredient.displayName
         is LootDrop.MeleeWeaponDrop -> drop.tier.displayMeleeName(drop.weapon)
         is LootDrop.FloorKeyDrop -> drop.key.displayName()
+        is LootDrop.ArmorDrop -> drop.armorName
     }
 
-    /**
-     * One stack of identically-labeled items in a section. Used
-     * by [groupByLabel] so the renderers can stack duplicates
-     * into "Beer x 3" rows without losing first-occurrence order
-     * (the first one in the source list anchors the row's position).
-     */
-    private data class StackRow(val label: String, val count: Int)
+    private fun isAutoPickupEnabled(): Boolean =
+        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_AUTO_PICKUP, true)
 
-    /**
-     * Collapses [items] into [StackRow]s by their [label]. First
-     * occurrence wins for ordering so the section list reads in
-     * the same sequence the player acquired items - new pickups
-     * land at the bottom and stack into the first row that already
-     * shares their label.
-     */
-    private inline fun <T> groupByLabel(items: List<T>, label: (T) -> String): List<StackRow> {
-        if (items.isEmpty()) return emptyList()
-        val counts = LinkedHashMap<String, Int>(items.size)
-        for (item in items) {
-            val key = label(item)
-            counts[key] = (counts[key] ?: 0) + 1
-        }
-        return counts.map { (k, n) -> StackRow(k, n) }
+    private fun setAutoPickupEnabled(enabled: Boolean) {
+        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_AUTO_PICKUP, enabled)
+            .apply()
     }
 
-    /**
-     * Formats one stack as "Label" for n == 1 or "Label x N" for
-     * n >= 2. The "x" uses the lowercase ASCII letter rather than
-     * the multiplication sign so it stays readable in every
-     * locale-aware font / accessibility-large rendering.
-     */
-    private fun formatStackLabel(label: String, count: Int): String =
-        if (count <= 1) label else "$label x $count"
-
-    /** "(empty)" placeholder used for sections with no rows. */
-    private fun emptyRow(): TextView {
-        val tv = baseRow(ctx.getString(R.string.items_panel_section_empty))
-        tv.setTextColor(ctx.getColor(R.color.items_panel_row_empty))
-        return tv
+    companion object {
+        private const val PREFS_NAME = "tavisdor_items_panel"
+        private const val KEY_AUTO_PICKUP = "auto_pickup"
     }
-
-    /** Read-only row used by sections 1 / 2. */
-    private fun staticRow(label: String): TextView = baseRow(label)
-
-    /**
-     * Builds the common row TextView. Centralized so future
-     * changes (icons, quantity badges, dividers) only touch
-     * one place.
-     */
-    private fun baseRow(label: String): TextView {
-        val tv = TextView(ctx)
-        tv.text = label
-        tv.setTextColor(ctx.getColor(R.color.items_panel_row_text))
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-        tv.gravity = Gravity.CENTER_VERTICAL
-        val pad = ctx.resources.getDimensionPixelSize(R.dimen.items_panel_row_padding)
-        val gap = ctx.resources.getDimensionPixelSize(R.dimen.items_panel_row_v_gap)
-        tv.setPadding(pad, pad, pad, pad)
-        val lp = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-        )
-        lp.topMargin = gap
-        tv.layoutParams = lp
-        return tv
-    }
-
 }

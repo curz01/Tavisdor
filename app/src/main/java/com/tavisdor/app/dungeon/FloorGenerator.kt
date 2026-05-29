@@ -178,6 +178,7 @@ object FloorGenerator {
                 "(should be 0 when end_room_* covers every orientation).",
         )
 
+        ChestSpawner.spawn(floor, rng)
         floor.assignLockKeyCarriers(rng)
 
         return floor

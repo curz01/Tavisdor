@@ -72,6 +72,21 @@ class Camera {
         panRemainingMs = 0f
     }
 
+    /** Stops an in-flight [panTo] tween without moving the center. */
+    fun cancelPan() {
+        panRemainingMs = 0f
+    }
+
+    /**
+     * Free pan in cell space (used by touch drag). Cancels any active
+     * smooth pan first.
+     */
+    fun panByCellDelta(deltaX: Float, deltaY: Float) {
+        cancelPan()
+        centerCellX += deltaX
+        centerCellY += deltaY
+    }
+
     /**
      * Start a smooth pan from the current center toward ([cellX], [cellY])
      * over [durationMs] milliseconds (clamped to a minimum of 1 to avoid

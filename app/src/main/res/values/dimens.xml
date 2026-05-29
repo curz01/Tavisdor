@@ -39,6 +39,9 @@
       column but wide enough to read as an obvious touch target.
     -->
     <dimen name="combat_log_scroll_button_width">36dp</dimen>
+    <!-- Collapsed combat log (~4 wrapped lines); expanded is 2× this height. -->
+    <dimen name="combat_log_collapsed_height">88dp</dimen>
+    <dimen name="combat_log_expanded_height">176dp</dimen>
 
     <!-- Action bar sits above the hero panel: Menu / Action / Items. -->
     <dimen name="action_bar_height">56dp</dimen>
@@ -72,10 +75,14 @@
     <dimen name="items_panel_padding">16dp</dimen>
     <dimen name="items_panel_section_gap">14dp</dimen>
     <!-- Fixed tab body height so the panel stays the same size as the old three stacked sections. -->
-    <dimen name="items_panel_tab_body_height">264dp</dimen>
+    <!-- 3×72dp grid + row gaps (see [InventoryCapacity.GRID_ROWS]). -->
+    <dimen name="items_panel_tab_body_height">280dp</dimen>
+    <dimen name="inventory_grid_capacity_text">11sp</dimen>
     <!-- Top tab strip on the inventory panel (horizontal, right-aligned, 80% width). -->
     <dimen name="items_panel_top_tab_height">32dp</dimen>
-    <dimen name="items_panel_top_tab_overlap">-1dp</dimen>
+    <!-- Gap between tab strip and tab content / inventory grid. -->
+    <dimen name="items_panel_tab_body_gap">10dp</dimen>
+    <dimen name="items_panel_grid_margin_top">6dp</dimen>
     <dimen name="items_panel_summary_gap">8dp</dimen>
     <dimen name="items_panel_host_margin_horizontal">12dp</dimen>
     <dimen name="items_panel_summary_cell_gap">6dp</dimen>

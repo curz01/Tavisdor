@@ -1,6 +1,7 @@
 package com.tavisdor.app.save
 
 import com.tavisdor.app.items.Ingredient
+import com.tavisdor.app.items.Potion
 import com.tavisdor.app.items.LootTier
 import com.tavisdor.app.items.WeaponType
 import com.tavisdor.app.party.Gender
@@ -23,6 +24,7 @@ data class SaveData(
     val partyGold: Int = 0,
     val inventoryWeapons: List<WeaponSaveData> = emptyList(),
     val inventoryIngredients: List<Ingredient> = emptyList(),
+    val inventoryPotions: List<Potion> = emptyList(),
 ) {
     companion object {
         /**
@@ -34,8 +36,9 @@ data class SaveData(
          *  v4 - adds [SaveData.partyGold], [SaveData.inventoryWeapons],
          *       and [SaveData.inventoryIngredients]. Older saves default
          *       to 0 gold and an empty inventory.
+         *  v5 - adds [SaveData.inventoryPotions].
          */
-        const val CURRENT_SCHEMA = 4
+        const val CURRENT_SCHEMA = 5
     }
 }
 

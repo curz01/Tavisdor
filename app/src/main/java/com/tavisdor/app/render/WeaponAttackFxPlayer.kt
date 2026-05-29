@@ -10,6 +10,9 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.util.Log
 import com.tavisdor.app.dungeon.Cell
+import com.tavisdor.app.render.UtilityCastFxCatalog.introDurationMs
+import com.tavisdor.app.render.UtilityCastMotion
+import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -36,6 +39,10 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
     private var onComplete: (() -> Unit)? = null
 
     val isActive: Boolean get() = activeRequest != null
+
+    val playbackRequest: WeaponFxRequest? get() = activeRequest
+
+    val playbackElapsedMs: Long get() = elapsedMs
 
     fun start(request: WeaponFxRequest, onComplete: () -> Unit): Boolean {
         if (!canPlay(request)) return false
@@ -99,18 +106,43 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
                 drawThrust(canvas, "spear", attacker, defender, aimDeg, scale, elapsedMs, SPEAR_MS)
             }
             WeaponFxKind.STAFF_SPELL_RISE -> {
-                drawStaffSpellCast(
-                    canvas = canvas,
-                    pivot = if (request.castFromPartyIcon) {
-                        partyIconCenter(attacker.first, attacker.second, cellPx)
-                    } else {
-                        attacker
-                    },
-                    staffHeight = scale,
-                    flowFrames = request.spellFlowFrames,
-                    elapsed = elapsedMs,
-                    duration = durationMs(request),
-                )
+                val partyScreen = attacker
+                val partyPivot = if (request.castFromPartyIcon) {
+                    partyIconCenter(partyScreen.first, partyScreen.second, cellPx)
+                } else {
+                    partyScreen
+                }
+                val focusCenter = request.utilityFocusCell?.let {
+                    cellCenter(it, camCx, camCy, cellPx, viewCx, viewCy)
+                }
+                if (request.utilityMotion != null) {
+                    drawUtilityCast(
+                        canvas = canvas,
+                        motion = request.utilityMotion,
+                        partyPivot = partyPivot,
+                        partyCellCenter = partyScreen,
+                        focusCenter = focusCenter,
+                        cellPx = cellPx,
+                        spriteScale = scale,
+                        flowSequence = request.flowFrameSequence,
+                        flowStepMs = request.flowStepMs,
+                        flowHeightScale = request.flowHeightScale,
+                        elapsed = elapsedMs,
+                    )
+                } else {
+                    drawStaffSpellCast(
+                        canvas = canvas,
+                        pivot = partyPivot,
+                        staffHeight = scale,
+                        flowFrames = request.spellFlowFrames,
+                        flowSequence = request.flowFrameSequence,
+                        flowStepMs = request.flowStepMs,
+                        flowHeightScale = request.flowHeightScale,
+                        showStaff = request.showStaffDuringCast,
+                        elapsed = elapsedMs,
+                        duration = durationMs(request),
+                    )
+                }
             }
             WeaponFxKind.DAGGER_COMBO -> {
                 drawDaggerCombo(canvas, attacker, defender, aimDeg, scale, elapsedMs)
@@ -177,7 +209,23 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         WeaponFxKind.BOW_SHOT -> bowAssetsReady("arrow", request.bowVolleyPlan)
         WeaponFxKind.FIRE_PROJECTILE -> bowAssetsReady("fire_arrow", request.bowVolleyPlan)
         WeaponFxKind.CHARGE_SWORD_HOLD -> bitmap("sword") != null
+        WeaponFxKind.STAFF_SPELL_RISE ->
+            if (request.showStaffDuringCast) {
+                bitmap("staff") != null && staffFlowAssetsReady(request)
+            } else {
+                staffFlowAssetsReady(request)
+            }
         else -> bitmap(primaryAsset(request)) != null
+    }
+
+    private fun staffFlowAssetsReady(request: WeaponFxRequest): Boolean {
+        if (request.flowFrameSequence.isNotEmpty()) {
+            return request.flowFrameSequence.all { bitmap(it) != null }
+        }
+        if (request.spellFlowFrames.isNotEmpty()) {
+            return request.spellFlowFrames.all { bitmap(it) != null }
+        }
+        return true
     }
 
     private fun bowAssetsReady(arrowAsset: String, plan: BowVolleyPlan?): Boolean {
@@ -199,6 +247,9 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
     private fun durationMs(request: WeaponFxRequest): Long {
         val override = request.durationMsOverride
         if (override != null) return override.coerceAtLeast(1L)
+        if (request.flowFrameSequence.isNotEmpty()) {
+            return request.flowFrameSequence.size * request.flowStepMs.coerceAtLeast(1L)
+        }
         request.bowVolleyPlan?.let { return bowVolleyDurationMs(it) }
         return when (request.kind) {
             WeaponFxKind.MELEE_ARC, WeaponFxKind.STAFF_MELEE_ARC -> MELEE_ARC_MS
@@ -213,11 +264,12 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
     private fun singleBowShotMs(): Long = BOW_DRAW_MS + BOW_HOLD_MS + ARROW_FLIGHT_MS
 
     private fun bowVolleyDurationMs(plan: BowVolleyPlan): Long {
+        val base = singleBowShotMs()
         var total = 0L
         for (volley in plan.volleys) {
             total += when (volley) {
-                is BowVolley.Parallel -> singleBowShotMs()
-                is BowVolley.Sequential -> singleBowShotMs() * volley.arrowCount
+                is BowVolley.Parallel -> base
+                is BowVolley.Sequential -> volley.totalDurationMs(base)
             }
         }
         return total.coerceAtLeast(1L)
@@ -281,6 +333,108 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         drawWeaponAtPivot(canvas, bmp, px, py, aimDeg, scale)
     }
 
+    private fun drawUtilityCast(
+        canvas: Canvas,
+        motion: UtilityCastMotion,
+        partyPivot: Pair<Float, Float>,
+        partyCellCenter: Pair<Float, Float>,
+        focusCenter: Pair<Float, Float>?,
+        cellPx: Float,
+        spriteScale: Float,
+        flowSequence: List<String>,
+        flowStepMs: Long,
+        flowHeightScale: Float,
+        elapsed: Long,
+    ) {
+        if (flowSequence.isEmpty()) return
+        val flowH = spriteScale * SPELL_FLOW_HEIGHT_FRACTION * flowHeightScale
+        val introMs = introDurationMs(motion)
+        val asset = if (elapsed < introMs) {
+            flowSequence.first()
+        } else {
+            val cycleElapsed = elapsed - introMs
+            val idx = (cycleElapsed / flowStepMs.coerceAtLeast(1L)).toInt()
+                .coerceIn(0, flowSequence.lastIndex)
+            flowSequence[idx]
+        }
+        val bmp = bitmap(asset) ?: return
+        val dest = focusCenter ?: partyCellCenter
+        val (anchorX, anchorY, centerAnchored) = utilitySpriteAnchor(
+            motion = motion,
+            elapsed = elapsed,
+            partyPivot = partyPivot,
+            partyCellCenter = partyCellCenter,
+            focusCenter = dest,
+            cellPx = cellPx,
+            flowH = flowH,
+        )
+        if (centerAnchored) {
+            drawBitmapCentered(canvas, bmp, anchorX, anchorY, flowH)
+        } else {
+            drawBitmapUpright(canvas, bmp, anchorX, anchorY, flowH)
+        }
+    }
+
+    private fun utilitySpriteAnchor(
+        motion: UtilityCastMotion,
+        elapsed: Long,
+        partyPivot: Pair<Float, Float>,
+        partyCellCenter: Pair<Float, Float>,
+        focusCenter: Pair<Float, Float>,
+        cellPx: Float,
+        flowH: Float,
+    ): Triple<Float, Float, Boolean> {
+        when (motion) {
+            UtilityCastMotion.CAMP_SLIDE_THEN_CYCLE -> {
+                val partyFoot = partyIconRestingBase(
+                    partyCellCenter.first,
+                    partyCellCenter.second,
+                    cellPx,
+                )
+                val travelMs = UtilityCastFxCatalog.CAMP_TRAVEL_MS
+                if (elapsed < travelMs) {
+                    val t = easeInOutQuad(
+                        (elapsed.toFloat() / travelMs.toFloat()).coerceIn(0f, 1f),
+                    )
+                    val startCenterY = partyFoot.second - flowH / 2f
+                    val cx = partyFoot.first + (focusCenter.first - partyFoot.first) * t
+                    val cy = startCenterY + (focusCenter.second - startCenterY) * t
+                    return Triple(cx, cy, true)
+                }
+                return Triple(focusCenter.first, focusCenter.second, true)
+            }
+            UtilityCastMotion.RISE_THEN_CYCLE -> {
+                val holdMs = UtilityCastFxCatalog.RISE_INTRO_HOLD_MS
+                val riseMs = UtilityCastFxCatalog.RISE_INTRO_ASCENT_MS
+                val iconHeight = cellPx * PARTY_ICON_HEIGHT_FRACTION
+                val riseDistance = iconHeight * UTILITY_RISE_ICON_HEIGHT_MULTIPLIER
+                val risenCenterY = partyPivot.second - riseDistance
+                val centerY = when {
+                    elapsed < holdMs -> partyPivot.second
+                    elapsed < holdMs + riseMs -> {
+                        val t = easeInOutQuad(
+                            ((elapsed - holdMs).toFloat() / riseMs.toFloat()).coerceIn(0f, 1f),
+                        )
+                        partyPivot.second - riseDistance * t
+                    }
+                    else -> risenCenterY
+                }
+                return Triple(partyPivot.first, centerY, true)
+            }
+        }
+    }
+
+    private fun partyIconRestingBase(
+        cellCenterX: Float,
+        cellCenterY: Float,
+        cellPx: Float,
+    ): Pair<Float, Float> {
+        val baseOffset = cellPx * PARTY_ICON_BASE_OFFSET_FRACTION
+        val cellTop = cellCenterY - cellPx * 0.5f
+        val restingBaseY = cellTop + cellPx - baseOffset
+        return cellCenterX to restingBaseY
+    }
+
     /**
      * Gandalf-style cast: [staff.png] stays upright, rises from the
      * party icon center to ~98% of its drawn height while flow
@@ -291,29 +445,55 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         pivot: Pair<Float, Float>,
         staffHeight: Float,
         flowFrames: List<String>,
+        flowSequence: List<String>,
+        flowStepMs: Long,
+        flowHeightScale: Float,
+        showStaff: Boolean,
         elapsed: Long,
         duration: Long,
     ) {
-        val staffBmp = bitmap("staff") ?: return
-        val t = (elapsed.toFloat() / duration.coerceAtLeast(1L)).coerceIn(0f, 1f)
-        val eased = easeInOutQuad(t)
-        val riseDistance = staffHeight * STAFF_CAST_RISE_HEIGHT_MULTIPLIER * eased
-        val pivotY = pivot.second - riseDistance
-        drawBitmapUpright(canvas, staffBmp, pivot.first, pivotY, staffHeight)
+        val flowH = staffHeight * SPELL_FLOW_HEIGHT_FRACTION * flowHeightScale
+        val flowAnchorY: Float
+        val flowAnchorX = pivot.first
 
-        val tipY = pivotY - staffHeight
-        val loadedFlow = flowFrames.mapNotNull { bitmap(it) }
-        if (loadedFlow.isNotEmpty()) {
-            val frameIdx = (
-                (elapsed / SPELL_FLOW_FRAME_MS).toInt() % loadedFlow.size + loadedFlow.size
-                ) % loadedFlow.size
-            val flowBmp = loadedFlow[frameIdx]
-            val flowH = staffHeight * SPELL_FLOW_HEIGHT_FRACTION
-            drawBitmapUpright(canvas, flowBmp, pivot.first, tipY, flowH)
+        if (showStaff) {
+            val staffBmp = bitmap("staff") ?: return
+            val t = (elapsed.toFloat() / duration.coerceAtLeast(1L)).coerceIn(0f, 1f)
+            val eased = easeInOutQuad(t)
+            val riseDistance = staffHeight * STAFF_CAST_RISE_HEIGHT_MULTIPLIER * eased
+            val pivotY = pivot.second - riseDistance
+            drawBitmapUpright(canvas, staffBmp, pivot.first, pivotY, staffHeight)
+            flowAnchorY = pivotY - staffHeight
         } else {
+            flowAnchorY = pivot.second
+        }
+
+        val t = (elapsed.toFloat() / duration.coerceAtLeast(1L)).coerceIn(0f, 1f)
+        val sequenceAsset = if (flowSequence.isNotEmpty()) {
+            val idx = (elapsed / flowStepMs.coerceAtLeast(1L)).toInt()
+                .coerceIn(0, flowSequence.lastIndex)
+            flowSequence[idx]
+        } else {
+            null
+        }
+        val flowBmp = when {
+            sequenceAsset != null -> bitmap(sequenceAsset)
+            else -> {
+                val loadedFlow = flowFrames.mapNotNull { bitmap(it) }
+                if (loadedFlow.isEmpty()) null else {
+                    val frameIdx = (
+                        (elapsed / SPELL_FLOW_FRAME_MS).toInt() % loadedFlow.size + loadedFlow.size
+                        ) % loadedFlow.size
+                    loadedFlow[frameIdx]
+                }
+            }
+        }
+        if (flowBmp != null) {
+            drawBitmapUpright(canvas, flowBmp, flowAnchorX, flowAnchorY, flowH)
+        } else if (showStaff) {
             val glowR = staffHeight * 0.22f * (0.7f + 0.3f * sin(t * Math.PI.toFloat() * 4f))
             staffGlowPaint.alpha = (70 + 50 * sin(t * Math.PI.toFloat() * 5f)).toInt().coerceIn(35, 130)
-            canvas.drawCircle(pivot.first, tipY, glowR, staffGlowPaint)
+            canvas.drawCircle(flowAnchorX, flowAnchorY, glowR, staffGlowPaint)
         }
     }
 
@@ -348,6 +528,22 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         dstRect.set(-w / 2f, -h, w / 2f, 0f)
         canvas.drawBitmap(bmp, srcRect, dstRect, drawPaint)
         canvas.restore()
+    }
+
+    /** Draws [bmp] centered on ([centerX], [centerY]). */
+    private fun drawBitmapCentered(
+        canvas: Canvas,
+        bmp: Bitmap,
+        centerX: Float,
+        centerY: Float,
+        targetHeight: Float,
+    ) {
+        val aspect = bmp.width.toFloat() / bmp.height.coerceAtLeast(1)
+        val h = targetHeight
+        val w = h * aspect
+        dstRect.set(centerX - w / 2f, centerY - h / 2f, centerX + w / 2f, centerY + h / 2f)
+        srcRect.set(0, 0, bmp.width, bmp.height)
+        canvas.drawBitmap(bmp, srcRect, dstRect, drawPaint)
     }
 
     /** dagger_r thrust, then dagger_l thrust along the aim line. */
@@ -392,11 +588,12 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         elapsed: Long,
         plan: BowVolleyPlan,
     ) {
+        val baseShotMs = singleBowShotMs()
         var remaining = elapsed
         for (volley in plan.volleys) {
             val volleyDuration = when (volley) {
-                is BowVolley.Parallel -> singleBowShotMs()
-                is BowVolley.Sequential -> singleBowShotMs() * volley.arrowCount
+                is BowVolley.Parallel -> baseShotMs
+                is BowVolley.Sequential -> volley.totalDurationMs(baseShotMs)
             }
             if (remaining < volleyDuration) {
                 when (volley) {
@@ -412,19 +609,27 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
                         arrowAsset = plan.arrowAsset,
                     )
                     is BowVolley.Sequential -> {
-                        val shotIndex = (remaining / singleBowShotMs()).toInt()
-                            .coerceIn(0, volley.arrowCount - 1)
-                        val shotElapsed = remaining - shotIndex * singleBowShotMs()
-                        drawBowShot(
-                            canvas = canvas,
-                            attacker = attacker,
-                            defender = defender,
-                            aimDeg = aimDeg,
-                            scale = scale,
-                            cellPx = cellPx,
-                            elapsed = shotElapsed,
-                            arrowAsset = plan.arrowAsset,
-                        )
+                        var shotStart = 0L
+                        for (shotIndex in 0 until volley.arrowCount) {
+                            val shotDur = volley.shotDurationMs(shotIndex, baseShotMs)
+                            if (remaining < shotStart + shotDur) {
+                                drawBowShot(
+                                    canvas = canvas,
+                                    attacker = attacker,
+                                    defender = defender,
+                                    aimDeg = aimDeg,
+                                    scale = scale,
+                                    cellPx = cellPx,
+                                    elapsed = remaining - shotStart,
+                                    arrowAsset = plan.arrowAsset,
+                                    shotDurationMs = shotDur,
+                                    shotIndex = shotIndex,
+                                    shotCount = volley.arrowCount,
+                                )
+                                return
+                            }
+                            shotStart += shotDur
+                        }
                     }
                 }
                 return
@@ -462,39 +667,51 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
 
         val arrowBmp = bitmap(arrowAsset) ?: return
         val aimRad = Math.toRadians(aimDeg.toDouble())
-        val perpX = -sin(aimRad).toFloat()
-        val perpY = cos(aimRad).toFloat()
-        val spread = cellPx * 0.14f
+        val alongX = cos(aimRad).toFloat()
+        val alongY = sin(aimRad).toFloat()
+        val (perpX, perpY) = perpUnit(aimDeg)
 
         if (elapsed < BOW_DRAW_MS + BOW_HOLD_MS) {
             for (i in 0 until arrowCount) {
-                val lane = parallelLaneOffset(i, arrowCount)
+                val variation = arrowFlightVariation(i, arrowCount)
+                val lateral = lateralOffsetAt(flightProgress = 0f, cellPx = cellPx, variation = variation)
                 val backOffset = bowDrawBackOffset(elapsed, cellPx)
-                val ax = attacker.first - cos(aimRad).toFloat() * backOffset + perpX * spread * lane
-                val ay = attacker.second - sin(aimRad).toFloat() * backOffset + perpY * spread * lane
-                drawWeaponAtPivot(canvas, arrowBmp, ax, ay, aimDeg, scale * 0.85f)
+                val ax = attacker.first - alongX * backOffset + perpX * lateral
+                val ay = attacker.second - alongY * backOffset + perpY * lateral
+                drawWeaponAtPivot(
+                    canvas, arrowBmp, ax, ay,
+                    aimDeg + variation.aimJitterDeg * 0.25f,
+                    scale * 0.85f,
+                )
             }
             return
         }
 
         val flightStart = BOW_DRAW_MS + BOW_HOLD_MS
         val local = elapsed - flightStart
-        val t = (local.toFloat() / ARROW_FLIGHT_MS).coerceIn(0f, 1f)
-        val eased = easeInQuad(t)
         for (i in 0 until arrowCount) {
-            val lane = parallelLaneOffset(i, arrowCount)
-            val baseX = lerp(attacker.first, defender.first, eased)
-            val baseY = lerp(attacker.second, defender.second, eased)
-            val ax = baseX + perpX * spread * lane
-            val ay = baseY + perpY * spread * lane
-            drawWeaponAtPivot(canvas, arrowBmp, ax, ay, aimDeg, scale * 0.85f)
+            val variation = arrowFlightVariation(i, arrowCount)
+            val delayMs = (ARROW_FLIGHT_MS * variation.flightDelayFrac).toLong()
+            val arrowLocal = local - delayMs
+            val flightProgress = if (arrowLocal < 0L) {
+                0f
+            } else {
+                (arrowLocal.toFloat() / ARROW_FLIGHT_MS).coerceIn(0f, 1f)
+            }
+            val (ax, ay) = arrowPositionOnPath(
+                attacker = attacker,
+                defender = defender,
+                aimDeg = aimDeg,
+                flightProgress = flightProgress,
+                cellPx = cellPx,
+                variation = variation,
+            )
+            drawWeaponAtPivot(
+                canvas, arrowBmp, ax, ay,
+                aimDeg + variation.aimJitterDeg * flightProgress,
+                scale * 0.85f,
+            )
         }
-    }
-
-    /** Centers parallel arrows around the aim line (-0.5, +0.5 for a pair). */
-    private fun parallelLaneOffset(index: Int, count: Int): Float {
-        if (count <= 1) return 0f
-        return index - (count - 1) / 2f
     }
 
     private fun bowDrawBackOffset(elapsed: Long, cellPx: Float): Float = when {
@@ -519,11 +736,16 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         elapsed: Long,
         arrowAsset: String,
         drawArrows: Boolean = true,
+        shotDurationMs: Long = singleBowShotMs(),
+        shotIndex: Int = 0,
+        shotCount: Int = 1,
     ) {
+        val timelineMs = mapToFullShotTimeline(elapsed, shotDurationMs)
+        val variation = arrowFlightVariation(shotIndex, shotCount)
         val bowFrame = when {
-            elapsed < BOW_FRAME_1_MS -> "bow1"
-            elapsed < BOW_FRAME_1_MS + BOW_FRAME_2_MS -> "bow2"
-            elapsed < BOW_DRAW_MS -> "bow3"
+            timelineMs < BOW_FRAME_1_MS -> "bow1"
+            timelineMs < BOW_FRAME_1_MS + BOW_FRAME_2_MS -> "bow2"
+            timelineMs < BOW_DRAW_MS -> "bow3"
             else -> "bow1"
         }
         val bowBmp = bitmap(bowFrame) ?: return
@@ -533,20 +755,97 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
 
         val arrowBmp = bitmap(arrowAsset) ?: return
         val aimRad = Math.toRadians(aimDeg.toDouble())
-        val backOffset = bowDrawBackOffset(elapsed, cellPx)
-        if (elapsed < BOW_DRAW_MS + BOW_HOLD_MS) {
-            val ax = attacker.first - cos(aimRad).toFloat() * backOffset
-            val ay = attacker.second - sin(aimRad).toFloat() * backOffset
-            drawWeaponAtPivot(canvas, arrowBmp, ax, ay, aimDeg, scale * 0.85f)
+        val alongX = cos(aimRad).toFloat()
+        val alongY = sin(aimRad).toFloat()
+        val (perpX, perpY) = perpUnit(aimDeg)
+        val backOffset = bowDrawBackOffset(timelineMs, cellPx)
+        if (timelineMs < BOW_DRAW_MS + BOW_HOLD_MS) {
+            val lateral = lateralOffsetAt(0f, cellPx, variation)
+            val ax = attacker.first - alongX * backOffset + perpX * lateral
+            val ay = attacker.second - alongY * backOffset + perpY * lateral
+            drawWeaponAtPivot(
+                canvas, arrowBmp, ax, ay,
+                aimDeg + variation.aimJitterDeg * 0.25f,
+                scale * 0.85f,
+            )
         } else {
             val flightStart = BOW_DRAW_MS + BOW_HOLD_MS
-            val local = elapsed - flightStart
-            val t = (local.toFloat() / ARROW_FLIGHT_MS).coerceIn(0f, 1f)
-            val eased = easeInQuad(t)
-            val ax = lerp(attacker.first, defender.first, eased)
-            val ay = lerp(attacker.second, defender.second, eased)
-            drawWeaponAtPivot(canvas, arrowBmp, ax, ay, aimDeg, scale * 0.85f)
+            val local = timelineMs - flightStart
+            val flightProgress = (local.toFloat() / ARROW_FLIGHT_MS).coerceIn(0f, 1f)
+            val (ax, ay) = arrowPositionOnPath(
+                attacker, defender, aimDeg, flightProgress, cellPx, variation,
+            )
+            drawWeaponAtPivot(
+                canvas, arrowBmp, ax, ay,
+                aimDeg + variation.aimJitterDeg * flightProgress,
+                scale * 0.85f,
+            )
         }
+    }
+
+    /** Deterministic spread / stagger for multi-arrow volleys (not RNG per frame). */
+    private data class ArrowFlightVariation(
+        val lane: Float,
+        val flightDelayFrac: Float,
+        val wobblePhase: Float,
+        val aimJitterDeg: Float,
+    )
+
+    private fun arrowFlightVariation(index: Int, count: Int): ArrowFlightVariation {
+        if (count <= 1) {
+            return ArrowFlightVariation(0f, 0f, 0f, 0f)
+        }
+        return when (count) {
+            2 -> when (index) {
+                0 -> ArrowFlightVariation(-0.62f, 0f, 0.35f, -3f)
+                else -> ArrowFlightVariation(0.62f, 0.09f, 1.25f, 3f)
+            }
+            else -> when (index) {
+                0 -> ArrowFlightVariation(-0.78f, 0f, 0.15f, -3.5f)
+                1 -> ArrowFlightVariation(0.08f, 0.05f, 0.95f, 1f)
+                else -> ArrowFlightVariation(0.82f, 0.1f, 1.75f, 4f)
+            }
+        }
+    }
+
+    private fun perpUnit(aimDeg: Float): Pair<Float, Float> {
+        val aimRad = Math.toRadians(aimDeg.toDouble())
+        return -sin(aimRad).toFloat() to cos(aimRad).toFloat()
+    }
+
+    /** Lateral offset perpendicular to aim; wobbles mid-flight so paths do not stay parallel. */
+    private fun lateralOffsetAt(
+        flightProgress: Float,
+        cellPx: Float,
+        variation: ArrowFlightVariation,
+    ): Float {
+        val spread = cellPx * 0.17f
+        val base = variation.lane * spread
+        val wobble = sin((flightProgress * PI + variation.wobblePhase).toFloat()) * cellPx * 0.06f
+        return base + wobble
+    }
+
+    private fun arrowPositionOnPath(
+        attacker: Pair<Float, Float>,
+        defender: Pair<Float, Float>,
+        aimDeg: Float,
+        flightProgress: Float,
+        cellPx: Float,
+        variation: ArrowFlightVariation,
+    ): Pair<Float, Float> {
+        val eased = easeInQuad(flightProgress.coerceIn(0f, 1f))
+        val (perpX, perpY) = perpUnit(aimDeg)
+        val lateral = lateralOffsetAt(flightProgress, cellPx, variation)
+        val baseX = lerp(attacker.first, defender.first, eased)
+        val baseY = lerp(attacker.second, defender.second, eased)
+        return baseX + perpX * lateral to baseY + perpY * lateral
+    }
+
+    /** Compresses a shortened shot into the full draw / flight timeline. */
+    private fun mapToFullShotTimeline(elapsed: Long, shotDurationMs: Long): Long {
+        if (shotDurationMs >= singleBowShotMs()) return elapsed
+        val progress = (elapsed.toFloat() / shotDurationMs.toFloat()).coerceIn(0f, 1f)
+        return (progress * singleBowShotMs()).toLong().coerceIn(0L, singleBowShotMs() - 1)
     }
 
     /**
@@ -614,8 +913,11 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         private const val MELEE_ARC_MS = 420L
         private const val SPEAR_MS = 360L
         private const val STAFF_SPELL_MS = 1150L
-        /** Rise distance = staff draw height × this. */
-        private const val STAFF_CAST_RISE_HEIGHT_MULTIPLIER = 0.975f
+        /** Rise distance = staff draw height × this (0.4875 = prior 0.975 × 0.5). */
+        private const val STAFF_CAST_RISE_HEIGHT_MULTIPLIER = 0.4875f
+
+        /** Utility hold+rise: vertical travel as a multiple of party icon height. */
+        private const val UTILITY_RISE_ICON_HEIGHT_MULTIPLIER = 0.675f
         private const val SPELL_FLOW_FRAME_MS = 180L
         private const val SPELL_FLOW_HEIGHT_FRACTION = 0.55f
 

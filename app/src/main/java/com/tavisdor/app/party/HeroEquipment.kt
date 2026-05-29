@@ -39,7 +39,10 @@ object HeroEquipment {
             WeaponSlot.PRIMARY -> hero.weapon1
             WeaponSlot.OFF_HAND -> hero.weapon2
         }
-        previous?.let { inv.addWeapon(it) }
+        if (previous != null && !inv.addWeapon(previous)) {
+            inv.addWeapon(fromBag)
+            return EquipResult.NOT_IN_INVENTORY
+        }
 
         val updated = when (slot) {
             WeaponSlot.PRIMARY -> hero.copy(weapon1 = fromBag)
@@ -57,7 +60,7 @@ object HeroEquipment {
             WeaponSlot.OFF_HAND -> hero.weapon2
         } ?: return false
 
-        party.inventory.addWeapon(weapon)
+        if (!party.inventory.addWeapon(weapon)) return false
         val updated = when (slot) {
             WeaponSlot.PRIMARY -> hero.copy(weapon1 = null)
             WeaponSlot.OFF_HAND -> hero.copy(weapon2 = null)

@@ -58,75 +58,39 @@
             android:layout_weight="1" />
 
         <!--
-          Combat log: rolling 4-line window over the last ~10
-          resolved actions (attacks, dodges, spells, KOs). Set
-          visible the first time combat starts; stays visible
-          afterward so the player can scroll the history back
-          even between encounters. The text view is wrapped in
-          a horizontal container so two scroll buttons can sit
-          flush against its right edge.
+          Combat log: up to 20 entries, swipe to scroll inside the box.
+          Tap to double height; tap outside to collapse. Text wraps.
         -->
-        <LinearLayout
+        <FrameLayout
             android:id="@+id/combatLogContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
             android:visibility="gone">
 
-            <com.tavisdor.app.ui.CombatLogView
-                android:id="@+id/combatLog"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1" />
+            <ScrollView
+                android:id="@+id/combatLogScroll"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/combat_log_collapsed_height"
+                android:fillViewport="true"
+                android:scrollbars="vertical"
+                android:fadeScrollbars="true">
 
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="match_parent"
-                android:orientation="vertical">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnCombatLogUp"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="@dimen/combat_log_scroll_button_width"
-                    android:layout_height="0dp"
-                    android:layout_weight="1"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:minHeight="0dp"
-                    android:paddingHorizontal="0dp"
-                    android:paddingVertical="0dp"
-                    android:text="@string/combat_log_scroll_up"
-                    android:textSize="14sp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnCombatLogDown"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="@dimen/combat_log_scroll_button_width"
-                    android:layout_height="0dp"
-                    android:layout_weight="1"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:minHeight="0dp"
-                    android:paddingHorizontal="0dp"
-                    android:paddingVertical="0dp"
-                    android:text="@string/combat_log_scroll_down"
-                    android:textSize="14sp" />
-            </LinearLayout>
-        </LinearLayout>
+                <com.tavisdor.app.ui.CombatLogView
+                    android:id="@+id/combatLog"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content" />
+            </ScrollView>
+        </FrameLayout>
 
         <!--
           Action bar: Menu / Action / Items in a horizontal row, sitting
           between the dungeon view and the hero panel. Equal-weight
           MaterialButtons share the full screen width.
         -->
-        <FrameLayout
-            android:layout_width="match_parent"
-            android:layout_height="@dimen/action_bar_height">
-
         <LinearLayout
             android:id="@+id/actionBar"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_height="@dimen/action_bar_height"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingHorizontal="@dimen/action_bar_padding_horizontal"
@@ -158,20 +122,6 @@
                 android:layout_weight="1"
                 android:text="@string/action_bar_items" />
         </LinearLayout>
-
-        <ImageButton
-            android:id="@+id/btnActionBarWait"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_gravity="start|center_vertical"
-            android:layout_marginStart="@dimen/action_bar_padding_horizontal"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/combat_wait_button"
-            android:padding="4dp"
-            android:scaleType="fitCenter"
-            android:visibility="gone" />
-
-        </FrameLayout>
 
         <!-- Persistent bottom panel: 2x2 hero portraits, front-line top row, back-line bottom row. -->
         <com.tavisdor.app.HeroPanelView
@@ -906,12 +856,13 @@
                             android:focusable="true">
 
                             <TextView
+                                android:id="@+id/tvItemsTabPickup"
                                 android:layout_width="match_parent"
                                 android:layout_height="match_parent"
                                 android:gravity="center"
                                 android:text="@string/items_panel_tab_pickup"
                                 android:textColor="@color/inventory_tab_label"
-                                android:textSize="11sp"
+                                android:textSize="10sp"
                                 android:textStyle="bold" />
                         </FrameLayout>
 
@@ -925,13 +876,14 @@
                             android:focusable="true">
 
                             <TextView
+                                android:id="@+id/tvItemsTabEquip"
                                 android:layout_width="match_parent"
                                 android:layout_height="match_parent"
                                 android:gravity="center"
-                                android:text="@string/items_panel_tab_equipment"
                                 android:textColor="@color/inventory_tab_label"
-                                android:textSize="11sp"
-                                android:textStyle="bold" />
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                tools:text="Equip: 0/12" />
                         </FrameLayout>
 
                         <FrameLayout
@@ -944,13 +896,14 @@
                             android:focusable="true">
 
                             <TextView
+                                android:id="@+id/tvItemsTabMat"
                                 android:layout_width="match_parent"
                                 android:layout_height="match_parent"
                                 android:gravity="center"
-                                android:text="@string/items_panel_tab_ingredients"
                                 android:textColor="@color/inventory_tab_label"
-                                android:textSize="11sp"
-                                android:textStyle="bold" />
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                tools:text="Mat: 0/12" />
                         </FrameLayout>
                     </LinearLayout>
                 </LinearLayout>
@@ -959,7 +912,7 @@
                     android:id="@+id/itemsTabBody"
                     android:layout_width="match_parent"
                     android:layout_height="@dimen/items_panel_tab_body_height"
-                    android:layout_marginTop="@dimen/items_panel_top_tab_overlap">
+                    android:layout_marginTop="@dimen/items_panel_tab_body_gap">
 
                     <!-- Tab 0 (default): Pickup / Discard -->
                     <LinearLayout
@@ -976,77 +929,99 @@
                             android:textColor="@color/items_panel_hint"
                             android:textSize="11sp" />
 
-                        <ScrollView
-                            android:layout_width="match_parent"
-                            android:layout_height="0dp"
-                            android:layout_marginTop="4dp"
-                            android:layout_weight="1"
-                            android:fillViewport="true"
-                            android:scrollbars="none">
+                        <android.widget.GridLayout
+                            android:id="@+id/itemsPickupGrid"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_gravity="center_horizontal"
+                            android:layout_marginTop="@dimen/items_panel_grid_margin_top"
+                            android:alignmentMode="alignBounds"
+                            android:columnCount="4"
+                            android:rowCount="3"
+                            android:useDefaultMargins="false" />
 
-                            <LinearLayout
-                                android:id="@+id/itemsPickupList"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:orientation="vertical" />
-                        </ScrollView>
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnItemsPickUpAll"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
+                        <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
-                            android:text="@string/items_panel_pickup_all" />
+                            android:layout_marginTop="8dp"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <CheckBox
+                                android:id="@+id/cbItemsAutoPickup"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checked="true" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginEnd="8dp"
+                                android:text="@string/items_panel_auto_pickup"
+                                android:textColor="@color/items_panel_row_text"
+                                android:textSize="12sp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnItemsPickUpAll"
+                                style="@style/Widget.Material3.Button.OutlinedButton"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:minHeight="0dp"
+                                android:minWidth="0dp"
+                                android:text="@string/items_panel_pickup_all" />
+                        </LinearLayout>
                     </LinearLayout>
 
                     <!-- Tab 1: Equipment & Weapons -->
-                    <ScrollView
+                    <LinearLayout
                         android:id="@+id/itemsTabEquipment"
                         android:layout_width="match_parent"
                         android:layout_height="match_parent"
-                        android:scrollbars="none"
+                        android:orientation="vertical"
                         android:visibility="gone">
 
-                        <LinearLayout
+                        <TextView
+                            android:id="@+id/tvItemsEquipHint"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:orientation="vertical"
-                            android:paddingTop="4dp">
+                            android:paddingBottom="4dp"
+                            android:text="@string/inventory_equip_pick_weapon"
+                            android:textColor="@color/items_panel_section_header"
+                            android:textSize="11sp"
+                            android:visibility="gone" />
 
-                            <TextView
-                                android:id="@+id/tvItemsEquipHint"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:paddingBottom="6dp"
-                                android:text="@string/inventory_equip_pick_weapon"
-                                android:textColor="@color/items_panel_section_header"
-                                android:textSize="11sp"
-                                android:visibility="gone" />
-
-                            <LinearLayout
-                                android:id="@+id/itemsEquipmentList"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:orientation="vertical" />
-                        </LinearLayout>
-                    </ScrollView>
+                        <android.widget.GridLayout
+                            android:id="@+id/itemsEquipmentGrid"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_gravity="center_horizontal"
+                            android:layout_marginTop="@dimen/items_panel_grid_margin_top"
+                            android:alignmentMode="alignBounds"
+                            android:columnCount="4"
+                            android:rowCount="3"
+                            android:useDefaultMargins="false" />
+                    </LinearLayout>
 
                     <!-- Tab 2: Ingredients -->
-                    <ScrollView
+                    <LinearLayout
                         android:id="@+id/itemsTabIngredients"
                         android:layout_width="match_parent"
                         android:layout_height="match_parent"
-                        android:scrollbars="none"
+                        android:orientation="vertical"
                         android:visibility="gone">
 
-                        <LinearLayout
-                            android:id="@+id/itemsIngredientList"
-                            android:layout_width="match_parent"
+                        <android.widget.GridLayout
+                            android:id="@+id/itemsMaterialsGrid"
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:orientation="vertical"
-                            android:paddingTop="4dp" />
-                    </ScrollView>
+                            android:layout_gravity="center_horizontal"
+                            android:layout_marginTop="@dimen/items_panel_grid_margin_top"
+                            android:alignmentMode="alignBounds"
+                            android:columnCount="4"
+                            android:rowCount="3"
+                            android:useDefaultMargins="false" />
+                    </LinearLayout>
                 </FrameLayout>
                 </LinearLayout>
             </ScrollView>

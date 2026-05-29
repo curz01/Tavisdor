@@ -18,6 +18,7 @@ import com.tavisdor.app.dungeon.Cell
 import com.tavisdor.app.dungeon.Door
 import com.tavisdor.app.dungeon.DoorAxis
 import com.tavisdor.app.dungeon.Floor
+import com.tavisdor.app.dungeon.TreasureChest
 import com.tavisdor.app.combat.CombatTargeting
 import com.tavisdor.app.enemies.Enemy
 import com.tavisdor.app.game.Game
@@ -28,7 +29,7 @@ import com.tavisdor.app.game.Game
  * Rendering model:
  *   - The dungeon is a grid of cells. Each floor cell is rendered as one
  *     tile (currently `assets/sprites/tile_floor.png`) -- interior floor,
- *     connector, door, and staircase cells share that base sprite, with
+ *     floor, connector, door, and staircase cells share that base, with
  *     special-cell overlays drawn on top.
  *   - Staircase cells get the `assets/sprites/tile_stairs_down.png`
  *     sprite drawn on top of the floor sprite.
@@ -98,43 +99,28 @@ class DungeonRenderer(private val assets: AssetManager) {
         ?.let { Rect(0, 0, it.width, it.height) }
         ?: Rect(0, 0, 1, 1)
 
-    /**
-     * Pre-loaded frames for the animated "you've selected this
-     * enemy" arrow that bobs above the currently selected
-     * combat target. Ordered to match the user-authored
-     * animation: `loc1 -> loc1b -> loc2 -> loc2b`, then loops.
-     *
-     * Loaded up-front (not lazily) because the strip cycles
-     * every frame whenever an enemy is selected; lazy decoding
-     * would stall the first-frame display the very first time
-     * a hate sprite was tapped.
-     */
-    private val selectionMarkerFrames: Array<Bitmap?> = arrayOf(
-        tryLoadBitmap(assets, "sprites/loc1.png"),
-        tryLoadBitmap(assets, "sprites/loc1b.png"),
-        tryLoadBitmap(assets, "sprites/loc2.png"),
-        tryLoadBitmap(assets, "sprites/loc2b.png"),
-    )
+    private val treasureClosed: Bitmap? = tryLoadBitmap(assets, "sprites/treasure1.png")
+    private val treasureOpen: Bitmap? = tryLoadBitmap(assets, "sprites/treasure2.png")
+    private val treasureEmpty: Bitmap? = tryLoadBitmap(assets, "sprites/treasure3.png")
+
+    private fun treasureSrc(bmp: Bitmap?): Rect = bmp
+        ?.let { Rect(0, 0, it.width, it.height) }
+        ?: Rect(0, 0, 1, 1)
 
     /**
-     * Cached source rects for [selectionMarkerFrames] so the
-     * draw loop doesn't allocate a [Rect] per blit. Mirrors the
-     * pattern used for the tile / portrait sprites above.
+     * Loops on the current target ([Game.selectedEnemy]) and on valid
+     * picks during [Game.isCombatTargetSelectionActive].
      */
-    private val selectionMarkerSrcRects: Array<Rect> = Array(selectionMarkerFrames.size) { idx ->
-        selectionMarkerFrames[idx]
+    private val combatTargetMarkerFrames: Array<Bitmap?> = arrayOf(
+        tryLoadBitmap(assets, "sprites/combat_target1.png"),
+        tryLoadBitmap(assets, "sprites/combat_target2.png"),
+    )
+
+    private val combatTargetMarkerSrcRects: Array<Rect> = Array(combatTargetMarkerFrames.size) { idx ->
+        combatTargetMarkerFrames[idx]
             ?.let { Rect(0, 0, it.width, it.height) }
             ?: Rect(0, 0, 1, 1)
     }
-
-    /**
-     * Wall-clock anchor for the selected-enemy arrow intro. Reset
-     * whenever [selectionMarkerTarget] changes so each new tap
-     * replays the faster frame cycle + three vertical bounces,
-     * then the marker hides for the rest of that selection.
-     */
-    private var selectionMarkerTarget: Enemy? = null
-    private var selectionMarkerStartMs: Long = 0L
 
     private val partyIcon: Bitmap? = tryLoadBitmap(assets, "sprites/party_icon.png")
     private val partyIconSrc: Rect = partyIcon
@@ -467,6 +453,13 @@ class DungeonRenderer(private val assets: AssetManager) {
             drawDoor(canvas, cell, door, cx, cy, cellPx, viewCx, viewCy)
         }
 
+        // ----- Treasure chests -----
+        for ((cell, chest) in floor.chests) {
+            if (cell.x < minCx || cell.x > maxCx || cell.y < minCy || cell.y > maxCy) continue
+            if (!floor.isVisibleToParty(cell)) continue
+            drawTreasureChest(canvas, cell, chest, cx, cy, cellPx, viewCx, viewCy)
+        }
+
         // ----- Enemies -----
         // Drawn after the floor / doors / stairs so they sit on top
         // of tile sprites, and BEFORE the party so the chess-piece
@@ -503,22 +496,34 @@ class DungeonRenderer(private val assets: AssetManager) {
             }
         }
 
-        // ----- Selected-enemy marker -----
-        // Drawn after enemies so the bobbing arrow always sits on
-        // top of the goblin sprite underneath; gated on the
-        // selected enemy being alive AND on-screen so we don't
-        // animate something the player can't see.
+        // ----- Current target marker (combat_target1 / combat_target2) -----
         val selected = game.selectedEnemy
         if (selected != null && selected.isAlive && !game.isCombatTargetSelectionActive()) {
             val sc = selected.cell
             if (sc.x in minCx..maxCx && sc.y in minCy..maxCy && floor.isVisibleToParty(sc)) {
-                syncSelectionMarkerClock(selected)
-                if (isSelectionMarkerAnimating()) {
-                    drawSelectionMarker(canvas, sc, cx, cy, cellPx, viewCx, viewCy)
+                if (!game.isActionAnimationTargeting(selected)) {
+                    drawCombatTargetMarkerOnEnemy(
+                        canvas, selected, game, cx, cy, cellPx, viewCx, viewCy,
+                    )
                 }
             }
-        } else {
-            clearSelectionMarkerClock()
+        }
+
+        if (game.isCombatTargetSelectionActive()) {
+            drawCombatTargetMarkers(
+                canvas = canvas,
+                game = game,
+                floor = floor,
+                camCx = cx,
+                camCy = cy,
+                cellPx = cellPx,
+                viewCx = viewCx,
+                viewCy = viewCy,
+                minCx = minCx,
+                maxCx = maxCx,
+                minCy = minCy,
+                maxCy = maxCy,
+            )
         }
 
         // ----- Party token -----
@@ -757,8 +762,8 @@ class DungeonRenderer(private val assets: AssetManager) {
     private val doorSpriteSrc = Rect(0, 0, 1, 1)
 
     private fun doorSprite(door: Door): Bitmap? = when (door.axis) {
-        DoorAxis.NS -> if (door.locked) tileDoorNsClosed else tileDoorNsOpened
-        DoorAxis.EW -> if (door.locked) tileDoorEwClosed else tileDoorEwOpened
+        DoorAxis.NS -> if (door.visuallyOpen) tileDoorNsOpened else tileDoorNsClosed
+        DoorAxis.EW -> if (door.visuallyOpen) tileDoorEwOpened else tileDoorEwClosed
     }
 
     /** Procedural placeholder when door art is missing. */
@@ -784,8 +789,33 @@ class DungeonRenderer(private val assets: AssetManager) {
                 dstRect.set(left, top, left + barW, sy + cellPx - pad)
             }
         }
-        canvas.drawRect(dstRect, if (door.locked) doorLockedPaint else doorUnlockedPaint)
+        canvas.drawRect(dstRect, doorLockedPaint)
         canvas.drawRect(dstRect, doorOutlinePaint)
+    }
+
+    private fun drawTreasureChest(
+        canvas: Canvas,
+        cell: Cell,
+        chest: TreasureChest,
+        camCx: Float,
+        camCy: Float,
+        cellPx: Float,
+        viewCx: Float,
+        viewCy: Float,
+    ) {
+        val sx = (cell.x - camCx) * cellPx + viewCx
+        val sy = (cell.y - camCy) * cellPx + viewCy
+        dstRect.set(sx, sy, sx + cellPx, sy + cellPx)
+        val sprite = when (chest.visualState) {
+            TreasureChest.VisualState.CLOSED -> treasureClosed
+            TreasureChest.VisualState.OPENED -> treasureOpen
+            TreasureChest.VisualState.EMPTY -> treasureEmpty
+        }
+        if (sprite != null) {
+            canvas.drawBitmap(sprite, treasureSrc(sprite), dstRect, drawBitmapPaint)
+        } else {
+            canvas.drawRect(dstRect, floorFallbackPaint)
+        }
     }
 
     /**
@@ -938,76 +968,96 @@ class DungeonRenderer(private val assets: AssetManager) {
     private fun loadEnemySprite(path: String): Bitmap? =
         enemySpriteCache.getOrPut(path) { tryLoadBitmap(assets, path) }
 
-    private fun syncSelectionMarkerClock(selected: Enemy) {
-        if (selectionMarkerTarget !== selected) {
-            selectionMarkerTarget = selected
-            selectionMarkerStartMs = SystemClock.uptimeMillis()
+    private fun currentCombatTargetMarkerFrame(): Pair<Bitmap, Rect>? {
+        if (combatTargetMarkerFrames.all { it == null }) return null
+        val frameIdx = (
+            SystemClock.uptimeMillis() / COMBAT_TARGET_MARKER_FRAME_MS
+            ).toInt().mod(combatTargetMarkerFrames.size)
+        val markerBmp = combatTargetMarkerFrames[frameIdx] ?: return null
+        return markerBmp to combatTargetMarkerSrcRects[frameIdx]
+    }
+
+    private fun drawCombatTargetMarkerOnEnemy(
+        canvas: Canvas,
+        enemy: Enemy,
+        game: Game,
+        camCx: Float,
+        camCy: Float,
+        cellPx: Float,
+        viewCx: Float,
+        viewCy: Float,
+    ) {
+        val (markerBmp, srcRect) = currentCombatTargetMarkerFrame() ?: return
+        drawEnemyMarkerBitmap(
+            canvas, enemy, game, markerBmp, srcRect, camCx, camCy, cellPx, viewCx, viewCy,
+        )
+    }
+
+    /**
+     * Alternating `combat_target1` / `combat_target2` on every enemy the
+     * staged skill can hit while the player is picking a combat target.
+     */
+    private fun drawCombatTargetMarkers(
+        canvas: Canvas,
+        game: Game,
+        floor: Floor,
+        camCx: Float,
+        camCy: Float,
+        cellPx: Float,
+        viewCx: Float,
+        viewCy: Float,
+        minCx: Int,
+        maxCx: Int,
+        minCy: Int,
+        maxCy: Int,
+    ) {
+        val selection = game.combatTargetSelection ?: return
+        if (currentCombatTargetMarkerFrame() == null) return
+
+        val overlay = CombatTargeting.buildOverlayMap(
+            floor = floor,
+            origin = floor.partyCell,
+            skill = selection.skill,
+        )
+
+        for (cell in floor.floorCells) {
+            if (cell.x < minCx || cell.x > maxCx || cell.y < minCy || cell.y > maxCy) continue
+            if (!floor.isVisibleToParty(cell)) continue
+            if (CombatTargeting.highlightForCell(overlay, cell) !=
+                CombatTargeting.TileHighlight.TARGETABLE_ENEMY
+            ) {
+                continue
+            }
+            val enemy = CombatTargeting.livingEnemyAt(floor, cell) ?: continue
+            drawCombatTargetMarkerOnEnemy(
+                canvas, enemy, game, camCx, camCy, cellPx, viewCx, viewCy,
+            )
         }
     }
 
-    private fun clearSelectionMarkerClock() {
-        selectionMarkerTarget = null
-        selectionMarkerStartMs = 0L
-    }
-
-    private fun selectionMarkerElapsedMs(): Long =
-        (SystemClock.uptimeMillis() - selectionMarkerStartMs).coerceAtLeast(0L)
-
-    /** True while the intro bounce + frame cycle should still play. */
-    private fun isSelectionMarkerAnimating(): Boolean =
-        selectionMarkerElapsedMs() < SELECTION_MARKER_ANIM_TOTAL_MS
-
-    /**
-     * Paints the "look here" arrow above [cell] using the
-     * pre-loaded [selectionMarkerFrames]. The arrow points down,
-     * so the marker is anchored so its bottom edge meets the
-     * top of the target cell - the tip just kisses the goblin
-     * underneath.
-     *
-     * Animation (one shot per enemy selection):
-     *   - Cycles `loc1 -> loc1b -> loc2 -> loc2b` at
-     *     [SELECTION_MARKER_FRAME_MS] (25% faster than the prior
-     *     352ms cadence).
-     *   - Bobs vertically [SELECTION_MARKER_BOUNCE_COUNT] times
-     *     via a sine wave over [SELECTION_MARKER_ANIM_TOTAL_MS].
-     *   - After that window elapses the marker is not drawn again
-     *     until the player selects a different enemy.
-     *
-     * Silent no-op when every sprite failed to decode - no
-     * fallback glyph because the marker is purely a UX hint,
-     * not a gameplay-critical sprite.
-     */
-    private fun drawSelectionMarker(
+    private fun drawEnemyMarkerBitmap(
         canvas: Canvas,
-        cell: Cell,
-        camCx: Float, camCy: Float,
+        enemy: Enemy,
+        game: Game,
+        markerBmp: Bitmap,
+        srcRect: Rect,
+        camCx: Float,
+        camCy: Float,
         cellPx: Float,
-        viewCx: Float, viewCy: Float,
+        viewCx: Float,
+        viewCy: Float,
     ) {
-        val elapsedMs = selectionMarkerElapsedMs()
-        val frameIdx = (
-            elapsedMs / SELECTION_MARKER_FRAME_MS
-            ).toInt().mod(selectionMarkerFrames.size)
-        val sprite = selectionMarkerFrames[frameIdx] ?: return
+        val (vx, vy) = enemyVisualPosition(game, enemy)
+        val cellTopLeftX = (vx - camCx) * cellPx + viewCx
+        val cellTopLeftY = (vy - camCy) * cellPx + viewCy
+        val spriteRect = computeEnemySpriteRect(enemy, cellTopLeftX, cellTopLeftY, cellPx)
 
-        val topLeftX = (cell.x - camCx) * cellPx + viewCx
-        val topLeftY = (cell.y - camCy) * cellPx + viewCy
-        val size = cellPx * SELECTION_MARKER_CELL_FRACTION
-        val cx = topLeftX + cellPx / 2f
-        val left = cx - size / 2f
-        val right = cx + size / 2f
-        val restingBottom = topLeftY
-        val restingTop = restingBottom - size
-
-        // Three full up-down bounces over the intro window; fade
-        // out is implicit (we stop drawing entirely after the window).
-        val bounceT = elapsedMs.toDouble() / SELECTION_MARKER_ANIM_TOTAL_MS.toDouble()
-        val bounceOffset = sin(
-            2.0 * PI * SELECTION_MARKER_BOUNCE_COUNT.toDouble() * bounceT,
-        ).toFloat() * cellPx * SELECTION_MARKER_BOUNCE_AMP_FRACTION
-
-        dstRect.set(left, restingTop - bounceOffset, right, restingBottom - bounceOffset)
-        canvas.drawBitmap(sprite, selectionMarkerSrcRects[frameIdx], dstRect, drawBitmapPaint)
+        val size = cellPx * COMBAT_TARGET_MARKER_CELL_FRACTION
+        val centerX = (spriteRect.left + spriteRect.right) / 2f
+        val centerY = (spriteRect.top + spriteRect.bottom) / 2f
+        val half = size / 2f
+        dstRect.set(centerX - half, centerY - half, centerX + half, centerY + half)
+        canvas.drawBitmap(markerBmp, srcRect, dstRect, drawBitmapPaint)
     }
 
     private fun drawPartyToken(
@@ -1251,43 +1301,11 @@ class DungeonRenderer(private val assets: AssetManager) {
             EXIT_MARK_BOUNCE_DUR_SEC + EXIT_MARK_BOUNCE_INTERVAL_SEC
         private const val EXIT_MARK_BOUNCE_AMP_DP: Float = 5.5f
 
-        /**
-         * Milliseconds each frame of the selected-enemy arrow
-         * (`loc1 / loc1b / loc2 / loc2b`) stays on screen before
-         * advancing. 264ms is 25% faster than the prior 352ms
-         * cadence (352 * 0.75).
-         */
-        private const val SELECTION_MARKER_FRAME_MS: Long = 264L
+        /** Frame cadence for looping `combat_target1` / `combat_target2`. */
+        private const val COMBAT_TARGET_MARKER_FRAME_MS: Long = 391L
 
-        /**
-         * How many full vertical bounces play during the intro,
-         * then the marker disappears for the rest of that selection.
-         */
-        private const val SELECTION_MARKER_BOUNCE_COUNT: Int = 3
-
-        /**
-         * Total wall-clock window for the intro (frame cycle +
-         * bounces). Three bounces at [SELECTION_MARKER_BOUNCE_CYCLE_MS]
-         * each = 660ms, which also fits ~2.5 sprite cycles at the
-         * faster frame cadence.
-         */
-        private const val SELECTION_MARKER_BOUNCE_CYCLE_MS: Long = 220L
-        private const val SELECTION_MARKER_ANIM_TOTAL_MS: Long =
-            SELECTION_MARKER_BOUNCE_CYCLE_MS * SELECTION_MARKER_BOUNCE_COUNT
-
-        /**
-         * Peak vertical bounce as a fraction of cellPx. Applied as
-         * a negative Y offset so the arrow lifts above the enemy.
-         */
-        private const val SELECTION_MARKER_BOUNCE_AMP_FRACTION: Float = 0.14f
-
-        /**
-         * Side length of the selected-enemy marker expressed as a
-         * fraction of a single dungeon cell. 0.425 = 15% smaller
-         * than the previous 0.5; keeps the arrow readable on
-         * phone screens while letting adjacent tiles breathe.
-         */
-        private const val SELECTION_MARKER_CELL_FRACTION: Float = 0.425f
+        /** Marker size as a fraction of cellPx. */
+        private const val COMBAT_TARGET_MARKER_CELL_FRACTION: Float = 1.1475f
 
         /** Enemy overhead HP bar geometry (in dp). */
         private const val ENEMY_HP_BAR_HEIGHT_DP: Float = 5.5f

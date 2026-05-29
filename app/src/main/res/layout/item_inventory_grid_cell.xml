@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="@dimen/inventory_equip_slot_size"
+    android:layout_height="@dimen/inventory_equip_slot_size"
+    android:background="@drawable/bg_inventory_slot_equipment">
+
+    <TextView
+        android:id="@+id/tvInventoryGridCellLabel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:ellipsize="end"
+        android:gravity="center"
+        android:maxLines="3"
+        android:padding="4dp"
+        android:textColor="@color/items_panel_row_text"
+        android:textSize="9sp"
+        tools:text="Iron Spear" />
+
+</FrameLayout>

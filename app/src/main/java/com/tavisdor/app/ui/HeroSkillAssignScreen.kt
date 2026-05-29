@@ -20,6 +20,7 @@ import com.tavisdor.app.party.offensiveSkillsForAssign
 import com.tavisdor.app.party.passiveSkillsForAssign
 import com.tavisdor.app.skills.Skill
 import com.tavisdor.app.skills.SkillCastType
+import com.tavisdor.app.skills.SkillCatalog
 
 /**
  * Modal panel for staging which skill the top Action button will commit
@@ -88,7 +89,9 @@ class HeroSkillAssignScreen(
 
         populateList(listOffensive, hero.offensiveSkillsForAssign()) { true }
         populateList(listDefensive, hero.defensiveSkillsForAssign()) { true }
-        populateList(listPassive, hero.passiveSkillsForAssign()) { !it.isPassive }
+        populateList(listPassive, hero.passiveSkillsForAssign()) {
+            SkillCatalog.isStageableInAssignPanel(it)
+        }
 
         refreshSelectionHighlight()
         root.visibility = View.VISIBLE

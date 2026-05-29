@@ -2,10 +2,11 @@ package com.tavisdor.app
 
 import android.app.AlertDialog
 import android.graphics.BitmapFactory
+import android.graphics.Rect
 import android.os.Bundle
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ImageButton
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -18,6 +19,7 @@ import com.tavisdor.app.audio.AudioSettings
 import com.tavisdor.app.dungeon.Cell
 import com.tavisdor.app.game.Game
 import com.tavisdor.app.party.HeroDraft
+import com.tavisdor.app.party.UtilitySkillResolver
 import com.tavisdor.app.save.SaveStore
 import com.tavisdor.app.combat.CombatTargeting
 import com.tavisdor.app.combat.HealResolver
@@ -69,8 +71,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvFloorLabel: TextView
     private lateinit var combatLogView: com.tavisdor.app.ui.CombatLogView
     private lateinit var combatLogContainer: View
-    private lateinit var btnCombatLogUp: MaterialButton
-    private lateinit var btnCombatLogDown: MaterialButton
 
     private lateinit var titleScreen: TitleScreen
     private lateinit var classSelectScreen: ClassSelectScreen
@@ -82,7 +82,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnActionBarMenu: MaterialButton
     private lateinit var btnActionBarAction: MaterialButton
     private lateinit var btnActionBarItems: MaterialButton
-    private lateinit var btnActionBarWait: ImageButton
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -100,6 +99,9 @@ class MainActivity : AppCompatActivity() {
         // fires this callback; we open the use-key / pick-lock / force
         // dialog so the player can decide how to deal with it.
         game.onLockedDoorPrompt = { cell -> showLockedDoorDialog(cell) }
+        game.onLockedChestPrompt = { cell -> showLockedChestDialog(cell) }
+        game.onChestLootReady = { cell -> showChestLootPanel(cell) }
+        game.onChestStateChanged = { gameView.invalidate() }
         // Show / hide the top-of-screen turn-order strip based on
         // whether a Combat is active; the strip rebinds itself to
         // the new encounter so portraits reflect the fresh fight.
@@ -119,20 +121,10 @@ class MainActivity : AppCompatActivity() {
         combatLogContainer = findViewById(R.id.combatLogContainer)
         combatLogView = findViewById(R.id.combatLog)
         combatLogView.setLog(game.combatLog)
-        btnCombatLogUp = findViewById(R.id.btnCombatLogUp)
-        btnCombatLogDown = findViewById(R.id.btnCombatLogDown)
-        btnCombatLogUp.setOnClickListener { combatLogView.scrollUp() }
-        btnCombatLogDown.setOnClickListener { combatLogView.scrollDown() }
-        // Sync the up / down button enabled state with the log's
-        // current scroll position so disabled greys out at the
-        // boundaries.
-        combatLogView.onScrollStateChanged = { refreshCombatLogScrollButtons() }
-        refreshCombatLogScrollButtons()
+        combatLogView.setOnClickListener { combatLogView.setExpanded(true) }
         btnActionBarMenu = findViewById(R.id.btnActionBarMenu)
         btnActionBarAction = findViewById(R.id.btnActionBarAction)
         btnActionBarItems = findViewById(R.id.btnActionBarItems)
-        btnActionBarWait = findViewById(R.id.btnActionBarWait)
-        loadWaitButtonIcon(btnActionBarWait)
 
         gameView.attachGame(game)
         // Keep the turn-order strip AND the hero panel in lockstep
@@ -162,7 +154,6 @@ class MainActivity : AppCompatActivity() {
         btnActionBarMenu.setOnClickListener { onActionBarMenuTapped() }
         btnActionBarAction.setOnClickListener { onActionBarActionTapped() }
         btnActionBarItems.setOnClickListener { onActionBarItemsTapped() }
-        btnActionBarWait.setOnClickListener { onCombatWaitTapped() }
 
         titleScreen = TitleScreen(
             root = titleOverlay,
@@ -189,7 +180,7 @@ class MainActivity : AppCompatActivity() {
             }
             it.onWaitTapped = { onCombatWaitTapped() }
         }
-        loadWaitButtonIcon(heroSkillAssignOverlay.findViewById(R.id.btnHeroSkillAssignWait))
+        loadWaitButtonIcon()
         game.onCombatTargetSelectionChanged = {
             gameView.invalidate()
             if (game.isCombatTargetSelectionActive()) {
@@ -200,7 +191,18 @@ class MainActivity : AppCompatActivity() {
             commitStagedCombatAction(slot, enemy)
         }
         itemsScreen = ItemsScreen(root = itemsOverlay).also {
+            it.onChestLootChanged = { gameView.invalidate() }
             it.onPartyEquipmentChanged = { heroPanel.invalidate() }
+            it.onUsePotionSelf = {
+                val combatSlot = game.combatController?.currentHeroSlot
+                val restored = game.usePotionInCurrentContext()
+                if (restored != null && game.combat != null && combatSlot != null) {
+                    game.clearHeroWaiting(combatSlot)
+                    game.clearSkillStaging(combatSlot)
+                    refreshCombatViews()
+                }
+                restored
+            }
         }
 
         // Turn-order strip taps:
@@ -394,15 +396,17 @@ class MainActivity : AppCompatActivity() {
             slot != null &&
             controller.awaitingHeroInput &&
             controller.canHeroWait(slot)
-        val vis = if (canWait) View.VISIBLE else View.GONE
-        btnActionBarWait.visibility = vis
         heroSkillAssignScreen.setWaitVisible(canWait)
     }
 
-    private fun loadWaitButtonIcon(button: ImageButton) {
+    private fun loadWaitButtonIcon() {
         runCatching {
             assets.open("sprites/wait.png").use { stream ->
-                BitmapFactory.decodeStream(stream)?.let { button.setImageBitmap(it) }
+                BitmapFactory.decodeStream(stream)?.let { bmp ->
+                    heroSkillAssignOverlay
+                        .findViewById<android.widget.ImageButton>(R.id.btnHeroSkillAssignWait)
+                        .setImageBitmap(bmp)
+                }
             }
         }
     }
@@ -459,6 +463,28 @@ class MainActivity : AppCompatActivity() {
      */
     private fun onActionBarActionTappedExploring() {
         val slot = game.activeHeroSlot ?: return
+        val skill = game.selectedSkillFor(slot) ?: return
+        if (UtilitySkillResolver.isUtility(skill)) {
+            if (game.isUtilityCastPlaying) {
+                AppToast.show(this, R.string.utility_cast_busy)
+                return
+            }
+            val party = game.party ?: return
+            val caster = party.heroes.getOrNull(slot) ?: return
+            if (!UtilitySkillResolver.canCast(skill, caster, party, inCombat = false)) {
+                AppToast.show(this, R.string.utility_missing_ingredient)
+                return
+            }
+            if (!UtilitySkillResolver.wouldRecoverAnyone(skill, party)) {
+                AppToast.show(this, R.string.utility_no_recovery_benefit)
+            }
+            if (game.commitUtilitySkillInExploration(slot, skill)) {
+                game.clearSkillStaging(slot)
+                gameView.invalidate()
+                heroPanel.invalidate()
+            }
+            return
+        }
         if (!game.hasSkillStaging(slot)) return
         game.clearSkillStaging(slot)
     }
@@ -559,7 +585,6 @@ class MainActivity : AppCompatActivity() {
         refreshCombatWaitButtons()
         if (combat != null) {
             combatLogContainer.visibility = View.VISIBLE
-            refreshCombatLogScrollButtons()
             // Defensive: if the player somehow left the items
             // overlay open when combat starts, drop it. The modal
             // would otherwise eat dungeon taps and block the
@@ -569,16 +594,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Greys out the combat-log up / down buttons when the
-     * corresponding scroll direction would be a no-op (already at
-     * the head / tail). Driven both by direct button taps (via
-     * the view's [com.tavisdor.app.ui.CombatLogView.onScrollStateChanged])
-     * and by encounter lifecycle events.
-     */
-    private fun refreshCombatLogScrollButtons() {
-        btnCombatLogUp.isEnabled = combatLogView.canScrollUp
-        btnCombatLogDown.isEnabled = combatLogView.canScrollDown
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (gameRoot.visibility == View.VISIBLE &&
+            ev.action == MotionEvent.ACTION_DOWN &&
+            combatLogView.isExpanded &&
+            !isTouchInsideView(combatLogContainer, ev)
+        ) {
+            combatLogView.setExpanded(false)
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private fun isTouchInsideView(view: View, event: MotionEvent): Boolean {
+        if (!view.isShown) return false
+        val rect = Rect()
+        return view.getGlobalVisibleRect(rect) &&
+            rect.contains(event.rawX.toInt(), event.rawY.toInt())
     }
 
     /**
@@ -657,6 +688,72 @@ class MainActivity : AppCompatActivity() {
      * actions; success redraws and resumes the auto-move, while failure
      * silently dismisses so the player can re-tap to try again.
      */
+    private fun showChestLootPanel(cell: Cell) {
+        val party = game.party ?: return
+        val chest = game.floor?.chestAt(cell) ?: return
+        itemsScreen.bind(party)
+        itemsScreen.showChestLoot(chest)
+    }
+
+    private fun showLockedChestDialog(cell: Cell) {
+        val state = game.lockedChestUiOptions(cell) ?: return
+        val content = layoutInflater.inflate(R.layout.dialog_locked_door, null)
+        val btnKick = content.findViewById<MaterialButton>(R.id.btnDoorKickDown)
+        val btnPick = content.findViewById<MaterialButton>(R.id.btnDoorPickLock)
+        val btnKey = content.findViewById<MaterialButton>(R.id.btnDoorUseKey)
+
+        fun styleOption(button: MaterialButton, enabled: Boolean) {
+            button.isEnabled = enabled
+            button.alpha = if (enabled) 1f else 0.38f
+        }
+        styleOption(btnKick, state.canKickDown)
+        styleOption(btnPick, state.canPickLock)
+        styleOption(btnKey, state.canUseKey)
+
+        content.findViewById<android.widget.TextView>(R.id.tvLockedDoorMessage)
+            ?.setText(R.string.chest_locked_message)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.chest_locked_title)
+            .setView(content)
+            .setNegativeButton(R.string.door_action_cancel) { d, _ -> d.dismiss() }
+            .create()
+
+        btnKick.setOnClickListener {
+            if (!state.canKickDown) return@setOnClickListener
+            onChestOutcome(game.tryForceChest(cell))
+            dialog.dismiss()
+        }
+        btnPick.setOnClickListener {
+            if (!state.canPickLock) return@setOnClickListener
+            onChestOutcome(game.tryPickChestLock(cell))
+            dialog.dismiss()
+        }
+        btnKey.setOnClickListener {
+            if (!state.canUseKey) return@setOnClickListener
+            onChestOutcome(game.useKeyOnChest(cell))
+            dialog.dismiss()
+        }
+        dialog.show()
+    }
+
+    private fun onChestOutcome(outcome: Game.DoorOutcome) {
+        when (outcome) {
+            Game.DoorOutcome.OPENED, Game.DoorOutcome.ALREADY_UNLOCKED -> {
+                gameView.invalidate()
+            }
+            Game.DoorOutcome.FAILED_NO_LOCK_PICK,
+            Game.DoorOutcome.FAILED_NO_SHARD,
+            Game.DoorOutcome.FAILED_DEX_CHECK,
+            Game.DoorOutcome.FAILED_STR_ALREADY_TRIED,
+            Game.DoorOutcome.FAILED_STR_CHECK,
+            Game.DoorOutcome.FAILED_BRUTE_DAMAGED,
+            Game.DoorOutcome.FAILED_NO_KEY,
+            -> showDoorResultMessage(outcome)
+            Game.DoorOutcome.NO_DOOR -> Unit
+        }
+    }
+
     private fun showLockedDoorDialog(cell: Cell) {
         val state = game.lockedDoorUiOptions(cell) ?: return
         val content = layoutInflater.inflate(R.layout.dialog_locked_door, null)

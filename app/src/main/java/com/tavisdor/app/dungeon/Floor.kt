@@ -93,6 +93,8 @@ class Floor(
 
     private val _placements: MutableList<Set<Cell>> = mutableListOf()
     private val _placementRevealed: MutableList<Boolean> = mutableListOf()
+    private val _placementIsHall: MutableList<Boolean> = mutableListOf()
+    private val _placementIsStart: MutableList<Boolean> = mutableListOf()
     private val _cellToPlacements: HashMap<Cell, MutableList<Int>> = HashMap()
     private val _revealedCells: HashSet<Cell> = HashSet()
 
@@ -117,12 +119,14 @@ class Floor(
     private val _enemyByCell: HashMap<Cell, Enemy> = HashMap()
     private val _enemyByPlacement: HashMap<Int, MutableList<Enemy>> = HashMap()
 
+    private val _chests: HashMap<Cell, TreasureChest> = HashMap()
+
     init {
         // The cells handed to us by the factory ARE the entrance
         // template's footprint. Register them as placement 0 and pre-
         // reveal it - the party spawns inside, so it would be jarring
         // to start on a hidden tile.
-        registerPlacement(initialFloorCells)
+        registerPlacement(initialFloorCells, isStart = true)
         revealPlacement(0)
         // Entrance is a room-type template (a start_*), so every one
         // of its open connectors begins at hall-depth 0. The next
@@ -158,12 +162,74 @@ class Floor(
      */
     fun enemyAt(cell: Cell): Enemy? = _enemyByCell[cell]
 
+    // ---- Treasure chest accessors ----
+
+    fun chestAt(cell: Cell): TreasureChest? = _chests[cell]
+
+    fun isChest(cell: Cell): Boolean = cell in _chests
+
+    val chestCells: Set<Cell> get() = _chests.keys
+
+    val chests: Map<Cell, TreasureChest> get() = _chests
+
+    val placementCount: Int get() = _placements.size
+
+    fun cellsInPlacement(placementIndex: Int): Set<Cell> =
+        _placements.getOrNull(placementIndex) ?: emptySet()
+
+    /** True when a treasure chest may spawn in this placement (not hall / start). */
+    fun allowsTreasureChestInPlacement(placementIndex: Int): Boolean {
+        if (placementIndex !in _placements.indices) return false
+        if (_placementIsHall[placementIndex]) return false
+        if (_placementIsStart[placementIndex]) return false
+        return true
+    }
+
     /**
      * Enemies in the same placement (room / hallway) as [cell].
      * Includes [cell]'s placement; if [cell] is a merge connector
      * sitting in two rooms, both rooms' enemies are returned.
      * Empty when [cell] has no placement (off-grid).
      */
+    /**
+     * True when any placement containing [cell] includes stairs down or up.
+     * Camp ambushes never trigger in these rooms.
+     */
+    fun roomContainsStairs(cell: Cell): Boolean {
+        for (idx in _cellToPlacements[cell].orEmpty()) {
+            val placement = _placements[idx]
+            for (c in placement) {
+                if (c in _staircases || c in _stairsUp) return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Spawns a camp ambush in the party's current room on unoccupied floor
+     * cells (never on [partyCell]). Returns the enemies registered on the
+     * floor, which may be fewer than [count] when space is tight.
+     */
+    fun spawnCampAmbushEnemies(partyCell: Cell, count: Int, rng: Random): List<Enemy> {
+        if (count <= 0) return emptyList()
+        val placementIndices = _cellToPlacements[partyCell] ?: return emptyList()
+        val candidates = LinkedHashSet<Cell>()
+        for (idx in placementIndices) {
+            for (c in _placements[idx]) {
+                if (c !in _floorCells) continue
+                if (c == partyCell) continue
+                if (_enemyByCell.containsKey(c)) continue
+                candidates += c
+            }
+        }
+        if (candidates.isEmpty()) return emptyList()
+        val cells = candidates.shuffled(rng).take(count)
+        val enemies = EnemySpawner.spawnCampAmbush(cells, depth, rng)
+        if (enemies.isEmpty()) return emptyList()
+        registerEnemies(placementIndices.first(), enemies)
+        return enemies
+    }
+
     fun enemiesInRoomOf(cell: Cell): List<Enemy> {
         val placementIndices = _cellToPlacements[cell] ?: return emptyList()
         if (placementIndices.size == 1) {
@@ -251,12 +317,17 @@ class Floor(
 
     /**
      * True when [c] may be drawn or targeted. A cell is visible iff its
-     * placement has been entered ([_revealedCells]), or it is a locked
-     * door on the border of explored territory (so the player can interact).
+     * placement has been entered ([_revealedCells]), or it is a door on
+     * the border of explored territory (closed sprite only — lock state is
+     * not shown until the player interacts while adjacent).
      */
     fun isVisibleToParty(c: Cell): Boolean {
         if (c in _revealedCells) return true
-        if (!isLockedDoor(c)) return false
+        if (!isDoor(c)) return false
+        return isAdjacentToRevealed(c)
+    }
+
+    private fun isAdjacentToRevealed(c: Cell): Boolean {
         for (delta in CARDINAL_NEIGHBORS) {
             val n = Cell(c.x + delta.x, c.y + delta.y)
             if (n in _revealedCells) return true
@@ -292,12 +363,54 @@ class Floor(
         door.locked = false
     }
 
+    fun isLockedChest(c: Cell): Boolean = _chests[c]?.locked == true
+
+    fun canAttemptStrForceOnChest(c: Cell): Boolean {
+        val chest = _chests[c] ?: return false
+        return chest.locked && !chest.strForceAttempted
+    }
+
+    fun canAttemptDexPickOnChest(c: Cell): Boolean {
+        val chest = _chests[c] ?: return false
+        return chest.locked && !chest.bruteDamaged
+    }
+
+    fun unlockChest(c: Cell) {
+        _chests[c]?.unlock()
+    }
+
     /**
-     * Assigns each locked door a matching [FloorKey] carrier on an enemy
-     * reachable from [partyCell] without crossing another locked door.
+     * Rolls and stores loot the first time the chest at [c] is opened.
+     */
+    fun openChest(c: Cell, rng: Random) {
+        val chest = _chests[c] ?: return
+        if (chest.lootRolled) return
+        chest.loot = ChestLootRoller.roll(depth, rng)
+        chest.lootRolled = true
+        chest.unlock()
+    }
+
+    fun placeChest(cell: Cell, locked: Boolean) {
+        if (cell in _chests) return
+        _chests[cell] = TreasureChest(
+            cell = cell,
+            lockId = chestLockIdForCell(depth, cell),
+            locked = locked,
+        )
+    }
+
+    private fun chestLockIdForCell(floorDepth: Int, cell: Cell): String =
+        "c${floorDepth}_${cell.x}_${cell.y}"
+
+    /**
+     * Assigns each locked door or chest a matching [FloorKey] carrier on an
+     * enemy reachable from [partyCell] without crossing another locked door.
      */
     fun assignLockKeyCarriers(rng: Random) {
-        val lockedCells = _doors.filterValues { it.locked }.keys.toList()
+        val lockedCells = buildList {
+            addAll(_doors.filterValues { it.locked }.keys)
+            addAll(_chests.filterValues { it.locked }.keys)
+        }
         if (lockedCells.isEmpty()) return
 
         val eligible = _enemies.filter { enemy ->
@@ -313,7 +426,7 @@ class Floor(
         for (cell in shuffledLocks) {
             if (carriers.isEmpty()) carriers += eligible.shuffled(rng)
             val enemy = carriers.removeAt(0)
-            val lockId = _doors[cell]?.lockId ?: continue
+            val lockId = _doors[cell]?.lockId ?: _chests[cell]?.lockId ?: continue
             if (lockId !in enemy.floorKeyLockIds) {
                 enemy.floorKeyLockIds += lockId
             }
@@ -361,11 +474,13 @@ class Floor(
      *
      * Reveal rules: reveal every placement containing [cell] (the room(s)
      * the party just stepped into — normally one, but both when [cell] is
-     * a merge connector shared between two templates). No peek into
-     * neighboring placements until the party walks in.
+     * a merge connector shared between two templates). Stepping onto a door
+     * alone does not reveal any placement, so rooms beyond an unlocked door
+     * stay in fog until the party walks onto ordinary floor on the far side.
      */
     fun recordVisited(cell: Cell) {
         _visitedCells += cell
+        if (isDoor(cell)) return
         val placementIndices = _cellToPlacements[cell] ?: return
         for (i in placementIndices) revealPlacement(i)
     }
@@ -377,10 +492,16 @@ class Floor(
      * for any placement the player should see immediately (entrance
      * template only, today).
      */
-    private fun registerPlacement(cells: Set<Cell>): Int {
+    private fun registerPlacement(
+        cells: Set<Cell>,
+        isHall: Boolean = false,
+        isStart: Boolean = false,
+    ): Int {
         val idx = _placements.size
         _placements += cells
         _placementRevealed += false
+        _placementIsHall += isHall
+        _placementIsStart += isStart
         for (c in cells) {
             _cellToPlacements.getOrPut(c) { mutableListOf() } += idx
         }
@@ -601,7 +722,11 @@ class Floor(
         // Register the placement last so the staircase / boss / door
         // updates above already settled; reveal stays opt-in until the
         // party walks into one of these cells.
-        val placementIdx = registerPlacement(placementCells)
+        val placementIdx = registerPlacement(
+            placementCells,
+            isHall = template.isHall,
+            isStart = template.isStart,
+        )
 
         // Roll for enemies AFTER the placement is registered so the
         // spawner can correlate enemies to this placement's index.

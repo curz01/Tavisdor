@@ -45,6 +45,7 @@ object CombatTargeting {
             SkillCatalog.BASIC_DEFEND_ID,
             SkillCatalog.ARCHER_RAPID_FIRE_ID,
             SkillCatalog.ARCHER_DOUBLE_SHOT_ID,
+            SkillCatalog.ARCHER_AIM_SHOT_ID,
             SkillCatalog.FIGHTER_CHARGE_ID,
             -> return false
         }

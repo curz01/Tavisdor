@@ -151,7 +151,7 @@ class SkillPickerDialog(
     }
 
     private fun onRowTapped(skill: Skill, row: View) {
-        if (skill.castType == SkillCastType.PASSIVE) return
+        if (skill.isPassive && !SkillCatalog.isStageableInAssignPanel(skill)) return
 
         if (game.isSkillStaged(slot, skill)) {
             if (skill.id == SkillCatalog.BASIC_ATTACK_ID && skill.costsAction) return

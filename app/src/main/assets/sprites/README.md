@@ -42,10 +42,25 @@ dungeon background.
 | `tile_wall.png`    | 64 x 64 | Blocking wall tile. | Render slightly darker than floor so contrast is readable. |
 | `tile_door.png`    | 64 x 64 | Door tile between rooms / hallways. | Doors are passable; visual is just a hint to the player. |
 | `tile_stairs_down.png` | 64 x 64 | Goal tile that descends to the next floor. | Should be visually distinct -- this is the only objective the player is hunting for each floor. |
+| `treasure1.png` | 64 x 64 | Closed treasure chest (one per spawned cell). | Drawn on top of the floor tile; blocks movement. |
+| `treasure2.png` | 64 x 64 | Open chest with loot still inside. | Shown after the player opens the chest until all loot is taken. |
+| `treasure3.png` | 64 x 64 | Empty chest. | Shown after every item and gold has been collected. |
 | `monster_placeholder.png` | 64 x 64 | Default monster sprite until per-monster art exists. | Once you add specific monsters (slime, skeleton, etc.) add `monster_<name>.png` files of the same size; this generic file stays as the fallback. |
 | `action_attack.png` | 32 x 32 (suggested) | Staged offensive / ACTION-bucket skill on the hero panel (above HP bar). | Scaled to fit the status strip; keep the glyph readable at small size. |
 | `action_guard.png`  | 32 x 32 (suggested) | Staged defensive / GUARD-bucket skill (e.g. Rapid Fire, Defend). | Same layout as `action_attack`. |
 | `wait.png`            | 32 x 32 (suggested) | Combat Wait button (skill panel + action bar) and status icon after a hero defers. | Same layout as `action_attack`. |
+| `earthi_1.png` … `earthi_3.png` | varies | Earth I / II defender FX (rumble + hole). | Used by [EarthIImpactFxPlayer] / [EarthIIImpactFxPlayer]. |
+| `earthii_1.png`, `earthii_2.png` | varies | Earth II front-layer impact frames (in front of defender). | Alternates 6× with shake during Earth II cast. |
+| `earthiii_1.png` … `earthiii_4.png` | varies | Earth III defender FX (frame 1 behind; 2–4 in front + shake). | 0.5s / 0.25s / 0.25s / finale with heavy shake. |
+| `fire1.png`, `fire2.png` | varies | Fire I feet FX (in front of defender). | 8 alternations. |
+| `fireii_1.png`, `fireii_2.png` | varies | Fire II feet FX. | 6 alternations. |
+| `fireiii_1.png`, `fireiii_2.png` | varies | Fire III feet FX. | 6 alternations. |
+| `heali_1.png`, `heali_2.png` | varies | Heal I/II/III portrait overlay on the healed hero's panel slot. | 6 alternations at 163ms (25% slower than Earth I rumble). |
+| `potion_1.png`, `potion_2.png` | varies | Make Potion utility FX (no staff). | Hold + rise; grants a **Potion** item (use from Items → Mats). |
+| `camping_1.png`, `camping_2.png` | varies | Camp utility FX. | Bottom-align on party → slide to adjacent tile → 10× alternation. |
+| `rest1.png`, `rest2.png` | varies | Rest utility FX. | Same intro as Make Potion. |
+| `cooking_1.png` … `cooking_3.png` | varies | Cooking utility FX. | Hold + rise, then 4× (1→2→3→2→1) @ 260ms per frame. |
+| `combat_target1.png`, `combat_target2.png` | varies | Current combat target indicator. | Loops on [Game.selectedEnemy]; also on valid enemies while picking an attack target. |
 
 ---
 

@@ -54,7 +54,13 @@ object Initiative {
         heroDex: List<Int>,
         enemyDex: List<Int>,
         rng: Random = Random.Default,
+        enemiesActFirst: Boolean = false,
     ): List<InitiativeEntry> {
+        if (enemiesActFirst) {
+            val enemyOrder = build(emptyList(), enemyDex, rng)
+            val heroOrder = build(heroDex, emptyList(), rng)
+            return enemyOrder + heroOrder
+        }
         // Step 1: build the flat list. Heroes first so when we later
         // sort with a stable comparator, the order within an equal
         // DEX block starts predictable - the d6 pass below resolves

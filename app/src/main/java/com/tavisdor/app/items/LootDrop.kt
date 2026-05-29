@@ -22,4 +22,7 @@ sealed class LootDrop {
 
     /** Dropped by an enemy assigned to guard a specific floor lock. */
     data class FloorKeyDrop(val key: FloorKey) : LootDrop()
+
+    /** Random armor piece from a treasure chest (display name only until armor bags land). */
+    data class ArmorDrop(val armorName: String) : LootDrop()
 }

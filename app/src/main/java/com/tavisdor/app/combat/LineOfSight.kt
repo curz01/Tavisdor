@@ -16,10 +16,9 @@ import kotlin.math.abs
  * Line-of-sight uses Bresenham's algorithm to walk the straight
  * line from origin to target; every cell along the way is
  * inspected and the line fails as soon as it hits a wall (any
- * cell not in [Floor.floorCells]) or a closed door (locked, per
- * [Floor.isLockedDoor]). Open / unlocked doors are transparent
- * to LOS because the party can walk through them - it would be
- * weird if an arrow couldn't follow.
+ * cell not in [Floor.floorCells]) or any door cell ([Floor.isDoor]).
+ * Doors always block LOS so unrevealed rooms stay hidden in combat
+ * even after the lock is picked; the party must enter to see inside.
  *
  * Enemies are intentionally NOT treated as LOS blockers for now:
  * blocking on enemies would make ranged backline plays
@@ -54,8 +53,7 @@ object LineOfSight {
      * to walk) and when the two cells are adjacent (Manhattan 1):
      * there's nothing between them to obstruct.
      *
-     * Closed (locked) doors block LOS; open (unlocked) doors and
-     * regular floor cells let the line pass.
+     * All door cells block LOS; regular floor cells let the line pass.
      */
     fun hasLineOfSight(floor: Floor, origin: Cell, target: Cell): Boolean {
         if (origin == target) return true
@@ -68,7 +66,7 @@ object LineOfSight {
         for (i in 1 until line.size - 1) {
             val cell = line[i]
             if (!floor.isFloor(cell)) return false
-            if (floor.isLockedDoor(cell)) return false
+            if (floor.isDoor(cell)) return false
         }
         return true
     }

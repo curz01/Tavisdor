@@ -15,11 +15,7 @@ package com.tavisdor.app.combat
  * how to format them.
  */
 class CombatLog(
-    /**
-     * Maximum number of entries retained. 4 matches the on-screen
-     * row count - keeping the model in sync with the view avoids
-     * confusion about whether off-screen rows still "exist."
-     */
+    /** Maximum number of entries retained (rolling window). */
     val capacity: Int = DEFAULT_CAPACITY,
 ) {
 
@@ -63,22 +59,7 @@ class CombatLog(
     }
 
     companion object {
-        /**
-         * Default rolling window size. Larger than the visible
-         * row count so the player can scroll back through recent
-         * history via the up / down buttons on [CombatLogView];
-         * older entries beyond this cap are silently evicted to
-         * keep the in-memory log bounded.
-         */
-        const val DEFAULT_CAPACITY: Int = 10
-
-        /**
-         * Number of entries the view renders at once. Anything
-         * past this lives in the scrollable history. Tracked here
-         * so [CombatLogView] and downstream layout code reference
-         * a single source of truth instead of duplicating the
-         * row count.
-         */
-        const val VISIBLE_ROWS: Int = 4
+        /** Default rolling window (oldest entries evicted beyond this). */
+        const val DEFAULT_CAPACITY: Int = 20
     }
 }

@@ -75,7 +75,7 @@ data class Hero(
      *  starters are issued by [Hero.spawn] / [Party.fromSaveData]
      *  - heroes are never barehanded once they leave class-select. */
     val helmet: String? = null,
-    val armor: String? = null,
+    var armor: String? = null,
     val weapon1: Weapon? = null,
     val weapon2: Weapon? = null,
     val boots: String? = null,
@@ -227,6 +227,14 @@ data class Hero(
     fun restoreFull() {
         hp = maxHp
         mp = maxMp
+    }
+
+    /** Adds [amount] to [mp], capped at [maxMp]. Returns MP actually restored. */
+    fun restoreMp(amount: Int): Int {
+        if (amount <= 0) return 0
+        val before = mp
+        mp = (mp + amount).coerceAtMost(maxMp)
+        return mp - before
     }
 
     /**

@@ -94,6 +94,20 @@ object EnemySpawner {
         return chosenCells.map { Enemy.spawnAt(enemyTemplate, it) }
     }
 
+    /**
+     * Places [count] enemies for a camp ambush at distinct [cells] using
+     * the standard depth-appropriate template pick (one template per ambush).
+     */
+    fun spawnCampAmbush(
+        cells: List<Cell>,
+        floorDepth: Int,
+        rng: Random,
+    ): List<Enemy> {
+        if (cells.isEmpty()) return emptyList()
+        val enemyTemplate = pickEnemyTemplate(floorDepth, rng) ?: return emptyList()
+        return cells.map { Enemy.spawnAt(enemyTemplate, it) }
+    }
+
     // ----- Eligibility / capacity -----
 
     /**

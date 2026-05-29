@@ -152,8 +152,10 @@ object SkillCatalog {
         skill(
             id = "fighter_camp", name = "Camp", level = 8,
             type = SkillCastType.PREPARE, range = 0, mp = 0,
-            desc = "Uses up a 'camp' item to fully heal HP and MP for the party. Cannot heal " +
-                "dead. 25% chance an enemy spawns and attacks the group.",
+            desc = "Uses up a 'camp' item to fully heal HP and MP for the party over the cast. " +
+                "Cannot heal dead. 50% chance enemies ambush mid-cast (decided at start; " +
+                "random recovery tick) so you may heal partially first. No ambush in a room " +
+                "with stairs. Ambush size scales with floor depth (1–4 enemies).",
         ),
         skill(
             id = "fighter_shield_bash", name = "Shield Bash", level = 9,
@@ -180,8 +182,9 @@ object SkillCatalog {
         skill(
             id = "thief_rest", name = "Rest", level = 2,
             type = SkillCastType.PREPARE, range = 0, mp = 1,
-            desc = "Requires a 'beverage' item. Heals the party out of combat. 1 mana. " +
-                "Cannot heal dead.",
+            desc = "Requires a 'beverage' item. Out of combat, restores each living hero " +
+                "up to 50% / 60% / 70% of max HP and MP (potency 1 / 2 / 3). No effect if " +
+                "already at or above the cap on both. 1 mana. Cannot heal dead.",
         ),
         skill(
             id = "thief_lock_pick", name = "Lock Pick", level = 2,
@@ -267,8 +270,9 @@ object SkillCatalog {
         skill(
             id = "archer_cooking", name = "Cooking", level = 3,
             type = SkillCastType.PREPARE, range = 0, mp = 0,
-            desc = "Requires 'raw food'. Out of combat, heals the party HP up to 85%, depending " +
-                "on the ingredient. Cannot heal dead.",
+            desc = "Requires 'raw food'. Out of combat, restores party HP only (no MP), up to " +
+                "70% / 80% / 90% of max (potency 1 / 2 / 3; e.g. Raw Rabbit). Consumes one " +
+                "ingredient; creates nothing. Cannot heal dead.",
         ),
         skill(
             id = "archer_mark_target", name = "Mark Target", level = 4,
@@ -304,10 +308,12 @@ object SkillCatalog {
                 "to Earth. Requires a Hydro Shard.",
         ),
         skill(
-            // Cast type flipped to PREPARE per description doc.
             id = "archer_aim_shot", name = "Aim Shot", level = 8,
-            type = SkillCastType.PREPARE, range = 4, mp = 0,
-            desc = "Increase next damage by 150%. Cannot attack next turn. Hate increase by 2.",
+            type = SkillCastType.PREPARE, range = 0, mp = 0,
+            costsAction = false,
+            desc = "Prepare as a free action, then attack: next damage +150%. If the defender " +
+                "dodges the first swing, roll a second hit check. Hate +2 on a connecting hit. " +
+                "Cannot take an action on your following turn.",
         ),
         skill(
             // Marked passive per description doc ("always active").
@@ -345,7 +351,11 @@ object SkillCatalog {
     // ---------- Public lookup API ----------
 
     const val MAGE_EARTH_1_ID: String = "mage_earth_1"
+    const val MAGE_EARTH_2_ID: String = "mage_earth_2"
+    const val MAGE_EARTH_3_ID: String = "mage_earth_3"
     const val MAGE_FIRE_1_ID: String = "mage_fire_1"
+    const val MAGE_FIRE_2_ID: String = "mage_fire_2"
+    const val MAGE_FIRE_3_ID: String = "mage_fire_3"
 
     /**
      * Stable id of the universal basic Attack every hero knows. Kept
@@ -363,6 +373,11 @@ object SkillCatalog {
 
     /** Thief passive: pick locks on doors and chests (DEX + 1d3 vs lock level). */
     const val THIEF_LOCK_PICK_ID: String = "thief_lock_pick"
+
+    const val MAGE_MAKE_POTION_ID: String = "mage_make_potion_1"
+    const val FIGHTER_CAMP_ID: String = "fighter_camp"
+    const val THIEF_REST_ID: String = "thief_rest"
+    const val ARCHER_COOKING_ID: String = "archer_cooking"
 
     /**
      * Out-of-combat / utility skills listed in the assignment panel's
@@ -395,6 +410,12 @@ object SkillCatalog {
 
     /** Archer prepare: two attacks on the next offensive commit. */
     const val ARCHER_DOUBLE_SHOT_ID: String = "archer_double_shot"
+
+    /** Archer prepare staged as a free action; buffs the next attack. */
+    const val ARCHER_AIM_SHOT_ID: String = "archer_aim_shot"
+
+    /** True passives are info-only in the assign panel; PREPARE skills stage normally. */
+    fun isStageableInAssignPanel(skill: Skill): Boolean = !skill.isPassive
 
     /**
      * Charge damage as a percentage of a normal basic-attack

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/heroSkillAssignPanel"
     android:layout_width="match_parent"
@@ -200,5 +201,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="12dp"
         android:text="@string/hero_skill_assign_confirm"
-        android:textColor="@color/hero_detail_value" />
+        android:textColor="@color/hero_detail_value"
+        app:backgroundTint="@color/hero_skill_assign_confirm_bg"
+        app:rippleColor="@color/hero_skill_assign_confirm_ripple" />
 </LinearLayout>

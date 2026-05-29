@@ -474,6 +474,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         val portraitSize = innerH
         val portrait = RectF(innerL, innerT, innerL + portraitSize, innerB)
         drawPortrait(canvas, portrait, heroSlot, hero)
+        game?.healPortraitFxGateway?.drawOnPortrait(canvas, heroSlot, portrait)
 
         val column = rightColumnLayout(cell) ?: return
         drawStagedActionIcons(canvas, heroSlot, column.statusRect, game)

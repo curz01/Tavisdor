@@ -12,9 +12,11 @@ import com.tavisdor.app.render.PartyLungeGateway
 import com.tavisdor.app.render.BowVolley
 import com.tavisdor.app.render.BowVolleyPlan
 import com.tavisdor.app.render.DefenderSpellFxGateway
+import com.tavisdor.app.render.HealPortraitFxGateway
 import com.tavisdor.app.render.WeaponFxCatalog
 import com.tavisdor.app.render.WeaponFxGateway
 import com.tavisdor.app.render.WeaponFxKind
+import com.tavisdor.app.items.PotionResolver
 import com.tavisdor.app.render.WeaponFxRequest
 import com.tavisdor.app.skills.Skill
 import com.tavisdor.app.skills.SkillCatalog
@@ -129,6 +131,7 @@ class CombatController(
      */
     private val weaponFx: WeaponFxGateway,
     private val defenderSpellFx: DefenderSpellFxGateway,
+    private val healPortraitFx: HealPortraitFxGateway,
     /** Host-owned party lunge tween (used by Fighter Charge). */
     private val partyLunge: PartyLungeGateway,
 ) {
@@ -172,6 +175,12 @@ class CombatController(
      * commits an offensive skill through [commitHeroAction].
      */
     private val archerPrepareBuffs = Array(4) { ArcherPrepareBuffs() }
+
+    /** After a buffed Aim Shot attack, the archer forfeits their next hero turn. */
+    private val archerAimShotSkipTurn = BooleanArray(4)
+
+    /** Ensures Aim Shot bonuses apply to only the first arrow of a multi-shot. */
+    private val aimShotResolvedThisAction = BooleanArray(4)
 
     /**
      * Fractional grid coordinates for drawing [enemy] this frame.
@@ -250,7 +259,14 @@ class CombatController(
         // resolve at a steady cadence.
         if (camera.tick(deltaMs)) redraw = true
 
-        if (weaponFx.isPlaying || defenderSpellFx.isPlaying || attackFxPending) redraw = true
+        if (
+            weaponFx.isPlaying ||
+            defenderSpellFx.isPlaying ||
+            healPortraitFx.isPlaying ||
+            attackFxPending
+        ) {
+            redraw = true
+        }
 
         // Drive the strip's leave / defeat / shift animations.
         // The view reads CombatRound state for rendering but does
@@ -537,6 +553,34 @@ class CombatController(
         return countPendingHeroTurnsAfterCurrent() > 0
     }
 
+    /**
+     * The acting hero drinks a potion on themselves, restoring MP
+     * and ending their turn. Returns MP restored, or null when the
+     * use is rejected (wrong turn, no potion, KO'd, or already full).
+     */
+    fun commitHeroUsePotion(slot: Int): Int? {
+        if (ended || !awaitingHeroInput || attackFxPending) return null
+        if (currentHeroSlot != slot) return null
+        val hero = combat.party.heroes.getOrNull(slot) ?: return null
+        if (!hero.isAlive) return null
+        if (hero.mp >= hero.maxMp) return null
+        val potion = combat.party.inventory.consumeFirstPotion() ?: return null
+        val restored = hero.restoreMp(
+            PotionResolver.mpRestoreAmount(hero, potion.ingredientPotency, rng),
+        )
+        log.append(
+            CombatLogEntry.Info(
+                if (restored > 0) {
+                    "${hero.name} drinks a potion (+$restored MP)."
+                } else {
+                    "${hero.name} drinks a potion (no effect)."
+                },
+            ),
+        )
+        finishCurrentAction()
+        return restored
+    }
+
     /** Living enemies whose cell is Manhattan-1 to [cell]. */
     private fun adjacentLivingEnemies(cell: Cell): List<Enemy> {
         val out = ArrayList<Enemy>(4)
@@ -563,6 +607,7 @@ class CombatController(
         if (currentHeroSlot != slot) return false
         val hero = combat.party.heroes.getOrNull(slot) ?: return false
         if (!hero.isAlive) return false
+        aimShotResolvedThisAction[slot] = false
         // Fall back to the hero-aware basic attack so the
         // equipped weapon's range / type is what the range +
         // LOS gates below validate against. The picker hands
@@ -600,6 +645,11 @@ class CombatController(
         if (chosen.id == SkillCatalog.ARCHER_DOUBLE_SHOT_ID) {
             return commitArcherPrepare(hero, chosen) {
                 archerPrepareBuffs[slot].doubleShotPending = true
+            }
+        }
+        if (chosen.id == SkillCatalog.ARCHER_AIM_SHOT_ID) {
+            return commitArcherPrepare(hero, chosen) {
+                archerPrepareBuffs[slot].aimShotPending = true
             }
         }
         // Validate MP cost.
@@ -741,10 +791,16 @@ class CombatController(
             if (hadDouble) {
                 val extra = rapidArrows - 2
                 if (extra > 0) {
-                    volleys += BowVolley.Sequential(arrowCount = extra)
+                    volleys += BowVolley.Sequential(
+                        arrowCount = extra,
+                        shotDurationMultipliers = rapidFireShotMultipliers(extra),
+                    )
                 }
             } else {
-                volleys += BowVolley.Sequential(arrowCount = rapidArrows)
+                volleys += BowVolley.Sequential(
+                    arrowCount = rapidArrows,
+                    shotDurationMultipliers = rapidFireShotMultipliers(rapidArrows),
+                )
             }
         }
         return ArcherShotPlan(
@@ -1048,26 +1104,28 @@ class CombatController(
         if (skill.mpCost > caster.mp) return false
 
         withAttackFx(buildHeroSpellCastFx(caster, skill, floor.partyCell)) {
-            caster.spendMana(skill.mpCost)
-            val restored = target.heal(amount)
-            log.append(
-                CombatLogEntry.HealCast(
-                    caster = caster.name,
-                    spellName = skill.displayName,
-                    target = target.name,
-                    amount = restored,
-                ),
-            )
+            withHealPortraitFx(targetSlot) {
+                caster.spendMana(skill.mpCost)
+                val restored = target.heal(amount)
+                log.append(
+                    CombatLogEntry.HealCast(
+                        caster = caster.name,
+                        spellName = skill.displayName,
+                        target = target.name,
+                        amount = restored,
+                    ),
+                )
 
-            // Heal hate bump: every living enemy aggros harder on
-            // the caster (+2, clamped at 5). Fires AFTER the heal so
-            // a hate-1 caster reads as 3 from the next enemy turn.
-            for (eIdx in combat.enemies.indices) {
-                if (!combat.enemies[eIdx].isAlive) continue
-                combat.hate.bumpHate(eIdx, casterSlot, +2)
+                // Heal hate bump: every living enemy aggros harder on
+                // the caster (+2, clamped at 5). Fires AFTER the heal so
+                // a hate-1 caster reads as 3 from the next enemy turn.
+                for (eIdx in combat.enemies.indices) {
+                    if (!combat.enemies[eIdx].isAlive) continue
+                    combat.hate.bumpHate(eIdx, casterSlot, +2)
+                }
+
+                finishCurrentAction()
             }
-
-            finishCurrentAction()
         }
         return true
     }
@@ -1108,6 +1166,14 @@ class CombatController(
                     // visual cadence still reads as a turn-end
                     // beat; the lock auto-clears when the round
                     // wraps in CombatRound.startNextRound().
+                    finishCurrentAction()
+                } else if (archerAimShotSkipTurn[entry.index]) {
+                    archerAimShotSkipTurn[entry.index] = false
+                    log.append(
+                        CombatLogEntry.Info(
+                            "${hero.name} cannot act (recovering from Aim Shot).",
+                        ),
+                    )
                     finishCurrentAction()
                 } else {
                     awaitingHeroInput = true
@@ -1429,6 +1495,18 @@ class CombatController(
         block()
     }
 
+    private fun withHealPortraitFx(targetSlot: Int, block: () -> Unit) {
+        val started = healPortraitFx.start(targetSlot) {
+            attackFxPending = false
+            block()
+        }
+        if (started) {
+            attackFxPending = true
+            return
+        }
+        block()
+    }
+
     private fun withDefenderSpellFx(skill: Skill, target: Enemy, block: () -> Unit) {
         when (skill.id) {
             SkillCatalog.MAGE_EARTH_1_ID -> {
@@ -1441,8 +1519,48 @@ class CombatController(
                     return
                 }
             }
+            SkillCatalog.MAGE_EARTH_2_ID -> {
+                val started = defenderSpellFx.startEarthII(target) {
+                    attackFxPending = false
+                    block()
+                }
+                if (started) {
+                    attackFxPending = true
+                    return
+                }
+            }
+            SkillCatalog.MAGE_EARTH_3_ID -> {
+                val started = defenderSpellFx.startEarthIII(target) {
+                    attackFxPending = false
+                    block()
+                }
+                if (started) {
+                    attackFxPending = true
+                    return
+                }
+            }
             SkillCatalog.MAGE_FIRE_1_ID -> {
                 val started = defenderSpellFx.startFireI(target) {
+                    attackFxPending = false
+                    block()
+                }
+                if (started) {
+                    attackFxPending = true
+                    return
+                }
+            }
+            SkillCatalog.MAGE_FIRE_2_ID -> {
+                val started = defenderSpellFx.startFireII(target) {
+                    attackFxPending = false
+                    block()
+                }
+                if (started) {
+                    attackFxPending = true
+                    return
+                }
+            }
+            SkillCatalog.MAGE_FIRE_3_ID -> {
+                val started = defenderSpellFx.startFireIII(target) {
                     attackFxPending = false
                     block()
                 }
@@ -1499,7 +1617,11 @@ class CombatController(
         }
         val flowFrames = if (
             skill.id == SkillCatalog.MAGE_EARTH_1_ID ||
-            skill.id == SkillCatalog.MAGE_FIRE_1_ID
+            skill.id == SkillCatalog.MAGE_EARTH_2_ID ||
+            skill.id == SkillCatalog.MAGE_EARTH_3_ID ||
+            skill.id == SkillCatalog.MAGE_FIRE_1_ID ||
+            skill.id == SkillCatalog.MAGE_FIRE_2_ID ||
+            skill.id == SkillCatalog.MAGE_FIRE_3_ID
         ) {
             emptyList()
         } else {
@@ -1659,29 +1781,76 @@ class CombatController(
         }
 
         if (skill.damage != null || isBasicAttack(skill)) {
-            val weaponBonus = hero.weapon1?.attackBonus ?: LootTier.FISTS_DAMAGE
-            val attackPower = hero.strength + weaponBonus + (skill.damage ?: 0)
-            val out = CombatMath.resolveMelee(
+            return resolveHeroMeleeAttack(hero, skill, target, heroSlot, targetIdx)
+        }
+
+        return false
+    }
+
+    private fun resolveHeroMeleeAttack(
+        hero: Hero,
+        skill: Skill,
+        target: Enemy,
+        heroSlot: Int,
+        targetIdx: Int,
+    ): Boolean {
+        val aimShot = consumeAimShotForAction(heroSlot)
+        val weaponBonus = hero.weapon1?.attackBonus ?: LootTier.FISTS_DAMAGE
+        var attackPower = hero.strength + weaponBonus + (skill.damage ?: 0)
+        if (aimShot) {
+            attackPower = (attackPower * ARCHER_AIM_SHOT_DAMAGE_MULTIPLIER).toInt()
+        }
+
+        var out = CombatMath.resolveMelee(
+            attackerDex = hero.dexterity,
+            attackPower = attackPower,
+            defenderDex = target.dexterity,
+            defenderAc = target.armorClass,
+            rng = rng,
+        )
+
+        if (aimShot && !out.hit && out.naturalRoll != CombatMath.FUMBLE_ROLL) {
+            appendMeleeLogEntry(hero.name, target.name, out)
+            log.append(
+                CombatLogEntry.Info("${hero.name}'s Aim Shot — second chance!"),
+            )
+            val retry = CombatMath.resolveMelee(
                 attackerDex = hero.dexterity,
                 attackPower = attackPower,
                 defenderDex = target.dexterity,
                 defenderAc = target.armorClass,
                 rng = rng,
             )
-            appendMeleeLogEntry(
-                attackerName = hero.name,
-                targetName = target.name,
-                outcome = out,
-            )
-            if (out.hit && out.damage > 0) {
-                target.takeDamage(out.damage)
-                combat.hate.recordDamage(targetIdx, heroSlot, out.damage)
-            }
-            handleEnemyKoIfDead(target)
-            return out.hit
+            appendMeleeLogEntry(hero.name, target.name, retry)
+            if (retry.hit) out = retry
+        } else {
+            appendMeleeLogEntry(hero.name, target.name, out)
         }
 
-        return false
+        if (out.hit && out.damage > 0) {
+            target.takeDamage(out.damage)
+            combat.hate.recordDamage(targetIdx, heroSlot, out.damage)
+            if (aimShot) {
+                combat.hate.bumpHate(targetIdx, heroSlot, ARCHER_AIM_SHOT_HATE_BUMP)
+            }
+        }
+        handleEnemyKoIfDead(target)
+        if (aimShot) {
+            archerAimShotSkipTurn[heroSlot] = true
+        }
+        return out.hit
+    }
+
+    /**
+     * Consumes a pending Aim Shot buff once per hero action (first arrow only).
+     */
+    private fun consumeAimShotForAction(heroSlot: Int): Boolean {
+        if (aimShotResolvedThisAction[heroSlot]) return false
+        val buffs = archerPrepareBuffs[heroSlot]
+        if (!buffs.aimShotPending) return false
+        buffs.aimShotPending = false
+        aimShotResolvedThisAction[heroSlot] = true
+        return true
     }
 
     /**
@@ -2075,6 +2244,7 @@ class CombatController(
     private data class ArcherPrepareBuffs(
         var rapidFirePending: Boolean = false,
         var doubleShotPending: Boolean = false,
+        var aimShotPending: Boolean = false,
     )
 
     private data class ArcherShotPlan(
@@ -2098,6 +2268,15 @@ class CombatController(
         private const val FIRE_ARROW_SKILL_ID: String = "archer_fire_arrow"
         private const val ARCHER_RAPID_FIRE_EXTRA_ARROW_CHANCE = 0.80
         private const val ARCHER_DOUBLE_SHOT_SECOND_MISS_PCT = 25
+
+        /** First arrow full speed; later Rapid Fire shots compress (animation only). */
+        private fun rapidFireShotMultipliers(arrowCount: Int): List<Float> = when (arrowCount) {
+            1 -> listOf(1f)
+            2 -> listOf(1f, 0.55f)
+            else -> listOf(1f, 0.5f, 0.35f)
+        }
+        private const val ARCHER_AIM_SHOT_DAMAGE_MULTIPLIER = 1.5
+        private const val ARCHER_AIM_SHOT_HATE_BUMP = 2
         private const val CHARGE_MS_PER_CELL: Long = 190L
         private const val CHARGE_MIN_MS: Long = 320L
         /**

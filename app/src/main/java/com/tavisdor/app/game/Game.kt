@@ -5,10 +5,12 @@ import com.tavisdor.app.combat.Combat
 import com.tavisdor.app.combat.CombatController
 import com.tavisdor.app.combat.CombatLog
 import com.tavisdor.app.combat.CombatTargeting
+import com.tavisdor.app.dungeon.CampAmbush
 import com.tavisdor.app.dungeon.Cell
 import com.tavisdor.app.enemies.Enemy
 import com.tavisdor.app.dungeon.Floor
 import com.tavisdor.app.items.Ingredient
+import com.tavisdor.app.items.PotionResolver
 import com.tavisdor.app.locks.LockPick
 import com.tavisdor.app.party.Hero
 import com.tavisdor.app.party.HeroClass
@@ -17,13 +19,21 @@ import com.tavisdor.app.dungeon.Pathfinder
 import com.tavisdor.app.dungeon.TemplateLibrary
 import com.tavisdor.app.party.HeroDraft
 import com.tavisdor.app.party.Party
+import com.tavisdor.app.party.UtilityRecoverySession
+import com.tavisdor.app.party.UtilitySkillResolver
+import com.tavisdor.app.debug.DebugConfig
 import com.tavisdor.app.render.Camera
 import com.tavisdor.app.render.PartyLungeGateway
 import com.tavisdor.app.render.WeaponAttackFxPlayer
 import com.tavisdor.app.render.WeaponFxGateway
 import com.tavisdor.app.render.DefenderSpellFxGateway
 import com.tavisdor.app.render.EarthIImpactFxPlayer
-import com.tavisdor.app.render.FireIImpactFxPlayer
+import com.tavisdor.app.render.EarthIIImpactFxPlayer
+import com.tavisdor.app.render.EarthIIIImpactFxPlayer
+import com.tavisdor.app.render.HealPortraitFxGateway
+import com.tavisdor.app.render.HealPortraitFxPlayer
+import com.tavisdor.app.render.AlternatingFireImpactFxPlayer
+import com.tavisdor.app.render.UtilityCastFxCatalog
 import android.graphics.RectF
 import com.tavisdor.app.render.WeaponFxRequest
 import com.tavisdor.app.save.SaveData
@@ -63,10 +73,31 @@ class Game(
 
     val camera: Camera = Camera()
 
+    /**
+     * When true, exploration auto-move keeps the camera on the party.
+     * Disabled by touch-pan until the player double-taps to refocus.
+     */
+    var cameraFollowParty: Boolean = true
+        private set
+
     /** Attack weapon sprites played over the dungeon grid during combat. */
     private val weaponAttackFxPlayer = WeaponAttackFxPlayer(context.assets)
     private val earthIImpactFxPlayer = EarthIImpactFxPlayer(context.assets)
-    private val fireIImpactFxPlayer = FireIImpactFxPlayer(context.assets)
+    private val earthIIImpactFxPlayer = EarthIIImpactFxPlayer(context.assets)
+    private val earthIIIImpactFxPlayer = EarthIIIImpactFxPlayer(context.assets)
+    private val fireIImpactFxPlayer = AlternatingFireImpactFxPlayer(
+        context.assets,
+        AlternatingFireImpactFxPlayer.FIRE_I,
+    )
+    private val fireIIImpactFxPlayer = AlternatingFireImpactFxPlayer(
+        context.assets,
+        AlternatingFireImpactFxPlayer.FIRE_II,
+    )
+    private val fireIIIImpactFxPlayer = AlternatingFireImpactFxPlayer(
+        context.assets,
+        AlternatingFireImpactFxPlayer.FIRE_III,
+    )
+    private val healPortraitFxPlayer = HealPortraitFxPlayer(context.assets)
 
     private data class PartyLungeAnim(
         val from: Cell,
@@ -79,6 +110,11 @@ class Game(
 
     private var partyLungeAnim: PartyLungeAnim? = null
 
+    private var utilityRecoverySession: UtilityRecoverySession? = null
+    private var utilityRecoveryLastStep: Int = -1
+    /** Recovery tick index for a camp ambush, or null if none scheduled. */
+    private var campAmbushTick: Int? = null
+
     private val weaponFxGateway: WeaponFxGateway = object : WeaponFxGateway {
         override fun start(request: WeaponFxRequest, onComplete: () -> Unit): Boolean =
             weaponAttackFxPlayer.start(request, onComplete)
@@ -87,21 +123,64 @@ class Game(
             get() = weaponAttackFxPlayer.isActive
     }
 
+    val healPortraitFxGateway: HealPortraitFxGateway = object : HealPortraitFxGateway {
+        override val isPlaying: Boolean
+            get() = healPortraitFxPlayer.isActive
+
+        override fun start(targetSlot: Int, onComplete: () -> Unit): Boolean =
+            healPortraitFxPlayer.start(targetSlot, onComplete)
+
+        override fun drawOnPortrait(
+            canvas: android.graphics.Canvas,
+            slot: Int,
+            portraitRect: android.graphics.RectF,
+        ) {
+            healPortraitFxPlayer.drawOnPortrait(canvas, slot, portraitRect)
+        }
+    }
+
     val defenderSpellFxGateway: DefenderSpellFxGateway = object : DefenderSpellFxGateway {
         override fun startEarthI(target: Enemy, onComplete: () -> Unit): Boolean =
             earthIImpactFxPlayer.start(target, onComplete)
 
+        override fun startEarthII(target: Enemy, onComplete: () -> Unit): Boolean =
+            earthIIImpactFxPlayer.start(target, onComplete)
+
+        override fun startEarthIII(target: Enemy, onComplete: () -> Unit): Boolean =
+            earthIIIImpactFxPlayer.start(target, onComplete)
+
         override fun startFireI(target: Enemy, onComplete: () -> Unit): Boolean =
             fireIImpactFxPlayer.start(target, onComplete)
 
+        override fun startFireII(target: Enemy, onComplete: () -> Unit): Boolean =
+            fireIIImpactFxPlayer.start(target, onComplete)
+
+        override fun startFireIII(target: Enemy, onComplete: () -> Unit): Boolean =
+            fireIIIImpactFxPlayer.start(target, onComplete)
+
         override val isPlaying: Boolean
-            get() = earthIImpactFxPlayer.isActive || fireIImpactFxPlayer.isActive
+            get() = earthIImpactFxPlayer.isActive ||
+                earthIIImpactFxPlayer.isActive ||
+                earthIIIImpactFxPlayer.isActive ||
+                fireIImpactFxPlayer.isActive ||
+                fireIIImpactFxPlayer.isActive ||
+                fireIIIImpactFxPlayer.isActive
 
         override fun targets(enemy: Enemy): Boolean =
-            earthIImpactFxPlayer.targets(enemy) || fireIImpactFxPlayer.targets(enemy)
+            earthIImpactFxPlayer.targets(enemy) ||
+                earthIIImpactFxPlayer.targets(enemy) ||
+                earthIIIImpactFxPlayer.targets(enemy) ||
+                fireIImpactFxPlayer.targets(enemy) ||
+                fireIIImpactFxPlayer.targets(enemy) ||
+                fireIIIImpactFxPlayer.targets(enemy)
 
-        override fun shakeOffsetPx(enemy: Enemy, cellPx: Float): Pair<Float, Float> =
-            earthIImpactFxPlayer.shakeOffsetPx(enemy, cellPx)
+        override fun shakeOffsetPx(enemy: Enemy, cellPx: Float): Pair<Float, Float> {
+            val iii = earthIIIImpactFxPlayer.shakeOffsetPx(enemy, cellPx)
+            if (iii.first != 0f || iii.second != 0f) return iii
+            val ii = earthIIImpactFxPlayer.shakeOffsetPx(enemy, cellPx)
+            if (ii.first != 0f || ii.second != 0f) return ii
+            return earthIImpactFxPlayer.shakeOffsetPx(enemy, cellPx)
+        }
 
         override fun drawBehindEnemy(
             canvas: android.graphics.Canvas,
@@ -113,6 +192,8 @@ class Game(
             viewCy: Float,
         ) {
             earthIImpactFxPlayer.drawBehindEnemy(canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy)
+            earthIIImpactFxPlayer.drawBehindEnemy(canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy)
+            earthIIIImpactFxPlayer.drawBehindEnemy(canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy)
         }
 
         override fun drawInFrontOfEnemy(
@@ -125,7 +206,19 @@ class Game(
             viewCy: Float,
             enemySpriteRect: RectF?,
         ) {
+            earthIIImpactFxPlayer.drawInFrontOfEnemy(
+                canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy,
+            )
+            earthIIIImpactFxPlayer.drawInFrontOfEnemy(
+                canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy,
+            )
             fireIImpactFxPlayer.drawInFrontOfEnemy(
+                canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy, enemySpriteRect,
+            )
+            fireIIImpactFxPlayer.drawInFrontOfEnemy(
+                canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy, enemySpriteRect,
+            )
+            fireIIIImpactFxPlayer.drawInFrontOfEnemy(
                 canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy, enemySpriteRect,
             )
         }
@@ -156,7 +249,23 @@ class Game(
     private fun isCombatVisualFxActive(): Boolean =
         weaponAttackFxPlayer.isActive ||
             earthIImpactFxPlayer.isActive ||
-            fireIImpactFxPlayer.isActive
+            earthIIImpactFxPlayer.isActive ||
+            earthIIIImpactFxPlayer.isActive ||
+            fireIImpactFxPlayer.isActive ||
+            fireIIImpactFxPlayer.isActive ||
+            fireIIIImpactFxPlayer.isActive
+
+    /**
+     * True while a weapon / spell action FX is playing on [enemy]'s cell.
+     * Hides the combat_target marker so it does not overlap the attack animation.
+     */
+    fun isActionAnimationTargeting(enemy: Enemy): Boolean {
+        if (weaponAttackFxPlayer.isActive) {
+            val req = weaponAttackFxPlayer.playbackRequest
+            if (req != null && req.defenderCell == enemy.cell) return true
+        }
+        return defenderSpellFxGateway.targets(enemy)
+    }
 
     /** Drawn by [com.tavisdor.app.render.DungeonRenderer] on top of tokens. */
     fun drawWeaponAttackFx(
@@ -336,7 +445,14 @@ class Game(
         combatController = null
         weaponAttackFxPlayer.cancel()
         earthIImpactFxPlayer.cancel()
+        earthIIImpactFxPlayer.cancel()
+        earthIIIImpactFxPlayer.cancel()
         fireIImpactFxPlayer.cancel()
+        fireIIImpactFxPlayer.cancel()
+        fireIIIImpactFxPlayer.cancel()
+        healPortraitFxPlayer.cancel()
+        clearUtilityRecovery()
+        weaponAttackFxPlayer.cancel()
         partyLungeAnim = null
         clearAllHeroWaiting()
         if (next != null) {
@@ -373,6 +489,7 @@ class Game(
                     },
                     weaponFx = weaponFxGateway,
                     defenderSpellFx = defenderSpellFxGateway,
+                    healPortraitFx = healPortraitFxGateway,
                     partyLunge = partyLungeGateway,
                 )
             }
@@ -386,8 +503,28 @@ class Game(
             // Clear the selection so the hate slots render empty.
             setSelectedEnemy(null)
             endCombatTargetSelection()
+            focusCameraOnParty()
         }
         onCombatChanged?.invoke(next)
+    }
+
+    /**
+     * Double-tap on the dungeon view: snap the camera to the party
+     * token and resume follow-during-move in exploration.
+     */
+    fun focusCameraOnParty() {
+        val cell = floor?.partyCell ?: return
+        cameraFollowParty = true
+        camera.cancelPan()
+        camera.centerOn(cell.x, cell.y)
+    }
+
+    /** Touch drag pan in dungeon-cell space (no fog / bounds clamp). */
+    fun onUserCameraPan(deltaCellX: Float, deltaCellY: Float) {
+        if (mode == Mode.EXPLORATION) {
+            cameraFollowParty = false
+        }
+        camera.panByCellDelta(deltaCellX, deltaCellY)
     }
 
     fun beginCombatTargetSelection(slot: Int, skill: Skill) {
@@ -427,11 +564,7 @@ class Game(
     }
 
     /**
-     * Caller-facing selection setter used by the input handler when
-     * the player taps an enemy cell. Idempotent (same enemy =
-     * no-op) so re-taps don't spam the listener; passing a dead
-     * enemy clears the selection because tap-to-target a corpse
-     * makes no sense.
+     * Caller-facing selection setter. Idempotent (same enemy = no-op).
      */
     fun setSelectedEnemy(enemy: Enemy?) {
         val next = when {
@@ -500,6 +633,17 @@ class Game(
      * door the player was trying to enter.
      */
     var onLockedDoorPrompt: ((Cell) -> Unit)? = null
+
+    /** Opens the locked-chest dialog when the party tries to loot a locked chest. */
+    var onLockedChestPrompt: ((Cell) -> Unit)? = null
+
+    /** Opens the items panel on the pickup tab for chest loot at [Cell]. */
+    var onChestLootReady: ((Cell) -> Unit)? = null
+
+    /** Fired when chest loot changes so the dungeon view can refresh sprites. */
+    var onChestStateChanged: (() -> Unit)? = null
+
+    private var pendingChestInteract: Cell? = null
 
     enum class DoorOutcome {
         ALREADY_UNLOCKED,
@@ -773,9 +917,180 @@ class Game(
     fun startNewRun(drafts: List<HeroDraft>) {
         require(drafts.size == 4) { "A new run requires exactly 4 hero drafts." }
         party = Party.create(drafts)
+        if (DebugConfig.GRANT_UTILITY_TEST_INGREDIENTS) {
+            applyUtilityTestSetup()
+        }
         floorDepth = 1
         descendToFloor(floorDepth)
         saveStore.save(snapshotForFloorStart())
+    }
+
+    private fun applyUtilityTestSetup() {
+        grantUtilityTestIngredients()
+        setPartyHalfHpMpForTesting()
+    }
+
+    /**
+     * One level-1 ingredient per utility category so camp / rest /
+     * cooking / make-potion can be tested from a fresh run.
+     */
+    fun grantUtilityTestIngredients() {
+        val inv = party?.inventory ?: return
+        listOf(
+            Ingredient.HERBAL_ROOT,
+            Ingredient.BED_ROLL,
+            Ingredient.BEER,
+            Ingredient.RAW_RABBIT,
+        ).forEach { ing ->
+            if (!inv.hasIngredient(ing)) inv.addIngredient(ing)
+        }
+    }
+
+    /** Sets every living hero to 50% HP and 50% MP (utility FX testing). */
+    fun setPartyHalfHpMpForTesting() {
+        party?.heroes?.forEach { hero ->
+            if (!hero.isAlive) return@forEach
+            hero.hp = (hero.maxHp / 2).coerceAtLeast(1)
+            hero.mp = hero.maxMp / 2
+        }
+    }
+
+    val isUtilityCastPlaying: Boolean
+        get() = weaponAttackFxPlayer.isActive && utilityRecoverySession != null
+
+    /**
+     * Plays the staff-rise utility animation and spreads HP / MP
+     * recovery across the frame sequence. Out of combat only.
+     */
+    fun commitUtilitySkillInExploration(casterSlot: Int, skill: Skill): Boolean {
+        if (mode != Mode.EXPLORATION || combat != null) return false
+        if (weaponAttackFxPlayer.isActive) return false
+        val p = party ?: return false
+        val f = floor ?: return false
+        val caster = p.heroes.getOrNull(casterSlot) ?: return false
+        val plan = UtilitySkillResolver.resolve(
+            skill = skill,
+            caster = caster,
+            party = p,
+            inCombat = false,
+            partyCell = f.partyCell,
+            floor = f,
+        ) ?: return false
+
+        caster.spendMana(skill.mpCost)
+        if (!p.inventory.consumeIngredient(plan.ingredient)) return false
+
+        utilityRecoverySession = plan.recovery
+        utilityRecoveryLastStep = -1
+        campAmbushTick = if (
+            skill.id == SkillCatalog.FIGHTER_CAMP_ID &&
+            plan.recovery != null
+        ) {
+            CampAmbush.rollAmbushTick(
+                floor = f,
+                partyCell = f.partyCell,
+                tickCount = plan.recovery.tickCount,
+                rng = runtimeRng,
+            )
+        } else {
+            null
+        }
+
+        val started = weaponAttackFxPlayer.start(plan.fxRequest) {
+            utilityRecoverySession?.flushRemaining(p.heroes)
+            utilityRecoverySession = null
+            utilityRecoveryLastStep = -1
+            plan.potionToGrant?.let { potion ->
+                if (!p.inventory.addPotion(potion)) {
+                    // Materials tab full — potion is lost (rare edge case).
+                }
+            }
+            p.inventory.notifyOwnerChanged()
+        }
+        if (!started) {
+            utilityRecoverySession = null
+            utilityRecoveryLastStep = -1
+            campAmbushTick = null
+            return false
+        }
+        if (plan.recovery != null) {
+            tickUtilityRecoveryProgress()
+        }
+        return true
+    }
+
+    /**
+     * Drinks one potion on the user allowed in the current mode:
+     * combat -> acting hero only (ends their turn); exploration ->
+     * [activeHeroSlot] only. Returns MP restored, or null on failure.
+     */
+    fun usePotionInCurrentContext(): Int? {
+        val p = party ?: return null
+        if (combat != null) {
+            val controller = combatController ?: return null
+            val slot = controller.currentHeroSlot ?: return null
+            return controller.commitHeroUsePotion(slot)
+        }
+        val slot = activeHeroSlot ?: return null
+        val hero = p.heroes.getOrNull(slot) ?: return null
+        if (!hero.isAlive) return null
+        if (hero.mp >= hero.maxMp) return null
+        val potion = p.inventory.consumeFirstPotion() ?: return null
+        val amount = PotionResolver.mpRestoreAmount(hero, potion.ingredientPotency, runtimeRng)
+        return hero.restoreMp(amount)
+    }
+
+    private fun tickUtilityRecoveryProgress() {
+        val session = utilityRecoverySession ?: return
+        val request = weaponAttackFxPlayer.playbackRequest ?: return
+        val sequence = request.flowFrameSequence
+        if (sequence.isEmpty()) return
+        val heroes = party?.heroes ?: return
+        val motion = request.utilityMotion ?: return
+        val introMs = UtilityCastFxCatalog.introDurationMs(motion)
+        val cycleElapsed = weaponAttackFxPlayer.playbackElapsedMs - introMs
+        if (cycleElapsed < 0L) return
+        val stepMs = request.flowStepMs.coerceAtLeast(1L)
+        val step = (cycleElapsed / stepMs).toInt().coerceAtMost(sequence.lastIndex)
+        while (utilityRecoveryLastStep < step) {
+            utilityRecoveryLastStep++
+            session.applyTick(heroes)
+            val ambushAt = campAmbushTick
+            if (ambushAt != null && utilityRecoveryLastStep == ambushAt) {
+                tryTriggerCampAmbush()
+                return
+            }
+        }
+    }
+
+    /**
+     * Spawns camp ambush enemies and starts combat so the party keeps
+     * any HP/MP ticks already applied this cast.
+     */
+    private fun tryTriggerCampAmbush() {
+        if (mode != Mode.EXPLORATION || combat != null) return
+        val f = floor ?: return
+        val p = party ?: return
+        val count = CampAmbush.enemyCountForDepth(f.depth)
+        campAmbushTick = null
+        val spawned = f.spawnCampAmbushEnemies(f.partyCell, count, runtimeRng)
+        if (spawned.isEmpty()) return
+        val livingEnemies = f.enemiesInRoomOf(f.partyCell)
+            .filter { it.hp > 0 && f.isVisibleToParty(it.cell) }
+        if (livingEnemies.isEmpty()) return
+        val encounter = Combat(
+            party = p,
+            enemies = livingEnemies.toMutableList(),
+            rng = runtimeRng,
+            enemiesActFirst = true,
+        )
+        setCombat(encounter)
+    }
+
+    private fun clearUtilityRecovery() {
+        utilityRecoverySession = null
+        utilityRecoveryLastStep = -1
+        campAmbushTick = null
     }
 
     /** Restores the most recent save into this Game instance. */
@@ -786,6 +1101,9 @@ class Game(
         // hero-only path so the level / xp clamp logic stays in one
         // place.
         party = Party.fromSaveData(data)
+        if (DebugConfig.GRANT_UTILITY_TEST_INGREDIENTS) {
+            applyUtilityTestSetup()
+        }
         floorDepth = data.currentFloor
         descendToFloor(floorDepth, seed = data.floorSeed)
     }
@@ -821,20 +1139,184 @@ class Game(
         if (mode != Mode.EXPLORATION) return false
         val f = floor ?: return false
         val from = f.partyCell
+
+        if (f.chestAt(target) != null) {
+            return requestChestInteraction(target)
+        }
+
         if (target == from) return false
         if (target !in f.floorCells) return false
 
-        val path = Pathfinder.findPath(f, from, target)
+        pendingChestInteract = null
+        val blocked = movementBlockedCells(f)
+        val path = Pathfinder.findPath(f, from, target, blocked)
         if (path.size < 2) return false
 
         pendingPath.clear()
-        // Skip index 0 - that's the cell the party already occupies.
         for (i in 1 until path.size) pendingPath.addLast(path[i])
-        // Prime the accumulator so the next tick advances one step right
-        // away instead of after MOVE_STEP_SEC of dead time.
         moveAccumSec = MOVE_STEP_SEC
         lastRequestedTarget = target
         return true
+    }
+
+    /**
+     * Walks to a cell beside [chestCell] (or interacts immediately if already
+     * adjacent), then opens / unlock flow runs via [tryInteractWithChest].
+     */
+    fun requestChestInteraction(chestCell: Cell): Boolean {
+        if (mode != Mode.EXPLORATION) return false
+        val f = floor ?: return false
+        if (f.chestAt(chestCell) == null) return false
+        pendingChestInteract = chestCell
+        if (isPartyAdjacentTo(chestCell)) {
+            pendingPath.clear()
+            tryInteractWithChest(chestCell)
+            return true
+        }
+        val from = f.partyCell
+        val adjTarget = nearestAdjacentWalkTarget(f, from, chestCell) ?: return false
+        pendingPath.clear()
+        val blocked = movementBlockedCells(f)
+        val path = Pathfinder.findPath(f, from, adjTarget, blocked)
+        if (path.size < 2) return false
+        for (i in 1 until path.size) pendingPath.addLast(path[i])
+        moveAccumSec = MOVE_STEP_SEC
+        lastRequestedTarget = adjTarget
+        return true
+    }
+
+    /** True when the party stands on a cardinal neighbor of [cell]. */
+    fun isPartyAdjacentTo(cell: Cell): Boolean {
+        val f = floor ?: return false
+        val party = f.partyCell
+        val dx = kotlin.math.abs(party.x - cell.x)
+        val dy = kotlin.math.abs(party.y - cell.y)
+        return (dx + dy) == 1
+    }
+
+    /**
+     * Opens a chest, shows loot UI, or prompts for a lock pick. Returns true
+     * when the tap was handled as a chest interaction.
+     */
+    fun tryInteractWithChest(chestCell: Cell): Boolean {
+        val f = floor ?: return false
+        val chest = f.chestAt(chestCell) ?: return false
+        if (!isPartyAdjacentTo(chestCell) && f.partyCell != chestCell) return false
+        pendingChestInteract = null
+        if (chest.locked) {
+            onLockedChestPrompt?.invoke(chestCell)
+            return true
+        }
+        if (!chest.lootRolled) {
+            f.openChest(chestCell, runtimeRng)
+            onChestStateChanged?.invoke()
+        }
+        if (chest.loot.isEmpty() && chest.lootRolled) return true
+        onChestLootReady?.invoke(chestCell)
+        return true
+    }
+
+    fun lockedChestUiOptions(cell: Cell): LockedDoorUiOptions? {
+        val f = floor ?: return null
+        val chest = f.chestAt(cell) ?: return null
+        if (!chest.locked) return null
+        val p = party ?: return null
+        return LockedDoorUiOptions(
+            canKickDown = f.canAttemptStrForceOnChest(cell),
+            canPickLock = canPartyPickLocks() &&
+                p.inventory.hasIngredient(Ingredient.STONE_SHARD) &&
+                f.canAttemptDexPickOnChest(cell),
+            canUseKey = p.inventory.hasFloorKey(f.depth, chest.lockId),
+        )
+    }
+
+    fun useKeyOnChest(cell: Cell): DoorOutcome {
+        val f = floor ?: return DoorOutcome.NO_DOOR
+        val chest = f.chestAt(cell) ?: return DoorOutcome.NO_DOOR
+        if (!chest.locked) return DoorOutcome.ALREADY_UNLOCKED
+        val p = party ?: return DoorOutcome.FAILED_NO_KEY
+        if (!p.inventory.consumeFloorKey(f.depth, chest.lockId)) {
+            return DoorOutcome.FAILED_NO_KEY
+        }
+        f.unlockChest(cell)
+        return finishChestUnlock(cell)
+    }
+
+    fun tryPickChestLock(cell: Cell): DoorOutcome {
+        val f = floor ?: return DoorOutcome.NO_DOOR
+        val chest = f.chestAt(cell) ?: return DoorOutcome.NO_DOOR
+        if (!chest.locked) return DoorOutcome.ALREADY_UNLOCKED
+        if (chest.bruteDamaged) return DoorOutcome.FAILED_BRUTE_DAMAGED
+        if (!f.canAttemptDexPickOnChest(cell)) return DoorOutcome.FAILED_BRUTE_DAMAGED
+        return tryPickLockedContainer {
+            f.unlockChest(cell)
+            f.openChest(cell, runtimeRng)
+            onChestStateChanged?.invoke()
+            onChestLootReady?.invoke(cell)
+        }
+    }
+
+    fun tryForceChest(cell: Cell): DoorOutcome {
+        val f = floor ?: return DoorOutcome.NO_DOOR
+        val chest = f.chestAt(cell) ?: return DoorOutcome.NO_DOOR
+        if (!chest.locked) return DoorOutcome.ALREADY_UNLOCKED
+        if (chest.strForceAttempted) return DoorOutcome.FAILED_STR_ALREADY_TRIED
+        chest.strForceAttempted = true
+        lastStrForceCheck = null
+        val strength = partyMaxStrength()
+        val check = LockPick.rollStrForce(strength, f.depth, runtimeRng)
+        lastStrForceCheck = check
+        if (!check.success) return DoorOutcome.FAILED_STR_CHECK
+        chest.bruteDamaged = true
+        f.unlockChest(cell)
+        return finishChestUnlock(cell)
+    }
+
+    private fun finishChestUnlock(cell: Cell): DoorOutcome {
+        val f = floor ?: return DoorOutcome.NO_DOOR
+        f.openChest(cell, runtimeRng)
+        onChestStateChanged?.invoke()
+        onChestLootReady?.invoke(cell)
+        return DoorOutcome.OPENED
+    }
+
+    private fun movementBlockedCells(f: Floor): Set<Cell> {
+        val blocked = HashSet<Cell>()
+        blocked += f.chestCells
+        for (enemy in f.enemies) {
+            if (enemy.isAlive) blocked += enemy.cell
+        }
+        return blocked
+    }
+
+    private fun nearestAdjacentWalkTarget(f: Floor, from: Cell, chestCell: Cell): Cell? {
+        val deltas = arrayOf(
+            Cell(0, -1), Cell(0, 1), Cell(-1, 0), Cell(1, 0),
+        )
+        var best: Cell? = null
+        var bestDist = Int.MAX_VALUE
+        val blocked = movementBlockedCells(f)
+        for (d in deltas) {
+            val adj = Cell(chestCell.x + d.x, chestCell.y + d.y)
+            if (adj !in f.floorCells) continue
+            if (adj in blocked && adj != from) continue
+            if (f.isLockedDoor(adj)) continue
+            val path = Pathfinder.findPath(f, from, adj, blocked)
+            if (path.size < 2) continue
+            val dist = path.size
+            if (dist < bestDist) {
+                bestDist = dist
+                best = adj
+            }
+        }
+        return best
+    }
+
+    private fun maybeInteractWithPendingChest() {
+        val chestCell = pendingChestInteract ?: return
+        if (!isPartyAdjacentTo(chestCell)) return
+        pendingChestInteract = null
+        tryInteractWithChest(chestCell)
     }
 
     /**
@@ -938,7 +1420,9 @@ class Game(
         // one-room-ahead lookahead.
         f.recordVisited(next)
         pruneSelectedEnemyIfHidden()
-        camera.centerOn(next.x, next.y)
+        if (cameraFollowParty) {
+            camera.centerOn(next.x, next.y)
+        }
 
         // Note: runtime tap-to-extend is intentionally absent. Floors
         // ship fully sealed from FloorGenerator (all open connectors
@@ -949,6 +1433,9 @@ class Game(
 
         if (checkEnterCombatOn(next)) {
             pendingPath.clear()
+            pendingChestInteract = null
+        } else if (pendingPath.isEmpty()) {
+            maybeInteractWithPendingChest()
         }
         return true
     }
@@ -1137,12 +1624,14 @@ class Game(
         pendingPath.clear()
         moveAccumSec = 0f
         lastRequestedTarget = null
+        pendingChestInteract = null
         // Pending skill picks belong to the encounter / floor they were
         // staged on, not the next one - reseed each slot to the hero's
         // basic Attack so an early Action tap on the new floor always
         // resolves to a real swing.
         resetSelectedSkillsToDefault()
         setActiveHeroSlot(null)
+        cameraFollowParty = true
         camera.centerOn(newFloor.partyCell.x, newFloor.partyCell.y)
         camera.scale = 1f
         onFloorDepthChanged?.invoke(floorDepth)
@@ -1173,6 +1662,7 @@ class Game(
             partyGold = p.gold,
             inventoryWeapons = weaponSaves,
             inventoryIngredients = p.inventory.ingredients,
+            inventoryPotions = p.inventory.potions,
         )
     }
 
@@ -1196,7 +1686,12 @@ class Game(
             var redraw = controller.tick(deltaMs)
             weaponAttackFxPlayer.tick(deltaMs)
             earthIImpactFxPlayer.tick(deltaMs)
+            earthIIImpactFxPlayer.tick(deltaMs)
+            earthIIIImpactFxPlayer.tick(deltaMs)
             fireIImpactFxPlayer.tick(deltaMs)
+            fireIIImpactFxPlayer.tick(deltaMs)
+            fireIIIImpactFxPlayer.tick(deltaMs)
+            healPortraitFxPlayer.tick(deltaMs)
             val lunge = partyLungeAnim
             if (lunge != null) {
                 lunge.elapsedMs += deltaMs
@@ -1214,6 +1709,12 @@ class Game(
         // Choreographer loop invalidating once per frame; the per-step
         // mover below still runs at its own MOVE_STEP_SEC cadence.
         if (mode != Mode.EXPLORATION) return false
+        val deltaMs = (dtSec * 1000f).toLong().coerceAtLeast(0L)
+        if (weaponAttackFxPlayer.isActive) {
+            weaponAttackFxPlayer.tick(deltaMs)
+            tickUtilityRecoveryProgress()
+        }
+        camera.tick(deltaMs)
         if (pendingPath.isEmpty()) return true
         moveAccumSec += dtSec
         if (moveAccumSec < MOVE_STEP_SEC) return true
