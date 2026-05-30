@@ -12,7 +12,8 @@ import com.tavisdor.app.party.HeroClass
  *   1. Mage carries 4 idle frames (per the design request) where
  *      every other class has 2. The renderer treats both the same
  *      way - it just walks the [PortraitSpec.cycleAssets] list at
- *      a fixed cadence - so adding more frames later is data-only.
+ *      per-frame cadence (blink *pic2 frames are half as long for
+ *      thief / mage / archer) - so adding more frames later is data-only.
  *   2. Fighter MALE breaks the `{class}{M|F}pic{N}` naming the
  *      other classes follow: the on-disk files are `fighterpic1`
  *      / `fighterpic2` (no `M`). The hurt sprite still follows the

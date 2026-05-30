@@ -152,12 +152,15 @@ class CombatLogView @JvmOverloads constructor(
                 whiteSeg(out, entry.attacker)
                 whiteSeg(out, " ")
                 attackSeg(out, "attacks")
+                if (entry.shotLabel != null) {
+                    whiteSeg(out, " (${entry.shotLabel})")
+                }
                 whiteSeg(out, " but ${entry.target} dodges the attack.")
             }
             is CombatLogEntry.SpellHit -> {
                 whiteSeg(out, entry.attacker)
                 whiteSeg(out, " ")
-                attackSeg(out, "casts")
+                attackSeg(out, if (entry.crit) "lands a critical" else "casts")
                 whiteSeg(out, " ${entry.spellName} on ${entry.target} ")
                 attackSeg(out, "for ${entry.damage} damage")
                 when {
@@ -167,9 +170,9 @@ class CombatLogView @JvmOverloads constructor(
                     }
                     entry.disadvantage -> {
                         whiteSeg(out, " ")
-                        disadvantageSeg(out, "(resisted)")
+                        disadvantageSeg(out, if (entry.crit) "(crit — less resisted)" else "(resisted)")
                     }
-                    else -> whiteSeg(out, ".")
+                    else -> whiteSeg(out, if (entry.crit) " (critical)." else ".")
                 }
             }
             is CombatLogEntry.SpellResist -> {
@@ -271,6 +274,28 @@ class CombatLogView @JvmOverloads constructor(
             }
             is CombatLogEntry.Info -> {
                 whiteSeg(out, entry.text)
+            }
+            is CombatLogEntry.UtilitySkillUsed -> {
+                whiteSeg(out, entry.caster)
+                whiteSeg(out, " uses ")
+                healSeg(out, entry.skillName)
+                whiteSeg(out, ".")
+            }
+            is CombatLogEntry.UtilityRecoveryTotals -> {
+                val parts = mutableListOf<String>()
+                if (entry.totalHp > 0) parts += "+${entry.totalHp} HP"
+                if (entry.totalMp > 0) parts += "+${entry.totalMp} MP"
+                if (parts.isEmpty()) {
+                    whiteSeg(out, "No HP or MP recovered.")
+                } else {
+                    healSeg(out, parts.joinToString(", "))
+                    whiteSeg(out, " recovered.")
+                }
+            }
+            is CombatLogEntry.ItemGained -> {
+                whiteSeg(out, "Gained ")
+                advantageSeg(out, entry.itemName)
+                whiteSeg(out, " (added to inventory).")
             }
         }
     }

@@ -180,6 +180,7 @@ object FloorGenerator {
 
         ChestSpawner.spawn(floor, rng)
         floor.assignLockKeyCarriers(rng)
+        floor.finalizeEntranceFog()
 
         return floor
     }

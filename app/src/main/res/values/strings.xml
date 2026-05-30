@@ -127,6 +127,13 @@
     <string name="hero_skill_assign_section_empty">(none)</string>
     <string name="hero_skill_assign_confirm_title">%1$s</string>
     <string name="hero_skill_assign_confirm">Confirm</string>
+    <string name="skillbook_button">Skill book</string>
+    <string name="skillbook_dialog_title">%1$s — Skills</string>
+    <string name="skillbook_mana_cost">Mana: %1$d</string>
+    <string name="skillbook_mana_free">Mana: none</string>
+    <string name="skillbook_range">Range: %1$d</string>
+    <string name="skillbook_material_named">Material: %1$s</string>
+    <string name="skillbook_material_category">Material: one %1$s item (%2$s)</string>
     <string name="hero_skill_assign_cancel">Cancel</string>
     <string name="hero_skill_assign_passive_ok">OK</string>
     <string name="hero_skill_assign_mp_part">%1$d MP</string>
@@ -144,6 +151,9 @@
     <string name="heal_picker_title">Who should receive %1$s?</string>
     <string name="heal_picker_row_format">%1$s - %2$s\u00A0\u00A0HP %3$d / %4$d</string>
     <string name="heal_picker_cancel">Cancel</string>
+
+    <!-- Trick Attack hate redirect (free-action prep before main skill). -->
+    <string name="trick_attack_hate_picker_title">Who should draw hate from %1$s?</string>
 
     <string name="utility_missing_ingredient">Need a suitable ingredient in Items.</string>
     <string name="utility_no_recovery_benefit">No one will recover, but the ingredient will still be used.</string>
@@ -198,7 +208,6 @@
     <string name="items_panel_tab_equip_format">Equip: %1$d/%2$d</string>
     <string name="items_panel_tab_mat_format">Mat: %1$d/%2$d</string>
     <string name="items_panel_section_empty">(empty)</string>
-    <string name="items_panel_pickup_hint">Review battle loot here. Tap a slot or use Pick Up All. Leftover loot is discarded when you close unless Auto pick up on close is checked.</string>
     <string name="items_panel_pickup_all">Pick Up All</string>
     <string name="items_panel_auto_pickup">Auto pick up on close</string>
     <string name="items_panel_inventory_full">That tab is full (%1$d slots).</string>

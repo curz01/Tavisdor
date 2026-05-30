@@ -163,6 +163,18 @@ data class RoomTemplate(
         connectors.mapTo(HashSet(connectors.size)) { Cell(it.x + offset.x, it.y + offset.y) }
 
     /**
+     * Cell where the party should spawn on this template: stairs up (return
+     * path) if present, else stairs down, else a stable floor tile fallback.
+     */
+    fun preferredPartyStartCell(): Cell {
+        val order = compareBy<Cell>({ it.y }, { it.x })
+        return stairsUp.minWithOrNull(order)
+            ?: staircases.minWithOrNull(order)
+            ?: floorCells.minWithOrNull(order)
+            ?: Cell(0, 0)
+    }
+
+    /**
      * Debug helper. Returns the template as ASCII so a logcat dump can be
      * eyeballed against the source PNG.
      *

@@ -17,4 +17,19 @@
         android:textSize="9sp"
         tools:text="Iron Spear" />
 
+    <TextView
+        android:id="@+id/tvInventoryGridCellCount"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:includeFontPadding="false"
+        android:paddingEnd="3dp"
+        android:paddingBottom="2dp"
+        android:textColor="@color/items_panel_stack_count"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        tools:text="4"
+        tools:visibility="visible" />
+
 </FrameLayout>

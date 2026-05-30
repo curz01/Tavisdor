@@ -49,6 +49,7 @@ dungeon background.
 | `action_attack.png` | 32 x 32 (suggested) | Staged offensive / ACTION-bucket skill on the hero panel (above HP bar). | Scaled to fit the status strip; keep the glyph readable at small size. |
 | `action_guard.png`  | 32 x 32 (suggested) | Staged defensive / GUARD-bucket skill (e.g. Rapid Fire, Defend). | Same layout as `action_attack`. |
 | `wait.png`            | 32 x 32 (suggested) | Combat Wait button (skill panel + action bar) and status icon after a hero defers. | Same layout as `action_attack`. |
+| `skillbook.png`       | 32 x 32 (suggested) | Skill Book button on the skill-assign panel (bottom-right). | Opens the read-only skill reference dialog. |
 | `earthi_1.png` … `earthi_3.png` | varies | Earth I / II defender FX (rumble + hole). | Used by [EarthIImpactFxPlayer] / [EarthIIImpactFxPlayer]. |
 | `earthii_1.png`, `earthii_2.png` | varies | Earth II front-layer impact frames (in front of defender). | Alternates 6× with shake during Earth II cast. |
 | `earthiii_1.png` … `earthiii_4.png` | varies | Earth III defender FX (frame 1 behind; 2–4 in front + shake). | 0.5s / 0.25s / 0.25s / finale with heavy shake. |
@@ -61,6 +62,15 @@ dungeon background.
 | `rest1.png`, `rest2.png` | varies | Rest utility FX. | Same intro as Make Potion. |
 | `cooking_1.png` … `cooking_3.png` | varies | Cooking utility FX. | Hold + rise, then 4× (1→2→3→2→1) @ 260ms per frame. |
 | `combat_target1.png`, `combat_target2.png` | varies | Current combat target indicator. | Loops on [Game.selectedEnemy]; also on valid enemies while picking an attack target. |
+| `sneakattack.png` | varies | Sneak Attack defender FX (Thief). | Rotates 100° CCW around lower-right corner, holds 0.5s, then defender shakes. Used by [SneakAttackFxPlayer]. |
+| `expose_1.png` … `expose_8.png` | varies | Weak Point defender FX (Thief). | Cycles 1–7 on defender center, holds frame 8 for 0.5s. Used by [ExposeWeaknessFxPlayer]. |
+| `doubls1.png`, `doubls2.png` | varies | Double Strike weapon FX (Thief). | Spear-style thrust (sprite top → defender); first half / second half. Used by [WeaponAttackFxPlayer]. |
+| `trickattack.png` | varies | Trick Attack cast FX (Thief). | Rises from party icon (same timing as Make Potion / Rest). Used by [CombatPartyRiseFxCatalog]. |
+| `hide.png` | varies | Hide cast FX (Thief). | Same rise-from-party motion as Trick Attack. Used by [CombatPartyRiseFxCatalog]. |
+| `hidden.png` | 32 x 32 (suggested) | Party-wide Hide active on every hero panel status strip. | Shown on all four slots while [Game.isPartyHidden]; cleared when any hero spends an action or enemies spot the party. |
+| `lock.png` | 64 x 64 (suggested) | Locked door / chest unlock attempt. | Rises from the tile, shakes, then descends (failure). Used by [LockUnlockFxPlayer]. |
+| `unlock.png` | 64 x 64 (suggested) | Successful unlock on door / chest. | Shown for 0.5s after the shake, then lowers with fade. Used by [LockUnlockFxPlayer]. |
+| `steal1.png`, `steal2.png` | 64 x 64 (suggested) | Steal on connecting Thief hit. | [steal1] rises from defender, holds; [steal2] overlays then swipes up/right ½ tile. Used by [StealFxPlayer]. |
 
 ---
 

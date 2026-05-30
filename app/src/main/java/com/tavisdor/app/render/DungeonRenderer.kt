@@ -539,6 +539,7 @@ class DungeonRenderer(private val assets: AssetManager) {
 
         // ----- Weapon attack FX (above party + enemies) -----
         game.drawWeaponAttackFx(canvas, cx, cy, cellPx, viewCx, viewCy)
+        game.drawLockUnlockFx(canvas, cx, cy, cellPx, viewCx, viewCy)
     }
 
     /**

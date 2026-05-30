@@ -3,8 +3,11 @@ package com.tavisdor.app.game
 import android.content.Context
 import com.tavisdor.app.combat.Combat
 import com.tavisdor.app.combat.CombatController
+import com.tavisdor.app.combat.CombatEndResult
 import com.tavisdor.app.combat.CombatLog
+import com.tavisdor.app.combat.CombatLogEntry
 import com.tavisdor.app.combat.CombatTargeting
+import com.tavisdor.app.combat.HideResolver
 import com.tavisdor.app.dungeon.CampAmbush
 import com.tavisdor.app.dungeon.Cell
 import com.tavisdor.app.enemies.Enemy
@@ -24,15 +27,20 @@ import com.tavisdor.app.party.UtilitySkillResolver
 import com.tavisdor.app.debug.DebugConfig
 import com.tavisdor.app.render.Camera
 import com.tavisdor.app.render.PartyLungeGateway
+import com.tavisdor.app.render.LockUnlockFxPlayer
 import com.tavisdor.app.render.WeaponAttackFxPlayer
 import com.tavisdor.app.render.WeaponFxGateway
 import com.tavisdor.app.render.DefenderSpellFxGateway
 import com.tavisdor.app.render.EarthIImpactFxPlayer
+import com.tavisdor.app.render.ExposeWeaknessFxPlayer
+import com.tavisdor.app.render.StealFxPlayer
+import com.tavisdor.app.render.SneakAttackFxPlayer
 import com.tavisdor.app.render.EarthIIImpactFxPlayer
 import com.tavisdor.app.render.EarthIIIImpactFxPlayer
 import com.tavisdor.app.render.HealPortraitFxGateway
 import com.tavisdor.app.render.HealPortraitFxPlayer
 import com.tavisdor.app.render.AlternatingFireImpactFxPlayer
+import com.tavisdor.app.render.CombatPartyRiseFxCatalog
 import com.tavisdor.app.render.UtilityCastFxCatalog
 import android.graphics.RectF
 import com.tavisdor.app.render.WeaponFxRequest
@@ -98,6 +106,10 @@ class Game(
         AlternatingFireImpactFxPlayer.FIRE_III,
     )
     private val healPortraitFxPlayer = HealPortraitFxPlayer(context.assets)
+    private val sneakAttackFxPlayer = SneakAttackFxPlayer(context.assets)
+    private val exposeWeaknessFxPlayer = ExposeWeaknessFxPlayer(context.assets)
+    private val stealFxPlayer = StealFxPlayer(context.assets)
+    private val lockUnlockFxPlayer = LockUnlockFxPlayer(context.assets)
 
     private data class PartyLungeAnim(
         val from: Cell,
@@ -114,6 +126,18 @@ class Game(
     private var utilityRecoveryLastStep: Int = -1
     /** Recovery tick index for a camp ambush, or null if none scheduled. */
     private var campAmbushTick: Int? = null
+
+    /** Active Thief Hide in exploration; cleared when enemies spot the party. */
+    private var partyHide: HideResolver.PartyHideState? = null
+
+    val isPartyHidden: Boolean
+        get() = partyHide != null
+
+    /** Fires when party-wide Hide activates or is cleared (hero panel icons). */
+    var onPartyHideChanged: (() -> Unit)? = null
+
+    val isWeaponFxPlaying: Boolean
+        get() = weaponAttackFxPlayer.isActive
 
     private val weaponFxGateway: WeaponFxGateway = object : WeaponFxGateway {
         override fun start(request: WeaponFxRequest, onComplete: () -> Unit): Boolean =
@@ -158,13 +182,25 @@ class Game(
         override fun startFireIII(target: Enemy, onComplete: () -> Unit): Boolean =
             fireIIIImpactFxPlayer.start(target, onComplete)
 
+        override fun startSneakAttack(target: Enemy, onComplete: () -> Unit): Boolean =
+            sneakAttackFxPlayer.start(target, onComplete)
+
+        override fun startExposeWeakness(target: Enemy, onComplete: () -> Unit): Boolean =
+            exposeWeaknessFxPlayer.start(target, onComplete)
+
+        override fun startSteal(target: Enemy, onComplete: () -> Unit): Boolean =
+            stealFxPlayer.start(target, onComplete)
+
         override val isPlaying: Boolean
             get() = earthIImpactFxPlayer.isActive ||
                 earthIIImpactFxPlayer.isActive ||
                 earthIIIImpactFxPlayer.isActive ||
                 fireIImpactFxPlayer.isActive ||
                 fireIIImpactFxPlayer.isActive ||
-                fireIIIImpactFxPlayer.isActive
+                fireIIIImpactFxPlayer.isActive ||
+                sneakAttackFxPlayer.isActive ||
+                exposeWeaknessFxPlayer.isActive ||
+                stealFxPlayer.isActive
 
         override fun targets(enemy: Enemy): Boolean =
             earthIImpactFxPlayer.targets(enemy) ||
@@ -172,9 +208,14 @@ class Game(
                 earthIIIImpactFxPlayer.targets(enemy) ||
                 fireIImpactFxPlayer.targets(enemy) ||
                 fireIIImpactFxPlayer.targets(enemy) ||
-                fireIIIImpactFxPlayer.targets(enemy)
+                fireIIIImpactFxPlayer.targets(enemy) ||
+                sneakAttackFxPlayer.targets(enemy) ||
+                exposeWeaknessFxPlayer.targets(enemy) ||
+                stealFxPlayer.targets(enemy)
 
         override fun shakeOffsetPx(enemy: Enemy, cellPx: Float): Pair<Float, Float> {
+            val sneak = sneakAttackFxPlayer.shakeOffsetPx(enemy, cellPx)
+            if (sneak.first != 0f || sneak.second != 0f) return sneak
             val iii = earthIIIImpactFxPlayer.shakeOffsetPx(enemy, cellPx)
             if (iii.first != 0f || iii.second != 0f) return iii
             val ii = earthIIImpactFxPlayer.shakeOffsetPx(enemy, cellPx)
@@ -221,6 +262,15 @@ class Game(
             fireIIIImpactFxPlayer.drawInFrontOfEnemy(
                 canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy, enemySpriteRect,
             )
+            sneakAttackFxPlayer.drawInFrontOfEnemy(
+                canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy, enemySpriteRect,
+            )
+            exposeWeaknessFxPlayer.drawInFrontOfEnemy(
+                canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy, enemySpriteRect,
+            )
+            stealFxPlayer.drawInFrontOfEnemy(
+                canvas, enemy, camCx, camCy, cellPx, viewCx, viewCy, enemySpriteRect,
+            )
         }
     }
 
@@ -253,7 +303,10 @@ class Game(
             earthIIIImpactFxPlayer.isActive ||
             fireIImpactFxPlayer.isActive ||
             fireIIImpactFxPlayer.isActive ||
-            fireIIIImpactFxPlayer.isActive
+            fireIIIImpactFxPlayer.isActive ||
+            sneakAttackFxPlayer.isActive ||
+            exposeWeaknessFxPlayer.isActive ||
+            stealFxPlayer.isActive
 
     /**
      * True while a weapon / spell action FX is playing on [enemy]'s cell.
@@ -292,6 +345,34 @@ class Game(
             density = context.resources.displayMetrics.density,
             attackerScreenOverride = attackerOverride,
         )
+    }
+
+    fun isLockUnlockFxActive(): Boolean = lockUnlockFxPlayer.isActive
+
+    /**
+     * Plays lock / unlock overlay on [cell] (door or chest). [success] selects
+     * whether the shake is followed by [unlock.png] before descending.
+     */
+    fun startLockAttemptFx(cell: Cell, success: Boolean, onComplete: () -> Unit): Boolean =
+        lockUnlockFxPlayer.start(cell, success, onComplete)
+
+    /**
+     * Opens the door sprite and reveals fog beyond [cell]. Call when the
+     * lock/unlock FX completes, not when [Floor.unlockDoor] runs.
+     */
+    fun applyDoorUnlockPresentation(cell: Cell) {
+        floor?.applyDoorUnlockPresentation(cell)
+    }
+
+    fun drawLockUnlockFx(
+        canvas: android.graphics.Canvas,
+        camCx: Float,
+        camCy: Float,
+        cellPx: Float,
+        viewCx: Float,
+        viewCy: Float,
+    ) {
+        lockUnlockFxPlayer.draw(canvas, camCx, camCy, cellPx, viewCx, viewCy)
     }
 
     /** Loaded once on Game construction. Read by [FloorGenerator] on every descend. */
@@ -344,6 +425,19 @@ class Game(
     var onCombatVictory: (() -> Unit)? = null
 
     /**
+     * Fired once after a successful combat Hide (partial XP/loot for
+     * kills already made). Opens the items panel when there is
+     * [Inventory.pendingPickup] left to sort through.
+     */
+    var onCombatHideEscape: (() -> Unit)? = null
+
+    /**
+     * Living enemies from the encounter the party hid out of. Used
+     * to resume combat if looting while hidden draws a spot check.
+     */
+    private var hideEscapeResumeEnemies: List<Enemy>? = null
+
+    /**
      * Orchestrator for the active encounter. Null whenever [combat]
      * is null. Created automatically by [setCombat] and torn down
      * when combat ends. The Game loop ticks it from [tickAnimations].
@@ -359,6 +453,9 @@ class Game(
      * an empty board.
      */
     val combatLog: CombatLog = CombatLog()
+
+    /** Fired when a log line is added outside combat (utility skills, etc.). */
+    var onExplorationLogAppended: (() -> Unit)? = null
 
     /**
      * Enemy whose hate values the hero panel currently surfaces
@@ -384,8 +481,9 @@ class Game(
 
     /**
      * When non-null, the player is picking an enemy tile for the staged
-     * skill in [CombatTargetSelection.skill]. The dungeon view dims cells
-     * outside range and highlights valid targets.
+     * skill in [CombatTargetSelection.skill]. Works in combat and in
+     * exploration (ambush attacks). The dungeon view dims cells outside
+     * range and highlights valid targets.
      */
     data class CombatTargetSelection(
         val heroSlot: Int,
@@ -450,12 +548,16 @@ class Game(
         fireIImpactFxPlayer.cancel()
         fireIIImpactFxPlayer.cancel()
         fireIIIImpactFxPlayer.cancel()
+        sneakAttackFxPlayer.cancel()
+        exposeWeaknessFxPlayer.cancel()
+        stealFxPlayer.cancel()
         healPortraitFxPlayer.cancel()
         clearUtilityRecovery()
         weaponAttackFxPlayer.cancel()
         partyLungeAnim = null
         clearAllHeroWaiting()
         if (next != null) {
+            hideEscapeResumeEnemies = null
             mode = Mode.COMBAT
             combatLog.clear()
             val f = floor
@@ -466,13 +568,20 @@ class Game(
                     log = combatLog,
                     camera = camera,
                     rng = runtimeRng,
-                    onEnd = { success ->
+                    onEnd = { result ->
+                        if (result == CombatEndResult.HIDE_ESCAPE) {
+                            hideEscapeResumeEnemies = next.enemies.filter { it.isAlive }
+                        }
                         // Tear down the encounter FIRST so listeners
                         // (turn-order strip, hate icons) see combat
                         // as cleared by the time the victory hook
                         // runs and the items panel opens on top.
                         setCombat(null)
-                        if (success) onCombatVictory?.invoke()
+                        when (result) {
+                            CombatEndResult.VICTORY -> onCombatVictory?.invoke()
+                            CombatEndResult.HIDE_ESCAPE -> onCombatHideEscape?.invoke()
+                            CombatEndResult.WIPE -> Unit
+                        }
                     },
                     onEnemyDefeated = ::handleEnemyDefeated,
                     // Auto-track the actor whose turn it is so the
@@ -491,6 +600,11 @@ class Game(
                     defenderSpellFx = defenderSpellFxGateway,
                     healPortraitFx = healPortraitFxGateway,
                     partyLunge = partyLungeGateway,
+                    onActivatePartyHide = ::activatePartyHide,
+                    onBreakPartyHide = ::clearPartyHide,
+                    breakPartyHideFromHeroAction = ::breakPartyHideFromHeroAction,
+                    breakPartyHideFromHeroTurn = ::breakPartyHideFromHeroTurn,
+                    isPartyHidden = { isPartyHidden },
                 )
             }
             // Auto-select the first living enemy so the hate icons
@@ -560,6 +674,47 @@ class Game(
             endCombatTargetSelection()
             return true
         }
+        return true
+    }
+
+    /**
+     * Living enemies in the party's current room/placement that would
+     * join a fight started from an exploration attack.
+     */
+    fun livingEncounterEnemiesAtParty(): List<Enemy> {
+        val f = floor ?: return emptyList()
+        return f.enemiesInRoomOf(f.partyCell)
+            .filter { it.hp > 0 && f.isVisibleToParty(it.cell) }
+    }
+
+    /**
+     * Starts combat from exploration with the staged skills for [slot]
+     * against [target], then commits the hero's ambush turn.
+     */
+    fun commitExplorationAttack(slot: Int, target: Enemy): Boolean {
+        if (mode != Mode.EXPLORATION || combat != null) return false
+        val p = party ?: return false
+        val f = floor ?: return false
+        val caster = p.heroes.getOrNull(slot) ?: return false
+        if (!caster.isAlive) return false
+        val main = selectedSkillFor(slot) ?: return false
+        if (projectedStagedMpCost(slot) > caster.mp) return false
+        if (!CombatTargeting.isTargetableEnemyCell(f, f.partyCell, main, target.cell)) {
+            return false
+        }
+
+        val freeAction = selectedFreeActionSkillFor(slot)
+        val enemies = livingEncounterEnemiesAtParty()
+        if (enemies.isEmpty() || target !in enemies) return false
+
+        if (!startEncounterFromExploration(enemies, clearPartyHide = false)) return false
+
+        val controller = combatController ?: return false
+        if (!controller.prepareAmbushHeroTurn(slot)) return false
+        if (!controller.commitStagedHeroTurn(slot, freeAction, main, target)) return false
+
+        clearSkillStaging(slot)
+        endCombatTargetSelection()
         return true
     }
 
@@ -645,6 +800,9 @@ class Game(
 
     private var pendingChestInteract: Cell? = null
 
+    /** Door the player tapped; after auto-walk, open the lock dialog if adjacent. */
+    private var pendingDoorInteract: Cell? = null
+
     enum class DoorOutcome {
         ALREADY_UNLOCKED,
         OPENED,
@@ -664,6 +822,9 @@ class Game(
         /** No matching [FloorKey] for this door on this depth. */
         FAILED_NO_KEY,
     }
+
+    fun DoorOutcome.isSuccessfulUnlock(): Boolean =
+        this == DoorOutcome.OPENED || this == DoorOutcome.ALREADY_UNLOCKED
 
     /** Which locked-door actions are available (others show disabled in the dialog). */
     data class LockedDoorUiOptions(
@@ -958,6 +1119,140 @@ class Game(
     val isUtilityCastPlaying: Boolean
         get() = weaponAttackFxPlayer.isActive && utilityRecoverySession != null
 
+    fun activatePartyHide(state: HideResolver.PartyHideState) {
+        partyHide = state
+        onPartyHideChanged?.invoke()
+    }
+
+    fun clearPartyHide() {
+        if (partyHide == null) return
+        partyHide = null
+        onPartyHideChanged?.invoke()
+    }
+
+    /**
+     * Ends party Hide when a hero spends an action (main-action skills
+     * and anything with [Skill.costsAction] == true). Free-action preps
+     * (Trick Attack, Rapid Fire, etc.) do not break Hide by themselves.
+     */
+    fun breakPartyHideFromHeroAction(skill: Skill?) {
+        if (!isPartyHidden) return
+        val breaks = skill == null || skill.costsAction
+        if (breaks) clearPartyHide()
+    }
+
+    /**
+     * Ends party Hide for turn-consuming commits that are not routed
+     * through [breakPartyHideFromHeroAction] (Wait, potion, Heal).
+     */
+    fun breakPartyHideFromHeroTurn() {
+        clearPartyHide()
+    }
+
+    /**
+     * Thief Hide outside combat: rise animation, then each nearby enemy
+     * in the current room may spot the party (same opposed check as combat).
+     */
+    fun commitHideInExploration(casterSlot: Int): Boolean {
+        if (mode != Mode.EXPLORATION || combat != null) return false
+        if (weaponAttackFxPlayer.isActive) return false
+        val skill = SkillCatalog.byId(SkillCatalog.THIEF_HIDE_ID) ?: return false
+        val p = party ?: return false
+        val f = floor ?: return false
+        val caster = p.heroes.getOrNull(casterSlot) ?: return false
+        if (!caster.isAlive) return false
+        if (SkillCatalog.knownSkillsFor(caster.heroClass, caster.level).none { it.id == skill.id }) {
+            return false
+        }
+        if (skill.mpCost > caster.mp) return false
+
+        val request = CombatPartyRiseFxCatalog.buildFxRequest(f.partyCell, skill.id)
+            ?: return false
+        val started = weaponAttackFxPlayer.start(request) {
+            if (skill.mpCost > 0) caster.spendMana(skill.mpCost)
+            appendExplorationLog(
+                CombatLogEntry.Info("${caster.name} uses ${skill.displayName}."),
+            )
+            finalizeHideAfterExplorationCast(casterSlot, caster)
+        }
+        return started
+    }
+
+    /**
+     * Activates party Hide only when no enemy in the current room spots
+     * the party; otherwise starts combat with the detecting enemies.
+     */
+    private fun finalizeHideAfterExplorationCast(casterSlot: Int, caster: Hero) {
+        val hideState = HideResolver.PartyHideState.fromHero(casterSlot, caster)
+        if (checkHideSpottedWhileMoving(hideState, logOnSpot = "A nearby enemy spots the party!")) {
+            return
+        }
+        activatePartyHide(hideState)
+        appendExplorationLog(
+            CombatLogEntry.Info("${caster.name} and party melts into the shadows."),
+        )
+    }
+
+    /** Living, visible enemies the party can currently see on the floor. */
+    private fun livingVisibleEnemies(f: Floor): List<Enemy> =
+        f.enemies.filter { it.hp > 0 && f.isVisibleToParty(it.cell) }
+
+    /**
+     * While hidden in exploration, each move tests every enemy within
+     * Hide perception range. One successful spot ends Hide and starts
+     * combat with all detecting enemies.
+     *
+     * @return true when combat was started.
+     */
+    private fun checkHideSpottedWhileMoving(
+        hide: HideResolver.PartyHideState? = null,
+        logOnSpot: String = "Enemies spot the hidden party!",
+    ): Boolean {
+        val activeHide = hide ?: partyHide ?: return false
+        if (mode != Mode.EXPLORATION || combat != null) return false
+        val f = floor ?: return false
+        val detecting = HideResolver.enemiesSpottingParty(
+            enemies = livingVisibleEnemies(f),
+            partyCell = f.partyCell,
+            hide = activeHide,
+            rng = runtimeRng,
+        )
+        if (detecting.isEmpty()) return false
+        appendExplorationLog(CombatLogEntry.Info(logOnSpot))
+        return startEncounterFromExploration(detecting)
+    }
+
+    /**
+     * After each battle-loot pickup while the party is hidden, tests
+     * whether a nearby enemy spots them. On a spot, closes looting
+     * (caller should dismiss the items panel without discarding
+     * [Inventory.pendingPickup]) and resumes combat with every
+     * surviving enemy from the hide escape.
+     *
+     * @return true when combat was restarted.
+     */
+    fun checkHideSpottedWhileLooting(): Boolean {
+        if (!isPartyHidden || mode != Mode.EXPLORATION || combat != null) return false
+        val f = floor ?: return false
+        val activeHide = partyHide ?: return false
+        val detecting = HideResolver.enemiesSpottingParty(
+            enemies = livingVisibleEnemies(f),
+            partyCell = f.partyCell,
+            hide = activeHide,
+            rng = runtimeRng,
+        )
+        if (detecting.isEmpty()) return false
+        val resume = hideEscapeResumeEnemies
+            ?.filter { it.isAlive && it.hp > 0 && it in f.enemies }
+            ?.takeIf { it.isNotEmpty() }
+            ?: detecting
+        hideEscapeResumeEnemies = null
+        appendExplorationLog(
+            CombatLogEntry.Info("An enemy spots the party while looting!"),
+        )
+        return startEncounterFromExploration(resume)
+    }
+
     /**
      * Plays the staff-rise utility animation and spreads HP / MP
      * recovery across the frame sequence. Out of combat only.
@@ -965,6 +1260,7 @@ class Game(
     fun commitUtilitySkillInExploration(casterSlot: Int, skill: Skill): Boolean {
         if (mode != Mode.EXPLORATION || combat != null) return false
         if (weaponAttackFxPlayer.isActive) return false
+        breakPartyHideFromHeroTurn()
         val p = party ?: return false
         val f = floor ?: return false
         val caster = p.heroes.getOrNull(casterSlot) ?: return false
@@ -979,6 +1275,10 @@ class Game(
 
         caster.spendMana(skill.mpCost)
         if (!p.inventory.consumeIngredient(plan.ingredient)) return false
+
+        appendExplorationLog(
+            CombatLogEntry.UtilitySkillUsed(caster.name, skill.displayName),
+        )
 
         utilityRecoverySession = plan.recovery
         utilityRecoveryLastStep = -1
@@ -1000,9 +1300,19 @@ class Game(
             utilityRecoverySession?.flushRemaining(p.heroes)
             utilityRecoverySession = null
             utilityRecoveryLastStep = -1
+            plan.recoveryTotals?.let { totals ->
+                if (totals.totalHp > 0 || totals.totalMp > 0) {
+                    appendExplorationLog(
+                        CombatLogEntry.UtilityRecoveryTotals(
+                            totalHp = totals.totalHp,
+                            totalMp = totals.totalMp,
+                        ),
+                    )
+                }
+            }
             plan.potionToGrant?.let { potion ->
-                if (!p.inventory.addPotion(potion)) {
-                    // Materials tab full — potion is lost (rare edge case).
+                if (p.inventory.addPotion(potion)) {
+                    appendExplorationLog(CombatLogEntry.ItemGained(potion.displayName))
                 }
             }
             p.inventory.notifyOwnerChanged()
@@ -1024,18 +1334,22 @@ class Game(
      * combat -> acting hero only (ends their turn); exploration ->
      * [activeHeroSlot] only. Returns MP restored, or null on failure.
      */
-    fun usePotionInCurrentContext(): Int? {
+    fun usePotionInCurrentContext(materialStackIndex: Int? = null): Int? {
         val p = party ?: return null
         if (combat != null) {
             val controller = combatController ?: return null
             val slot = controller.currentHeroSlot ?: return null
-            return controller.commitHeroUsePotion(slot)
+            return controller.commitHeroUsePotion(slot, materialStackIndex)
         }
         val slot = activeHeroSlot ?: return null
         val hero = p.heroes.getOrNull(slot) ?: return null
         if (!hero.isAlive) return null
         if (hero.mp >= hero.maxMp) return null
-        val potion = p.inventory.consumeFirstPotion() ?: return null
+        val potion = if (materialStackIndex != null) {
+            p.inventory.consumePotionAtStackIndex(materialStackIndex)
+        } else {
+            p.inventory.consumeFirstPotion()
+        } ?: return null
         val amount = PotionResolver.mpRestoreAmount(hero, potion.ingredientPotency, runtimeRng)
         return hero.restoreMp(amount)
     }
@@ -1093,6 +1407,11 @@ class Game(
         campAmbushTick = null
     }
 
+    private fun appendExplorationLog(entry: CombatLogEntry) {
+        combatLog.append(entry)
+        onExplorationLogAppended?.invoke()
+    }
+
     /** Restores the most recent save into this Game instance. */
     fun resumeFromSave() {
         val data = saveStore.load() ?: return
@@ -1144,14 +1463,77 @@ class Game(
             return requestChestInteraction(target)
         }
 
+        if (f.doorAt(target) != null) {
+            return requestDoorInteraction(target)
+        }
+
         if (target == from) return false
         if (target !in f.floorCells) return false
 
+        val blocked = movementBlockedCells(f)
+        val path = Pathfinder.findPath(f, from, target, blocked)
+        if (path.size < 2) {
+            val guarding = f.lockedDoorGuardingFloorCell(target)
+            if (guarding != null) {
+                return requestDoorInteraction(guarding)
+            }
+            return false
+        }
+        return queuePathTo(target)
+    }
+
+    /**
+     * Locked door: walk to a tile beside it, or open the lock UI when adjacent.
+     * Unlocked door: walk tile-by-tile onto the doorway (then through it like
+     * normal floor).
+     */
+    fun requestDoorInteraction(doorCell: Cell): Boolean {
+        if (mode != Mode.EXPLORATION) return false
+        val f = floor ?: return false
+        val door = f.doorAt(doorCell) ?: return false
+        if (!f.isVisibleToParty(doorCell)) return false
+
+        if (!door.locked) {
+            pendingDoorInteract = null
+            return queuePathTo(doorCell)
+        }
+
+        pendingDoorInteract = doorCell
+        if (isPartyAdjacentTo(doorCell)) {
+            pendingPath.clear()
+            return tryInteractWithDoor(doorCell)
+        }
+        val from = f.partyCell
+        val adjTarget = nearestAdjacentWalkTarget(f, from, doorCell) ?: return false
+        return queuePathTo(adjTarget)
+    }
+
+    /**
+     * Locked door beside the party: show use-key / pick / force UI.
+     */
+    fun tryInteractWithDoor(doorCell: Cell): Boolean {
+        val f = floor ?: return false
+        val door = f.doorAt(doorCell) ?: return false
+        if (!isPartyAdjacentTo(doorCell)) return false
+        pendingDoorInteract = null
+        if (!door.locked) {
+            return queuePathTo(doorCell)
+        }
+        onLockedDoorPrompt?.invoke(doorCell)
+        return true
+    }
+
+    /** Queues an auto-walk to [target] without chest/door retargeting. */
+    private fun queuePathTo(target: Cell): Boolean {
+        val f = floor ?: return false
+        val from = f.partyCell
+        if (target == from) return false
+        if (target !in f.floorCells) return false
         pendingChestInteract = null
+        pendingDoorInteract = null
         val blocked = movementBlockedCells(f)
         val path = Pathfinder.findPath(f, from, target, blocked)
         if (path.size < 2) return false
-
         pendingPath.clear()
         for (i in 1 until path.size) pendingPath.addLast(path[i])
         moveAccumSec = MOVE_STEP_SEC
@@ -1167,7 +1549,9 @@ class Game(
         if (mode != Mode.EXPLORATION) return false
         val f = floor ?: return false
         if (f.chestAt(chestCell) == null) return false
+        if (!f.isVisibleToParty(chestCell)) return false
         pendingChestInteract = chestCell
+        pendingDoorInteract = null
         if (isPartyAdjacentTo(chestCell)) {
             pendingPath.clear()
             tryInteractWithChest(chestCell)
@@ -1175,14 +1559,7 @@ class Game(
         }
         val from = f.partyCell
         val adjTarget = nearestAdjacentWalkTarget(f, from, chestCell) ?: return false
-        pendingPath.clear()
-        val blocked = movementBlockedCells(f)
-        val path = Pathfinder.findPath(f, from, adjTarget, blocked)
-        if (path.size < 2) return false
-        for (i in 1 until path.size) pendingPath.addLast(path[i])
-        moveAccumSec = MOVE_STEP_SEC
-        lastRequestedTarget = adjTarget
-        return true
+        return queuePathTo(adjTarget)
     }
 
     /** True when the party stands on a cardinal neighbor of [cell]. */
@@ -1289,7 +1666,7 @@ class Game(
         return blocked
     }
 
-    private fun nearestAdjacentWalkTarget(f: Floor, from: Cell, chestCell: Cell): Cell? {
+    private fun nearestAdjacentWalkTarget(f: Floor, from: Cell, interactCell: Cell): Cell? {
         val deltas = arrayOf(
             Cell(0, -1), Cell(0, 1), Cell(-1, 0), Cell(1, 0),
         )
@@ -1297,7 +1674,7 @@ class Game(
         var bestDist = Int.MAX_VALUE
         val blocked = movementBlockedCells(f)
         for (d in deltas) {
-            val adj = Cell(chestCell.x + d.x, chestCell.y + d.y)
+            val adj = Cell(interactCell.x + d.x, interactCell.y + d.y)
             if (adj !in f.floorCells) continue
             if (adj in blocked && adj != from) continue
             if (f.isLockedDoor(adj)) continue
@@ -1317,6 +1694,12 @@ class Game(
         if (!isPartyAdjacentTo(chestCell)) return
         pendingChestInteract = null
         tryInteractWithChest(chestCell)
+    }
+
+    private fun maybeInteractWithPendingDoor() {
+        val doorCell = pendingDoorInteract ?: return
+        if (!isPartyAdjacentTo(doorCell)) return
+        tryInteractWithDoor(doorCell)
     }
 
     /**
@@ -1381,6 +1764,8 @@ class Game(
         pendingPath.clear()
         moveAccumSec = 0f
         lastRequestedTarget = null
+        pendingChestInteract = null
+        pendingDoorInteract = null
     }
 
     /**
@@ -1434,8 +1819,10 @@ class Game(
         if (checkEnterCombatOn(next)) {
             pendingPath.clear()
             pendingChestInteract = null
+            pendingDoorInteract = null
         } else if (pendingPath.isEmpty()) {
             maybeInteractWithPendingChest()
+            maybeInteractWithPendingDoor()
         }
         return true
     }
@@ -1567,7 +1954,7 @@ class Game(
      *   2. Hand it to [setCombat]; that flips [mode] to COMBAT, fires
      *      [onCombatChanged] (the activity binds the turn-order
      *      strip + flips its visibility off that), and pre-rolls
-     *      initiative with d6 tiebreaks.
+     *      initiative with d10 tiebreaks.
      *   3. Returns true so the auto-move loop halts the party
      *      mid-path; the next move requires a fresh tap.
      *
@@ -1578,16 +1965,30 @@ class Game(
     private fun checkEnterCombatOn(cell: Cell): Boolean {
         if (mode != Mode.EXPLORATION) return false
         val f = floor ?: return false
-        val p = party ?: return false
         val livingEnemies = f.enemiesInRoomOf(cell)
             .filter { it.hp > 0 && f.isVisibleToParty(it.cell) }
         if (livingEnemies.isEmpty()) return false
-        val encounter = Combat(
-            party = p,
-            enemies = livingEnemies.toMutableList(),
-            rng = runtimeRng,
+
+        if (partyHide != null) {
+            return checkHideSpottedWhileMoving()
+        }
+        return startEncounterFromExploration(livingEnemies)
+    }
+
+    private fun startEncounterFromExploration(
+        enemies: List<Enemy>,
+        clearPartyHide: Boolean = true,
+    ): Boolean {
+        if (enemies.isEmpty()) return false
+        val p = party ?: return false
+        if (clearPartyHide) clearPartyHide()
+        setCombat(
+            Combat(
+                party = p,
+                enemies = enemies.toMutableList(),
+                rng = runtimeRng,
+            ),
         )
-        setCombat(encounter)
         return true
     }
 
@@ -1691,6 +2092,9 @@ class Game(
             fireIImpactFxPlayer.tick(deltaMs)
             fireIIImpactFxPlayer.tick(deltaMs)
             fireIIIImpactFxPlayer.tick(deltaMs)
+            sneakAttackFxPlayer.tick(deltaMs)
+            exposeWeaknessFxPlayer.tick(deltaMs)
+            stealFxPlayer.tick(deltaMs)
             healPortraitFxPlayer.tick(deltaMs)
             val lunge = partyLungeAnim
             if (lunge != null) {
@@ -1710,6 +2114,10 @@ class Game(
         // mover below still runs at its own MOVE_STEP_SEC cadence.
         if (mode != Mode.EXPLORATION) return false
         val deltaMs = (dtSec * 1000f).toLong().coerceAtLeast(0L)
+        if (lockUnlockFxPlayer.isActive) {
+            lockUnlockFxPlayer.tick(deltaMs)
+            return true
+        }
         if (weaponAttackFxPlayer.isActive) {
             weaponAttackFxPlayer.tick(deltaMs)
             tickUtilityRecoveryProgress()

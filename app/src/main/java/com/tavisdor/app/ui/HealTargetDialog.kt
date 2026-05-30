@@ -50,6 +50,24 @@ object HealTargetDialog {
         onTargetChosen: (slot: Int) -> Unit,
         onCancel: () -> Unit = {},
     ) {
+        show(
+            context = context,
+            titleRes = R.string.heal_picker_title,
+            skillDisplayName = skillDisplayName,
+            targets = targets,
+            onTargetChosen = onTargetChosen,
+            onCancel = onCancel,
+        )
+    }
+
+    fun show(
+        context: Context,
+        titleRes: Int,
+        skillDisplayName: String,
+        targets: List<Target>,
+        onTargetChosen: (slot: Int) -> Unit,
+        onCancel: () -> Unit = {},
+    ) {
         if (targets.isEmpty()) {
             onCancel()
             return
@@ -65,7 +83,7 @@ object HealTargetDialog {
             )
         }.toTypedArray()
 
-        val title = context.getString(R.string.heal_picker_title, skillDisplayName)
+        val title = context.getString(titleRes, skillDisplayName)
 
         // `committed` guards the cancel listener: setItems fires
         // BEFORE the dialog dismisses, and dismiss then fires the

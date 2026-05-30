@@ -20,7 +20,7 @@ sealed class CombatLogEntry {
         val attacker: String,
         val target: String,
         val damage: Int,
-        /** Natural d6 of 6 - mark for slightly different phrasing. */
+        /** Natural d10 of 10 - mark for slightly different phrasing. */
         val crit: Boolean = false,
     ) : CombatLogEntry()
 
@@ -37,6 +37,8 @@ sealed class CombatLogEntry {
     data class MeleeMiss(
         val attacker: String,
         val target: String,
+        /** e.g. "arrow 2" for Rapid Fire / Double Shot volleys. */
+        val shotLabel: String? = null,
     ) : CombatLogEntry()
 
     /** Spell landed; [advantage]/[disadvantage] surface elemental tags. */
@@ -47,6 +49,8 @@ sealed class CombatLogEntry {
         val damage: Int,
         val advantage: Boolean = false,
         val disadvantage: Boolean = false,
+        /** Natural d10 of 10 on the resist check. */
+        val crit: Boolean = false,
     ) : CombatLogEntry()
 
     /** Spell was resisted (target's INT check beat the caster). */
@@ -240,4 +244,19 @@ sealed class CombatLogEntry {
 
     /** Catch-all info line, e.g. "The Spear Goblin waits.". */
     data class Info(val text: String) : CombatLogEntry()
+
+    /** Out-of-combat utility skill (camp, rest, cooking, make potion). */
+    data class UtilitySkillUsed(
+        val caster: String,
+        val skillName: String,
+    ) : CombatLogEntry()
+
+    /** Party-wide HP / MP restored by a utility skill (second line after the cast). */
+    data class UtilityRecoveryTotals(
+        val totalHp: Int,
+        val totalMp: Int,
+    ) : CombatLogEntry()
+
+    /** Item deposited into the party inventory after a utility cast. */
+    data class ItemGained(val itemName: String) : CombatLogEntry()
 }

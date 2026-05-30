@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="@dimen/hero_skill_assign_panel_width"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_hero_detail_panel"
+    android:clipToOutline="true"
+    android:orientation="vertical"
+    android:padding="@dimen/hero_detail_panel_padding">
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <TextView
+            android:id="@+id/tvSkillBookTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_vertical"
+            android:ellipsize="end"
+            android:gravity="center_horizontal"
+            android:maxLines="2"
+            android:paddingEnd="40dp"
+            android:textColor="@color/hero_detail_value"
+            android:textSize="@dimen/hero_skill_book_title_text"
+            android:textStyle="bold"
+            tools:text="Aldric — Skills" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSkillBookClose"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end|center_vertical"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="8dp"
+            android:text="@string/inventory_hero_equip_close"
+            android:textColor="@color/hero_detail_value"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <ScrollView
+        android:id="@+id/skillBookScroll"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/hero_skill_book_scroll_height"
+        android:layout_marginTop="8dp"
+        android:fillViewport="false"
+        android:scrollbars="vertical">
+
+        <LinearLayout
+            android:id="@+id/skillBookSkillList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingBottom="4dp" />
+    </ScrollView>
+</LinearLayout>

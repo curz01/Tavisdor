@@ -21,13 +21,13 @@ class Combat(
     /**
      * When true (camp ambush), every enemy acts before any hero each
      * round, regardless of DEX. Enemies and heroes are still ordered
-     * among themselves by DEX + tiebreak d6.
+     * among themselves by DEX + tiebreak d10.
      */
     enemiesActFirst: Boolean = false,
 ) {
     /**
      * Stable initiative list for the entire encounter. DEX ties
-     * are resolved at construction via [Initiative.build]'s d6
+     * are resolved at construction via [Initiative.build]'s d10
      * tournament so [currentTurnIndex] can iterate predictably.
      */
     val initiative: List<InitiativeEntry> = Initiative.build(

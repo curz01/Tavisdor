@@ -37,6 +37,7 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
     private var activeRequest: WeaponFxRequest? = null
     private var elapsedMs: Long = 0L
     private var onComplete: (() -> Unit)? = null
+    private var bowImpactsFired: Int = 0
 
     val isActive: Boolean get() = activeRequest != null
 
@@ -50,6 +51,7 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         activeRequest = request
         this.onComplete = onComplete
         elapsedMs = 0L
+        bowImpactsFired = 0
         return true
     }
 
@@ -57,6 +59,7 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         activeRequest = null
         onComplete = null
         elapsedMs = 0L
+        bowImpactsFired = 0
     }
 
     /**
@@ -66,6 +69,7 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
     fun tick(deltaMs: Long): Boolean {
         val request = activeRequest ?: return false
         elapsedMs += deltaMs.coerceAtLeast(0L)
+        processBowShotImpacts(elapsedMs, request)
         if (elapsedMs >= durationMs(request)) {
             finish()
             return false
@@ -104,6 +108,9 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
             }
             WeaponFxKind.SPEAR_THRUST -> {
                 drawThrust(canvas, "spear", attacker, defender, aimDeg, scale, elapsedMs, SPEAR_MS)
+            }
+            WeaponFxKind.DOUBLE_STRIKE_THRUST -> {
+                drawDoubleStrikeThrust(canvas, attacker, defender, aimDeg, scale, elapsedMs)
             }
             WeaponFxKind.STAFF_SPELL_RISE -> {
                 val partyScreen = attacker
@@ -196,16 +203,80 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
     // ---- Playback helpers ----
 
     private fun finish() {
+        val request = activeRequest
+        if (request != null) {
+            flushRemainingBowShotImpacts(request)
+        }
         val cb = onComplete
         activeRequest = null
         onComplete = null
         elapsedMs = 0L
+        bowImpactsFired = 0
         cb?.invoke()
+    }
+
+    /**
+     * Fires [WeaponFxRequest.onBowShotImpact] handlers when each arrow's
+     * flight reaches the defender (one dodge / damage roll per arrow).
+     */
+    private fun processBowShotImpacts(elapsed: Long, request: WeaponFxRequest) {
+        val handlers = request.onBowShotImpact ?: return
+        val plan = request.bowVolleyPlan ?: return
+        val times = bowShotImpactTimesMs(plan)
+        while (bowImpactsFired < handlers.size && bowImpactsFired < times.size &&
+            elapsed >= times[bowImpactsFired]
+        ) {
+            handlers[bowImpactsFired].invoke()
+            bowImpactsFired++
+        }
+    }
+
+    private fun flushRemainingBowShotImpacts(request: WeaponFxRequest) {
+        val handlers = request.onBowShotImpact ?: return
+        while (bowImpactsFired < handlers.size) {
+            handlers[bowImpactsFired].invoke()
+            bowImpactsFired++
+        }
+    }
+
+    private fun bowShotImpactTimesMs(plan: BowVolleyPlan): List<Long> {
+        val base = singleBowShotMs()
+        val impactInShot = BOW_DRAW_MS + BOW_HOLD_MS + ARROW_FLIGHT_MS
+        val times = mutableListOf<Long>()
+        var volleyStart = 0L
+        for (volley in plan.volleys) {
+            when (volley) {
+                is BowVolley.Parallel -> {
+                    val impactAt = volleyStart + impactInShot.coerceAtMost(base)
+                    repeat(volley.arrowCount) {
+                        times += impactAt
+                    }
+                    volleyStart += base
+                }
+                is BowVolley.Sequential -> {
+                    var shotStart = volleyStart
+                    for (shotIndex in 0 until volley.arrowCount) {
+                        val shotDur = volley.shotDurationMs(shotIndex, base)
+                        val scaledImpact = if (shotDur >= impactInShot) {
+                            impactInShot
+                        } else {
+                            (impactInShot * shotDur / base).coerceAtLeast(1L)
+                        }
+                        times += shotStart + scaledImpact
+                        shotStart += shotDur
+                    }
+                    volleyStart += volley.totalDurationMs(base)
+                }
+            }
+        }
+        return times
     }
 
     private fun canPlay(request: WeaponFxRequest): Boolean = when (request.kind) {
         WeaponFxKind.DAGGER_COMBO ->
             bitmap("dagger_r") != null && bitmap("dagger_l") != null
+        WeaponFxKind.DOUBLE_STRIKE_THRUST ->
+            bitmap("doubls1") != null && bitmap("doubls2") != null
         WeaponFxKind.BOW_SHOT -> bowAssetsReady("arrow", request.bowVolleyPlan)
         WeaponFxKind.FIRE_PROJECTILE -> bowAssetsReady("fire_arrow", request.bowVolleyPlan)
         WeaponFxKind.CHARGE_SWORD_HOLD -> bitmap("sword") != null
@@ -240,6 +311,7 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         WeaponFxKind.STAFF_MELEE_ARC, WeaponFxKind.STAFF_SPELL_RISE -> "staff"
         WeaponFxKind.FIRE_PROJECTILE -> "fire_arrow"
         WeaponFxKind.DAGGER_COMBO -> "dagger_r"
+        WeaponFxKind.DOUBLE_STRIKE_THRUST -> "doubls1"
         WeaponFxKind.BOW_SHOT -> "bow1"
         WeaponFxKind.CHARGE_SWORD_HOLD -> "sword"
     }
@@ -256,6 +328,7 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
             WeaponFxKind.SPEAR_THRUST -> SPEAR_MS
             WeaponFxKind.STAFF_SPELL_RISE -> STAFF_SPELL_MS
             WeaponFxKind.DAGGER_COMBO -> DAGGER_HIT_MS * 2L
+            WeaponFxKind.DOUBLE_STRIKE_THRUST -> DOUBLE_STRIKE_PHASE_MS * 2L
             WeaponFxKind.BOW_SHOT, WeaponFxKind.FIRE_PROJECTILE -> singleBowShotMs()
             WeaponFxKind.CHARGE_SWORD_HOLD -> CHARGE_HOLD_MS
         }
@@ -544,6 +617,21 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         dstRect.set(centerX - w / 2f, centerY - h / 2f, centerX + w / 2f, centerY + h / 2f)
         srcRect.set(0, 0, bmp.width, bmp.height)
         canvas.drawBitmap(bmp, srcRect, dstRect, drawPaint)
+    }
+
+    /** doubls1 thrust, then doubls2 — same motion as [drawThrust] / spear. */
+    private fun drawDoubleStrikeThrust(
+        canvas: Canvas,
+        attacker: Pair<Float, Float>,
+        defender: Pair<Float, Float>,
+        aimDeg: Float,
+        scale: Float,
+        elapsed: Long,
+    ) {
+        val phaseMs = DOUBLE_STRIKE_PHASE_MS
+        val asset = if (elapsed < phaseMs) "doubls1" else "doubls2"
+        val phaseElapsed = if (elapsed < phaseMs) elapsed else elapsed - phaseMs
+        drawThrust(canvas, asset, attacker, defender, aimDeg, scale, phaseElapsed, phaseMs)
     }
 
     /** dagger_r thrust, then dagger_l thrust along the aim line. */
@@ -925,6 +1013,7 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         private const val PARTY_ICON_HEIGHT_FRACTION = 1.298f
         private const val PARTY_ICON_BASE_OFFSET_FRACTION = 0.18f
         private const val DAGGER_HIT_MS = 260L
+        private const val DOUBLE_STRIKE_PHASE_MS = SPEAR_MS
         private const val BOW_FRAME_1_MS = 250L
         private const val BOW_FRAME_2_MS = 250L
         private const val BOW_FRAME_3_MS = 500L

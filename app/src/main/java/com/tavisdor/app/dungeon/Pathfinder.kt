@@ -66,6 +66,7 @@ object Pathfinder {
                 val n = Cell(curr.x + dir.x, curr.y + dir.y)
                 if (n in visited) continue
                 if (n !in floor.floorCells) continue
+                if (floor.isLockedDoor(n)) continue
                 // Skip cells the caller has flagged as obstacles
                 // (other enemies, claimed move targets, etc.). The
                 // destination itself was rejected above, so this

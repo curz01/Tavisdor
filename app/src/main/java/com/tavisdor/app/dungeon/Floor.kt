@@ -2,6 +2,7 @@ package com.tavisdor.app.dungeon
 
 import android.util.Log
 import com.tavisdor.app.enemies.Enemy
+import kotlin.math.abs
 import kotlin.random.Random
 
 /**
@@ -78,9 +79,10 @@ class Floor(
     //
     // A "placement" is one template instance laid down on the floor, in
     // dungeon-global coords. Each placement is hidden by default; the
-    // moment the party steps onto any of its cells (`recordVisited`)
-    // the whole placement is revealed and remains revealed for the rest
-    // of the floor.
+    // moment the party steps onto any of its floor cells (`recordVisited`)
+    // only cells in the active placement(s) for that step are flood-filled,
+    // stopping at every door tile. Other templates (halls / rooms) stay
+    // hidden until the party enters them.
     //
     // [_cellToPlacements] is a many-to-many index: connector cells that
     // were merged by two templates appear in both sets so stepping on
@@ -127,7 +129,8 @@ class Floor(
         // reveal it - the party spawns inside, so it would be jarring
         // to start on a hidden tile.
         registerPlacement(initialFloorCells, isStart = true)
-        revealPlacement(0)
+        // Entrance fog is applied in [finalizeEntranceFog] after the full
+        // floor is stitched — not here, while only the start template exists.
         // Entrance is a room-type template (a start_*), so every one
         // of its open connectors begins at hall-depth 0. The next
         // template stitched onto any of them must be a hall_*.
@@ -239,16 +242,20 @@ class Floor(
     }
 
     /**
-     * Any cell in placement 0 - the entrance template - usable as
-     * the party-wipe respawn point. The entrance is registered in
-     * [Floor]'s init block from the same `initialFloorCells` that
-     * also seeded [partyCell], so a cell from that set is
-     * guaranteed to be walkable and inside the spawn room.
-     *
-     * Returns null only if some future refactor stops pre-revealing
-     * placement 0 - today the entrance is always there.
+     * Entrance-room cell for party wipe respawn: prefers stairs up,
+     * then stairs down, then any placement-0 floor tile (stable min
+     * y, then x). Returns null only if placement 0 has no cells.
      */
-    fun firstCellOfEntrance(): Cell? = _placements.firstOrNull()?.firstOrNull()
+    fun firstCellOfEntrance(): Cell? = entranceSpawnCell()
+
+    private fun entranceSpawnCell(): Cell? {
+        val cells = cellsInPlacement(0)
+        if (cells.isEmpty()) return null
+        val order = compareBy<Cell>({ it.y }, { it.x })
+        return cells.filter { it in _stairsUp }.minWithOrNull(order)
+            ?: cells.filter { it in _staircases }.minWithOrNull(order)
+            ?: cells.minWithOrNull(order)
+    }
 
     /**
      * Move [enemy] from its current cell to [target]. Updates the
@@ -346,6 +353,81 @@ class Floor(
 
     fun isDoorBruteDamaged(c: Cell): Boolean = _doors[c]?.bruteDamaged == true
 
+    /**
+     * Floor tiles on the side of [doorCell] the party cannot reach without
+     * crossing that doorway (the "far" wing).
+     */
+    fun farSideFloorNeighbors(doorCell: Cell): List<Cell> =
+        farWingSeedsForDoor(doorCell)
+
+    /** Floor cells on the east/west or north/south wings of [doorCell]. */
+    private fun wingCellsAlongDoorAxis(doorCell: Cell): List<Cell> {
+        val door = _doors[doorCell] ?: return emptyList()
+        val offsets = when (door.axis) {
+            DoorAxis.NS -> arrayOf(Cell(0, -1), Cell(0, 1))
+            DoorAxis.EW -> arrayOf(Cell(-1, 0), Cell(1, 0))
+        }
+        return offsets
+            .map { Cell(doorCell.x + it.x, doorCell.y + it.y) }
+            .filter { it in _floorCells && !isDoor(it) }
+    }
+
+    /**
+     * Seeds for fog reveal / path guarding on the wing beyond [doorCell].
+     * Uses door axis first; reachability only when one wing is blocked by
+     * geometry; party side breaks ties when both wings are reachable around
+     * the doorway (common on EW doors with north/south floor).
+     */
+    private fun farWingSeedsForDoor(doorCell: Cell): List<Cell> {
+        val wings = wingCellsAlongDoorAxis(doorCell)
+        if (wings.isEmpty()) {
+            val fallback = ArrayList<Cell>(4)
+            for (delta in CARDINAL_NEIGHBORS) {
+                val n = Cell(doorCell.x + delta.x, doorCell.y + delta.y)
+                if (n !in _floorCells || isDoor(n)) continue
+                if (!isReachableFromPartyWithoutCrossing(n, doorCell)) {
+                    fallback += n
+                }
+            }
+            return fallback
+        }
+        if (wings.size == 1) return wings
+
+        var far = wings.filter { !isReachableFromPartyWithoutCrossing(it, doorCell) }
+        if (far.isNotEmpty()) return far
+
+        val door = _doors[doorCell] ?: return wings
+        val relX = partyCell.x - doorCell.x
+        val relY = partyCell.y - doorCell.y
+        far = when (door.axis) {
+            DoorAxis.EW -> wings.filter { wing ->
+                val wingDx = wing.x - doorCell.x
+                wingDx != 0 && wingDx * relX < 0
+            }
+            DoorAxis.NS -> wings.filter { wing ->
+                val wingDy = wing.y - doorCell.y
+                wingDy != 0 && wingDy * relY < 0
+            }
+        }
+        if (far.isNotEmpty()) return far
+
+        val nearest = wings.minBy { abs(it.x - partyCell.x) + abs(it.y - partyCell.y) }
+        return wings.filter { it != nearest }
+    }
+
+    /**
+     * Visible locked door between the party and [target] floor, if any.
+     */
+    fun lockedDoorGuardingFloorCell(target: Cell): Cell? {
+        if (isDoor(target)) return null
+        for (doorCell in _doors.keys) {
+            if (!isLockedDoor(doorCell)) continue
+            if (!isVisibleToParty(doorCell)) continue
+            if (target in farSideFloorNeighbors(doorCell)) return doorCell
+        }
+        return null
+    }
+
     fun canAttemptStrForceOn(c: Cell): Boolean {
         val door = _doors[c] ?: return false
         return door.locked && !door.strForceAttempted
@@ -356,11 +438,140 @@ class Floor(
         return door.locked && !door.bruteDamaged
     }
 
-    /** Permanently unlocks the door at [c]. No-op if [c] is not a door. */
+    /**
+     * Permanently unlocks the door at [c] (logic only). Sprite + fog wait
+     * for [applyDoorUnlockPresentation] after the lock/unlock FX finishes.
+     */
     fun unlockDoor(c: Cell) {
         val door = _doors[c] ?: return
         if (!door.locked) return
         door.locked = false
+    }
+
+    /**
+     * After the lock/unlock animation: opened door art and fog into the
+     * wing beyond this doorway.
+     */
+    fun applyDoorUnlockPresentation(doorCell: Cell) {
+        markDoorVisuallyOpenIfUnlocked(doorCell)
+        revealFogBehindUnlockedDoor(doorCell)
+    }
+
+    /**
+     * Spreads fog through a door that just opened so the wing beyond
+     * that doorway is visible without walking through it. Uses a
+     * placement flood that may step onto [doorCell] (choke-point EW/NS
+     * doors often have no wing floor east/west of the tile) and skips
+     * tiles still reachable from the party without crossing this door,
+     * so other locked wings in the same template stay hidden.
+     */
+    private fun revealFogBehindUnlockedDoor(doorCell: Cell) {
+        val seeds = farWingSeedsForDoor(doorCell).toMutableSet()
+        if (seeds.isEmpty()) {
+            for (delta in CARDINAL_NEIGHBORS) {
+                val n = Cell(doorCell.x + delta.x, doorCell.y + delta.y)
+                if (n !in _floorCells || isDoor(n)) continue
+                if (isOnFarSideOfDoor(n, doorCell)) seeds += n
+            }
+        }
+        if (seeds.isEmpty()) seeds += doorCell
+
+        val queue = ArrayDeque<Cell>()
+        val seen = HashSet<Cell>()
+        for (seed in seeds) {
+            if (isDoor(seed) && seed != doorCell) continue
+            queue.addLast(seed)
+            seen += seed
+        }
+        while (queue.isNotEmpty()) {
+            val cur = queue.removeFirst()
+            if (cur != doorCell && isReachableFromPartyWithoutCrossing(cur, doorCell)) {
+                continue
+            }
+            _revealedCells += cur
+            for (idx in _cellToPlacements[cur].orEmpty()) {
+                if (idx in _placementRevealed.indices) {
+                    _placementRevealed[idx] = true
+                }
+            }
+            for (delta in CARDINAL_NEIGHBORS) {
+                val n = Cell(cur.x + delta.x, cur.y + delta.y)
+                if (n in seen) continue
+                if (n !in _floorCells) continue
+                if (isLockedDoor(n)) continue
+                if (isDoor(n) && n != doorCell) continue
+                seen += n
+                queue.addLast(n)
+            }
+        }
+        _revealedCells += doorCell
+    }
+
+    /** True when [cell] lies on the wing opposite [partyCell] across [doorCell]. */
+    private fun isOnFarSideOfDoor(cell: Cell, doorCell: Cell): Boolean {
+        val door = _doors[doorCell] ?: return false
+        val relX = partyCell.x - doorCell.x
+        val relY = partyCell.y - doorCell.y
+        return when (door.axis) {
+            DoorAxis.EW -> {
+                val dx = cell.x - doorCell.x
+                dx != 0 && dx * relX < 0
+            }
+            DoorAxis.NS -> {
+                val dy = cell.y - doorCell.y
+                dy != 0 && dy * relY < 0
+            }
+        }
+    }
+
+    /**
+     * Resets fog and reveals only the entrance placement (index 0) from
+     * the party spawn. Called once after [FloorGenerator] finishes so a
+     * global flood cannot leak into pre-stitched halls and rooms.
+     */
+    fun finalizeEntranceFog() {
+        _revealedCells.clear()
+        if (_placements.isEmpty()) return
+        revealReachableInPlacement(0, partyCell)
+    }
+
+    /**
+     * True when [target] can be reached from [partyCell] through tiles the
+     * party has already seen, without stepping onto [barrierDoor]. Uses only
+     * [_revealedCells] so hidden detours around a doorway do not suppress
+     * unlock reveal on the far wing.
+     */
+    private fun isReachableFromPartyWithoutCrossing(target: Cell, barrierDoor: Cell): Boolean {
+        if (target == partyCell) return true
+        val queue = ArrayDeque<Cell>()
+        val seen = HashSet<Cell>()
+        queue.addLast(partyCell)
+        seen += partyCell
+        while (queue.isNotEmpty()) {
+            val cur = queue.removeFirst()
+            if (cur == target) return true
+            for (delta in CARDINAL_NEIGHBORS) {
+                val n = Cell(cur.x + delta.x, cur.y + delta.y)
+                if (n in seen) continue
+                if (n !in _revealedCells) continue
+                if (n == barrierDoor) continue
+                if (isDoor(n)) continue
+                seen += n
+                queue.addLast(n)
+            }
+        }
+        return false
+    }
+
+    /**
+     * Switches the door sprite to the opened variant for its [Door.axis]
+     * when the party steps onto an unlocked door tile.
+     */
+    fun markDoorVisuallyOpenIfUnlocked(cell: Cell) {
+        val door = _doors[cell] ?: return
+        if (!door.locked) {
+            door.visuallyOpen = true
+        }
     }
 
     fun isLockedChest(c: Cell): Boolean = _chests[c]?.locked == true
@@ -422,18 +633,27 @@ class Floor(
         }
 
         val shuffledLocks = lockedCells.shuffled(rng)
-        val carriers = eligible.shuffled(rng).toMutableList()
+        val availableCarriers = eligible.filter { it.floorKeyLockIds.isEmpty() }
+            .shuffled(rng)
+            .toMutableList()
+        var assigned = 0
         for (cell in shuffledLocks) {
-            if (carriers.isEmpty()) carriers += eligible.shuffled(rng)
-            val enemy = carriers.removeAt(0)
+            if (availableCarriers.isEmpty()) break
+            val enemy = availableCarriers.removeAt(0)
             val lockId = _doors[cell]?.lockId ?: _chests[cell]?.lockId ?: continue
-            if (lockId !in enemy.floorKeyLockIds) {
-                enemy.floorKeyLockIds += lockId
-            }
+            enemy.floorKeyLockIds += lockId
+            assigned++
+        }
+        if (assigned < shuffledLocks.size) {
+            Log.w(
+                TAG,
+                "assignLockKeyCarriers: ${shuffledLocks.size - assigned} lock(s) have no carrier " +
+                    "(each enemy carries at most one dungeon key).",
+            )
         }
         Log.d(
             TAG,
-            "Assigned ${shuffledLocks.size} floor key(s) across ${eligible.size} eligible enemy(ies).",
+            "Assigned $assigned floor key(s) across ${eligible.size} eligible enemy(ies).",
         )
     }
 
@@ -459,10 +679,10 @@ class Floor(
         return false
     }
 
-    private fun newDoor(cell: Cell, locked: Boolean): Door =
+    private fun newDoor(cell: Cell, locked: Boolean, localFloor: Set<Cell>): Door =
         Door(
             locked = locked,
-            axis = inferDoorAxis(cell, _floorCells),
+            axis = inferDoorAxis(cell, localFloor, _doors.keys),
             lockId = lockIdForCell(depth, cell),
         )
 
@@ -472,25 +692,30 @@ class Floor(
     /**
      * Marks [cell] as explored. Called from the per-step move loop.
      *
-     * Reveal rules: reveal every placement containing [cell] (the room(s)
-     * the party just stepped into — normally one, but both when [cell] is
-     * a merge connector shared between two templates). Stepping onto a door
-     * alone does not reveal any placement, so rooms beyond an unlocked door
-     * stay in fog until the party walks onto ordinary floor on the far side.
+     * Reveal rules: for each placement containing [cell], flood only that
+     * template's footprint from [cell], stopping at every door tile.
+     * Does not cross into other placements (halls / rooms stay dark until
+     * the party steps inside them).
      */
     fun recordVisited(cell: Cell) {
         _visitedCells += cell
-        if (isDoor(cell)) return
-        val placementIndices = _cellToPlacements[cell] ?: return
-        for (i in placementIndices) revealPlacement(i)
+        if (isDoor(cell)) {
+            if (!isLockedDoor(cell)) {
+                markDoorVisuallyOpenIfUnlocked(cell)
+                revealFogBehindUnlockedDoor(cell)
+            }
+            return
+        }
+        for (idx in _cellToPlacements[cell].orEmpty()) {
+            revealReachableInPlacement(idx, cell)
+        }
     }
 
     /**
      * Adds a new placement consisting of [cells] (in dungeon-global
      * coords) and updates the cell -> placement index. The placement
-     * starts hidden; the caller must explicitly call [revealPlacement]
-     * for any placement the player should see immediately (entrance
-     * template only, today).
+     * starts hidden; [finalizeEntranceFog] reveals placement 0 after the
+     * full floor is generated.
      */
     private fun registerPlacement(
         cells: Set<Cell>,
@@ -509,14 +734,30 @@ class Floor(
     }
 
     /**
-     * Marks placement [idx] as revealed and folds its cells into
-     * [_revealedCells]. Idempotent so a connector cell that lands in
-     * an already-revealed placement doesn't re-do work.
+     * Flood-fills only cells in placement [idx] from [seed]. Every door
+     * tile blocks fog so other wings in the same template stay hidden until
+     * opened. Never crosses into another placement's footprint.
      */
-    private fun revealPlacement(idx: Int) {
-        if (_placementRevealed[idx]) return
+    private fun revealReachableInPlacement(idx: Int, seed: Cell) {
+        val cells = _placements.getOrNull(idx) ?: return
+        if (seed !in cells || isDoor(seed)) return
         _placementRevealed[idx] = true
-        _revealedCells += _placements[idx]
+        val queue = ArrayDeque<Cell>()
+        val seen = HashSet<Cell>()
+        queue.addLast(seed)
+        seen += seed
+        while (queue.isNotEmpty()) {
+            val cur = queue.removeFirst()
+            _revealedCells += cur
+            for (delta in CARDINAL_NEIGHBORS) {
+                val n = Cell(cur.x + delta.x, cur.y + delta.y)
+                if (n in seen) continue
+                if (n !in cells) continue
+                if (isDoor(n)) continue
+                seen += n
+                queue.addLast(n)
+            }
+        }
     }
 
     /**
@@ -707,6 +948,7 @@ class Floor(
                 _doors[world] = newDoor(
                     world,
                     locked = rng.nextFloat() < DOOR_LOCK_CHANCE,
+                    localFloor = placementCells,
                 )
             }
         }
@@ -923,13 +1165,13 @@ class Floor(
          * that choice, but in practice [FloorGenerator] always pre-filters.
          */
         fun withEntrance(depth: Int, seed: Long, entrance: RoomTemplate, rng: Random): Floor {
-            val partyStart = entrance.floorCells.first()
+            val partyStart = entrance.preferredPartyStartCell()
             val doors = HashMap<Cell, Door>()
             for (cell in entrance.doors) {
                 val locked = rng.nextFloat() < DOOR_LOCK_CHANCE
                 doors[cell] = Door(
                     locked = locked,
-                    axis = inferDoorAxis(cell, entrance.floorCells),
+                    axis = inferDoorAxis(cell, entrance.floorCells, entrance.doors),
                     lockId = "d${depth}_${cell.x}_${cell.y}",
                 )
             }

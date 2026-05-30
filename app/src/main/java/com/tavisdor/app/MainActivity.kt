@@ -1,7 +1,6 @@
 package com.tavisdor.app
 
 import android.app.AlertDialog
-import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.os.Bundle
 import android.view.MotionEvent
@@ -180,7 +179,6 @@ class MainActivity : AppCompatActivity() {
             }
             it.onWaitTapped = { onCombatWaitTapped() }
         }
-        loadWaitButtonIcon()
         game.onCombatTargetSelectionChanged = {
             gameView.invalidate()
             if (game.isCombatTargetSelectionActive()) {
@@ -188,14 +186,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
         game.onCombatTargetConfirmed = { slot, enemy ->
-            commitStagedCombatAction(slot, enemy)
+            if (game.combat != null) {
+                commitStagedCombatAction(slot, enemy)
+            } else if (game.commitExplorationAttack(slot, enemy)) {
+                refreshCombatViews()
+            }
         }
         itemsScreen = ItemsScreen(root = itemsOverlay).also {
             it.onChestLootChanged = { gameView.invalidate() }
             it.onPartyEquipmentChanged = { heroPanel.invalidate() }
-            it.onUsePotionSelf = {
+            it.onUsePotionSelf = { materialStackIndex ->
                 val combatSlot = game.combatController?.currentHeroSlot
-                val restored = game.usePotionInCurrentContext()
+                val restored = game.usePotionInCurrentContext(materialStackIndex)
                 if (restored != null && game.combat != null && combatSlot != null) {
                     game.clearHeroWaiting(combatSlot)
                     game.clearSkillStaging(combatSlot)
@@ -226,11 +228,27 @@ class MainActivity : AppCompatActivity() {
         // hero panels / strip have already cleaned up - the items
         // overlay layers on top of a quiet UI. Party-wipe does
         // NOT fire this (success = false is filtered upstream).
+        game.onExplorationLogAppended = {
+            if (combatLogContainer.visibility != View.VISIBLE) {
+                combatLogContainer.visibility = View.VISIBLE
+            }
+        }
+
         game.onCombatVictory = {
-            val party = game.party
-            if (party != null && !itemsScreen.isVisible) {
-                itemsScreen.bind(party)
-                itemsScreen.show()
+            openPostCombatItemsPanel(requirePendingLoot = false)
+        }
+
+        game.onCombatHideEscape = {
+            openPostCombatItemsPanel(requirePendingLoot = true)
+        }
+
+        itemsScreen.onAfterLootPickup = {
+            if (game.checkHideSpottedWhileLooting()) {
+                itemsScreen.dismissKeepPendingLoot()
+                refreshCombatViews()
+                true
+            } else {
+                false
             }
         }
 
@@ -360,15 +378,70 @@ class MainActivity : AppCompatActivity() {
      * [preferredTarget]. Clears staging and refreshes HUD views on success.
      */
     private fun commitStagedCombatAction(slot: Int, preferredTarget: Enemy?) {
+        val freeAction = game.selectedFreeActionSkillFor(slot)
+        if (freeAction?.id == SkillCatalog.THIEF_TRICK_ATTACK_ID) {
+            showTrickAttackHatePicker(slot, preferredTarget)
+            return
+        }
+        commitStagedCombatActionInternal(slot, preferredTarget, trickAttackHateTargetSlot = null)
+    }
+
+    /**
+     * Party-member picker for Trick Attack (same pattern as heal targeting).
+     * Prefers other living heroes; falls back to any living hero if alone.
+     */
+    private fun showTrickAttackHatePicker(casterSlot: Int, preferredTarget: Enemy?) {
+        val party = game.party ?: return
+        val skill = SkillCatalog.byId(SkillCatalog.THIEF_TRICK_ATTACK_ID) ?: return
+        var targets = party.heroes.mapIndexedNotNull { idx, hero ->
+            if (hero.isAlive && idx != casterSlot) {
+                HealTargetDialog.Target(slot = idx, hero = hero)
+            } else {
+                null
+            }
+        }
+        if (targets.isEmpty()) {
+            targets = party.heroes.mapIndexedNotNull { idx, hero ->
+                if (hero.isAlive) HealTargetDialog.Target(slot = idx, hero = hero) else null
+            }
+        }
+        if (targets.isEmpty()) return
+
+        HealTargetDialog.show(
+            context = this,
+            titleRes = R.string.trick_attack_hate_picker_title,
+            skillDisplayName = skill.displayName,
+            targets = targets,
+            onTargetChosen = { hateSlot ->
+                commitStagedCombatActionInternal(
+                    casterSlot,
+                    preferredTarget,
+                    trickAttackHateTargetSlot = hateSlot,
+                )
+            },
+        )
+    }
+
+    private fun commitStagedCombatActionInternal(
+        slot: Int,
+        preferredTarget: Enemy?,
+        trickAttackHateTargetSlot: Int?,
+    ) {
         val controller = game.combatController ?: return
         val freeAction = game.selectedFreeActionSkillFor(slot)
         val main = game.selectedSkillFor(slot) ?: return
 
-        game.clearHeroWaiting(slot)
-        if (freeAction != null) {
-            if (!controller.commitHeroAction(slot, freeAction, preferredTarget)) return
+        if (!controller.commitStagedHeroTurn(
+                slot,
+                freeAction,
+                main,
+                preferredTarget,
+                trickAttackHateTargetSlot,
+            )
+        ) {
+            return
         }
-        if (!controller.commitHeroAction(slot, main, preferredTarget)) return
+        game.clearHeroWaiting(slot)
         game.clearSkillStaging(slot)
         game.endCombatTargetSelection()
         refreshCombatViews()
@@ -390,24 +463,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshCombatWaitButtons() {
-        val controller = game.combatController
-        val slot = controller?.currentHeroSlot
-        val canWait = controller != null &&
-            slot != null &&
-            controller.awaitingHeroInput &&
-            controller.canHeroWait(slot)
-        heroSkillAssignScreen.setWaitVisible(canWait)
-    }
-
-    private fun loadWaitButtonIcon() {
-        runCatching {
-            assets.open("sprites/wait.png").use { stream ->
-                BitmapFactory.decodeStream(stream)?.let { bmp ->
-                    heroSkillAssignOverlay
-                        .findViewById<android.widget.ImageButton>(R.id.btnHeroSkillAssignWait)
-                        .setImageBitmap(bmp)
-                }
-            }
+        if (heroSkillAssignScreen.isVisible) {
+            heroSkillAssignScreen.updateWaitButton()
         }
     }
 
@@ -454,39 +511,112 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Exploration-mode Action: clears the staged skill for the
-     * active hero so the slot reverts to its basic Attack default.
-     * Real exploration-mode firing (e.g. interact with adjacent
-     * objects, scout-style skills) isn't wired up yet - until it
-     * is, the button is intentionally a silent no-op when nothing
-     * is staged.
+     * Exploration-mode Action: utility skills, Hide, and offensive
+     * ambushes (same range overlay as combat). Starting an attack
+     * pulls the party into combat with everyone in the current room.
      */
     private fun onActionBarActionTappedExploring() {
         val slot = game.activeHeroSlot ?: return
-        val skill = game.selectedSkillFor(slot) ?: return
-        if (UtilitySkillResolver.isUtility(skill)) {
-            if (game.isUtilityCastPlaying) {
+        val hideSkill = SkillCatalog.byId(SkillCatalog.THIEF_HIDE_ID)
+        if (hideSkill != null && game.isSkillStaged(slot, hideSkill)) {
+            if (game.isWeaponFxPlaying) {
                 AppToast.show(this, R.string.utility_cast_busy)
                 return
             }
-            val party = game.party ?: return
-            val caster = party.heroes.getOrNull(slot) ?: return
-            if (!UtilitySkillResolver.canCast(skill, caster, party, inCombat = false)) {
-                AppToast.show(this, R.string.utility_missing_ingredient)
-                return
-            }
-            if (!UtilitySkillResolver.wouldRecoverAnyone(skill, party)) {
-                AppToast.show(this, R.string.utility_no_recovery_benefit)
-            }
-            if (game.commitUtilitySkillInExploration(slot, skill)) {
+            if (game.commitHideInExploration(slot)) {
                 game.clearSkillStaging(slot)
                 gameView.invalidate()
                 heroPanel.invalidate()
             }
             return
         }
-        if (!game.hasSkillStaging(slot)) return
-        game.clearSkillStaging(slot)
+
+        val party = game.party ?: return
+        val caster = party.heroes.getOrNull(slot) ?: return
+        val freeAction = game.selectedFreeActionSkillFor(slot)
+        val stagedMain = game.stagedMainSkillOrNull(slot)
+        val main = game.selectedSkillFor(slot) ?: caster.basicAttackSkill
+        val floor = game.floor ?: return
+
+        if (UtilitySkillResolver.isUtility(main)) {
+            if (game.isUtilityCastPlaying) {
+                AppToast.show(this, R.string.utility_cast_busy)
+                return
+            }
+            if (!UtilitySkillResolver.canCast(main, caster, party, inCombat = false)) {
+                AppToast.show(this, R.string.utility_missing_ingredient)
+                return
+            }
+            if (!UtilitySkillResolver.wouldRecoverAnyone(main, party)) {
+                AppToast.show(this, R.string.utility_no_recovery_benefit)
+            }
+            if (game.commitUtilitySkillInExploration(slot, main)) {
+                game.clearSkillStaging(slot)
+                gameView.invalidate()
+                heroPanel.invalidate()
+            }
+            return
+        }
+
+        if (stagedMain == null && freeAction == null) return
+        if (game.projectedStagedMpCost(slot) > caster.mp) return
+
+        if (HealResolver.isHeal(main)) return
+
+        if (CombatTargeting.requiresEnemyTargetSelection(main)) {
+            val selection = game.combatTargetSelection
+            if (selection != null && selection.heroSlot == slot && selection.skill.id == main.id) {
+                val selected = game.selectedEnemy
+                if (selected != null &&
+                    CombatTargeting.isTargetableEnemyCell(
+                        floor,
+                        floor.partyCell,
+                        main,
+                        selected.cell,
+                    )
+                ) {
+                    if (game.commitExplorationAttack(slot, selected)) {
+                        refreshCombatViews()
+                    }
+                    return
+                }
+            }
+            if (!CombatTargeting.anyLivingEnemyReachable(floor, floor.partyCell, main)) {
+                return
+            }
+            game.beginCombatTargetSelection(slot, main)
+            return
+        }
+
+        if (CombatTargeting.needsEnemyTargetForCommit(main)) {
+            val selected = game.selectedEnemy
+            if (selected != null &&
+                CombatTargeting.isTargetableEnemyCell(
+                    floor,
+                    floor.partyCell,
+                    main,
+                    selected.cell,
+                )
+            ) {
+                if (game.commitExplorationAttack(slot, selected)) {
+                    refreshCombatViews()
+                }
+            }
+        }
+    }
+
+    /**
+     * Auto-opens the items panel after combat ends. Victory always
+     * surfaces the panel; hide escape only when battle loot is still
+     * queued in [com.tavisdor.app.items.Inventory.pendingPickup].
+     */
+    private fun openPostCombatItemsPanel(requirePendingLoot: Boolean) {
+        val party = game.party ?: return
+        if (requirePendingLoot && !party.inventory.hasPendingPickup) return
+        if (!itemsScreen.isVisible) {
+            itemsScreen.bind(party)
+            itemsScreen.show()
+        }
     }
 
     /**
@@ -721,18 +851,18 @@ class MainActivity : AppCompatActivity() {
 
         btnKick.setOnClickListener {
             if (!state.canKickDown) return@setOnClickListener
-            onChestOutcome(game.tryForceChest(cell))
             dialog.dismiss()
+            playLockAttemptFx(cell, { game.tryForceChest(cell) }, ::onChestOutcome)
         }
         btnPick.setOnClickListener {
             if (!state.canPickLock) return@setOnClickListener
-            onChestOutcome(game.tryPickChestLock(cell))
             dialog.dismiss()
+            playLockAttemptFx(cell, { game.tryPickChestLock(cell) }, ::onChestOutcome)
         }
         btnKey.setOnClickListener {
             if (!state.canUseKey) return@setOnClickListener
-            onChestOutcome(game.useKeyOnChest(cell))
             dialog.dismiss()
+            playLockAttemptFx(cell, { game.useKeyOnChest(cell) }, ::onChestOutcome)
         }
         dialog.show()
     }
@@ -777,20 +907,61 @@ class MainActivity : AppCompatActivity() {
 
         btnKick.setOnClickListener {
             if (!state.canKickDown) return@setOnClickListener
-            onDoorOutcome(game.tryForceDoor(cell))
             dialog.dismiss()
+            playDoorLockAttemptFx(cell) { game.tryForceDoor(cell) }
         }
         btnPick.setOnClickListener {
             if (!state.canPickLock) return@setOnClickListener
-            onDoorOutcome(game.tryPickLock(cell))
             dialog.dismiss()
+            playDoorLockAttemptFx(cell) { game.tryPickLock(cell) }
         }
         btnKey.setOnClickListener {
             if (!state.canUseKey) return@setOnClickListener
-            onDoorOutcome(game.useKeyOnDoor(cell))
             dialog.dismiss()
+            playDoorLockAttemptFx(cell) { game.useKeyOnDoor(cell) }
         }
         dialog.show()
+    }
+
+    private fun playDoorLockAttemptFx(
+        cell: Cell,
+        resolveOutcome: () -> Game.DoorOutcome,
+    ) {
+        playLockAttemptFx(
+            cell = cell,
+            resolveOutcome = resolveOutcome,
+            deliver = ::onDoorOutcome,
+            onUnlockPresentation = { game.applyDoorUnlockPresentation(it) },
+        )
+    }
+
+    /**
+     * Resolves the lock attempt, plays rise / shake / (unlock) FX on the tile,
+     * then delivers the outcome (toasts, continue move, etc.).
+     */
+    private fun playLockAttemptFx(
+        cell: Cell,
+        resolveOutcome: () -> Game.DoorOutcome,
+        deliver: (Game.DoorOutcome) -> Unit,
+        onUnlockPresentation: ((Cell) -> Unit)? = null,
+    ) {
+        val outcome = resolveOutcome()
+        val success = outcome == Game.DoorOutcome.OPENED ||
+            outcome == Game.DoorOutcome.ALREADY_UNLOCKED
+        val finish = {
+            if (onUnlockPresentation != null &&
+                (outcome == Game.DoorOutcome.OPENED || outcome == Game.DoorOutcome.ALREADY_UNLOCKED)
+            ) {
+                onUnlockPresentation(cell)
+            }
+            deliver(outcome)
+            gameView.invalidate()
+        }
+        if (game.startLockAttemptFx(cell, success, finish)) {
+            gameView.invalidate()
+            return
+        }
+        finish()
     }
 
     /**
@@ -826,10 +997,8 @@ class MainActivity : AppCompatActivity() {
         when (outcome) {
             Game.DoorOutcome.OPENED, Game.DoorOutcome.ALREADY_UNLOCKED -> {
                 gameView.invalidate()
-                // The auto-mover halted in front of the door and dropped the
-                // queued path; resume toward the original tap target so the
-                // player doesn't have to re-tap after unlocking.
-                game.continueMove()
+                // Stay beside the door after unlocking; the player taps again
+                // to walk in. Door tiles are skipped if a path crosses them.
             }
             Game.DoorOutcome.FAILED_NO_LOCK_PICK,
             Game.DoorOutcome.FAILED_NO_SHARD,

@@ -20,6 +20,12 @@ interface DefenderSpellFxGateway {
 
     fun startFireIII(target: Enemy, onComplete: () -> Unit): Boolean
 
+    fun startSneakAttack(target: Enemy, onComplete: () -> Unit): Boolean
+
+    fun startExposeWeakness(target: Enemy, onComplete: () -> Unit): Boolean
+
+    fun startSteal(target: Enemy, onComplete: () -> Unit): Boolean
+
     val isPlaying: Boolean
 
     fun targets(enemy: Enemy): Boolean

@@ -43,17 +43,17 @@ object SkillCatalog {
                 "Out of combat only.",
         ),
         skill(
-            id = "mage_fire_2", name = "Fire II", level = 4,
+            id = "mage_earth_1", name = "Earth I", level = 4,
+            type = SkillCastType.ACTIVE, range = 1, mp = 1,
+            damage = 2, element = Element.EARTH,
+            desc = "Earth damage 2, 1 mana.",
+        ),
+        skill(
+            id = "mage_fire_2", name = "Fire II", level = 5,
             type = SkillCastType.ACTIVE, range = 2, mp = 3,
             damage = 6, element = Element.FIRE,
             desc = "Fire damage 6, 3 mana. 50% chance to burn target next turn for 1 damage. " +
                 "Less damage to Water type, more to Earth type.",
-        ),
-        skill(
-            id = "mage_earth_1", name = "Earth I", level = 5,
-            type = SkillCastType.ACTIVE, range = 1, mp = 1,
-            damage = 2, element = Element.EARTH,
-            desc = "Earth damage 2, 1 mana.",
         ),
         skill(
             id = "mage_heal_2", name = "Heal II", level = 6,
@@ -97,51 +97,45 @@ object SkillCatalog {
     // string is left intact for flavor.
     private val FIGHTER: List<Skill> = listOf(
         skill(
-            id = "fighter_heavy_strike", name = "Heavy Strike", level = 1,
-            type = SkillCastType.ACTIVE, range = 1, mp = 0,
-            damage = 4, // 2d3 average
-            desc = "Attack +2d3 damage. Cannot take an action next turn.",
+            id = "fighter_taunt", name = "Taunt", level = 1,
+            type = SkillCastType.PREPARE, range = 2, mp = 0,
+            desc = "Requires an enemy within range. Your threat +2 from each enemy; " +
+                "each other living hero's threat -1. Uses your action.",
         ),
         skill(
-            id = "fighter_block", name = "Block", level = 2,
+            id = "fighter_camp", name = "Camp", level = 2,
             type = SkillCastType.PREPARE, range = 0, mp = 0,
-            desc = "Increase armor class by 2 (by 4 if equipping a shield) against the enemy's " +
-                "next attack; lasts 1 turn.",
+            desc = "Uses up a 'camp' item to fully heal HP and MP for the party over the cast. " +
+                "Cannot heal dead. 50% chance enemies ambush mid-cast (decided at start; " +
+                "random recovery tick) so you may heal partially first. No ambush in a room " +
+                "with stairs. Ambush size scales with floor depth (1–4 enemies).",
         ),
         skill(
-            // ID kept as `fighter_defender` (saves stable); display name follows description doc.
-            id = "fighter_defender", name = "Cover", level = 3,
+            // ID kept as `fighter_defender` (saves stable).
+            id = "fighter_defender", name = "Defender", level = 3,
             type = SkillCastType.PREPARE, range = 1, mp = 1,
             costsAction = false,
             desc = "Choose a target to cover; take all damage for them on the next attack. " +
                 "Does not cost an action. 1 mana.",
         ),
         skill(
-            // Charge damage is a 50% modifier on the basic attack;
-            // resolve-side multiplier will land with the combat
-            // pipeline. Stored as null so it doesn't get auto-added
-            // to the bonus column today.
-            // Stable id must stay literal here so the FIGHTER list
-            // can initialize before [FIGHTER_CHARGE_ID] declares the
-            // constant version of this same string. The combat
-            // controller references the constant for safety.
             id = "fighter_charge", name = "Charge", level = 4,
             type = SkillCastType.ACTIVE, range = 2, mp = 1,
             desc = "Move party 2 squares ahead (not diagonal) toward enemy and deal 50% damage. " +
                 "1 mana.",
         ),
         skill(
-            id = "fighter_thrust", name = "Thrust", level = 5,
+            id = "fighter_heavy_strike", name = "Heavy Strike", level = 5,
+            type = SkillCastType.ACTIVE, range = 1, mp = 0,
+            damage = 4, // 2d3 average
+            desc = "Attack +2d3 damage. Cannot take an action next turn.",
+        ),
+        skill(
+            id = "fighter_thrust", name = "Thrust", level = 6,
             type = SkillCastType.ACTIVE, range = 1, mp = 0,
             damage = 2, // 1d3 average
             desc = "Attack +1d3. 50% chance to also hit a target standing behind the current " +
                 "enemy. If no enemy behind and no wall, pushes the enemy back 1 square.",
-        ),
-        skill(
-            id = "fighter_armor_break", name = "Armor Break", level = 6,
-            type = SkillCastType.ACTIVE, range = 1, mp = 1,
-            desc = "Reduce the enemy's armor class by 30% for 2 turns. 1 mana. Higher chance if " +
-                "this hero is not the highest-hate target.",
         ),
         skill(
             id = "fighter_disarm", name = "Disarm", level = 7,
@@ -150,57 +144,42 @@ object SkillCatalog {
                 "hero is the highest-hate target.",
         ),
         skill(
-            id = "fighter_camp", name = "Camp", level = 8,
-            type = SkillCastType.PREPARE, range = 0, mp = 0,
-            desc = "Uses up a 'camp' item to fully heal HP and MP for the party over the cast. " +
-                "Cannot heal dead. 50% chance enemies ambush mid-cast (decided at start; " +
-                "random recovery tick) so you may heal partially first. No ambush in a room " +
-                "with stairs. Ambush size scales with floor depth (1–4 enemies).",
+            id = "fighter_armor_break", name = "Armor Break", level = 8,
+            type = SkillCastType.ACTIVE, range = 1, mp = 1,
+            desc = "Reduce the enemy's armor class by 30% for 2 turns. 1 mana. Higher chance if " +
+                "this hero is not the highest-hate target.",
         ),
         skill(
-            id = "fighter_shield_bash", name = "Shield Bash", level = 9,
+            id = "fighter_block", name = "Block", level = 9,
+            type = SkillCastType.PREPARE, range = 0, mp = 0,
+            desc = "Increase armor class by 2 (by 4 if equipping a shield) against the enemy's " +
+                "next attack; lasts 1 turn.",
+        ),
+        skill(
+            id = "fighter_shield_bash", name = "Shield Bash", level = 10,
             type = SkillCastType.ACTIVE, range = 1, mp = 0,
             desc = "If equipped with a shield, deal an additional attack at 50% damage. If no " +
                 "shield, just a normal attack.",
-        ),
-        skill(
-            id = "fighter_taunt", name = "Taunt", level = 10,
-            type = SkillCastType.PREPARE, range = 2, mp = 0,
-            desc = "Increase hate by 3.",
         ),
     ).forClass(HeroClass.FIGHTER)
 
     // ---------- THIEF ----------
     private val THIEF: List<Skill> = listOf(
         skill(
-            id = "thief_feint", name = "Feint", level = 1,
-            type = SkillCastType.PREPARE, range = 1, mp = 1,
-            costsAction = false,
-            button = SkillButton.ACTION,
-            desc = "Reduce hate level by 2. 1 mana. Does not cost an action.",
+            id = "thief_lock_pick", name = "Lock Pick", level = 1,
+            type = SkillCastType.PASSIVE, range = 1, mp = 0,
+            desc = "Pick locked doors and chests within range 1, out of combat. Each attempt " +
+                "costs one Stone Shard. DEX + 1d3 vs lock level for this dungeon depth.",
         ),
         skill(
             id = "thief_rest", name = "Rest", level = 2,
-            type = SkillCastType.PREPARE, range = 0, mp = 1,
+            type = SkillCastType.PREPARE, range = 0, mp = 0,
             desc = "Requires a 'beverage' item. Out of combat, restores each living hero " +
                 "up to 50% / 60% / 70% of max HP and MP (potency 1 / 2 / 3). No effect if " +
-                "already at or above the cap on both. 1 mana. Cannot heal dead.",
+                "already at or above the cap on both. No mana cost. Cannot heal dead.",
         ),
         skill(
-            id = "thief_lock_pick", name = "Lock Pick", level = 2,
-            type = SkillCastType.PASSIVE, range = 0, mp = 0,
-            desc = "Pick locked doors and chests out of combat. Each attempt costs one " +
-                "Stone Shard. DEX + 1d3 vs lock level for this dungeon depth.",
-        ),
-        skill(
-            id = "thief_evasive_maneuver", name = "Evasive Maneuver", level = 3,
-            type = SkillCastType.PREPARE, range = 1, mp = 1,
-            costsAction = false,
-            desc = "Increase dodge by 20% for the next 2 turns. 1 mana. Does not cost an action.",
-        ),
-        skill(
-            // Setup / hate redirect — support skill, not a direct attack.
-            id = "thief_trick_attack", name = "Trick Attack", level = 4,
+            id = "thief_trick_attack", name = "Trick Attack", level = 3,
             type = SkillCastType.ACTIVE, range = 1, mp = 1,
             costsAction = false,
             damage = 4, // 1d6 average rounded down (3.5 -> 4 in author table)
@@ -209,89 +188,97 @@ object SkillCatalog {
                 "your choice. 1 mana. Does not cost an action.",
         ),
         skill(
-            id = "thief_steal_item", name = "Steal Item", level = 5,
-            type = SkillCastType.PREPARE, range = 1, mp = 1,
-            button = SkillButton.ACTION,
-            desc = "Next successful attack deals no damage; instead steals 1 item from the " +
-                "enemy's pool (does not reduce the end-of-encounter reward table). 1 mana.",
-        ),
-        skill(
-            id = "thief_steal_gold", name = "Steal Gold", level = 6,
-            type = SkillCastType.ACTIVE, range = 1, mp = 0,
-            desc = "Chance to steal 50% of the gold the enemy is carrying. Works only once per " +
-                "individual enemy.",
-        ),
-        skill(
-            id = "thief_sneak_attack", name = "Sneak Attack", level = 7,
-            type = SkillCastType.ACTIVE, range = 1, mp = 2,
-            damage = 14, // 3d8 average (13.5 rounded up)
-            desc = "Attack +3d8. On a successful hit, hate is set to 5. 2 mana.",
-        ),
-        skill(
-            // ID kept stable; display name follows description doc.
-            id = "thief_weak_point", name = "Expose Weakness", level = 8,
-            type = SkillCastType.PREPARE, range = 2, mp = 0,
-            desc = "All party heroes have a 100% chance to hit this enemy (one time). The hero " +
-                "performing this skill has no more actions this turn.",
-        ),
-        skill(
-            // PREPARE effect ("next attack +2d6") but surfaced under
-            // ACT so it sits with Sneak Attack / other offensive picks.
-            id = "thief_double_strike", name = "Double Strike", level = 9,
-            type = SkillCastType.PREPARE, range = 1, mp = 1,
+            id = "thief_sneak_attack", name = "Sneak Attack", level = 4,
+            type = SkillCastType.ACTIVE, range = 1, mp = 3,
             damage = 7, // 2d6 average
-            desc = "Next attack deals +2d6 damage. 1 mana.",
-            button = SkillButton.ACTION,
+            desc = "Attack +2d6. On a successful hit, hate is set to 5. If you have the " +
+                "highest threat on the target among other heroes, hit chance is halved. 3 mana.",
         ),
         skill(
-            id = "thief_hide", name = "Hide", level = 10,
-            type = SkillCastType.PREPARE, range = 1, mp = 0,
+            id = "thief_steal", name = "Steal", level = 5,
+            type = SkillCastType.PREPARE, range = 1, mp = 1,
+            costsAction = false,
+            button = SkillButton.ACTION,
+            desc = "Next connecting melee attack deals 50% damage, then tries to steal 1 item " +
+                "(from a separate roll; does not reduce kill loot) and then tries to steal 50% " +
+                "of the gold the enemy is carrying (once per enemy, does not reduce kill gold). " +
+                "1 mana.",
+        ),
+        skill(
+            id = "thief_side_step", name = "Side Step", level = 6,
+            type = SkillCastType.PASSIVE, range = 0, mp = 1,
+            desc = "Passive. While any living party member knows this skill, the party may " +
+                "move diagonally during combat (still one cell per move). Each diagonal step " +
+                "costs 1 mana (paid by a living hero who knows Side Step).",
+        ),
+        skill(
+            id = "thief_hide", name = "Hide", level = 7,
+            type = SkillCastType.PREPARE, range = 0, mp = 2,
             desc = "Group is hidden from enemies 2 or more squares away. Must pass an INT + DEX " +
                 "check against the enemy: combined hero stats must beat enemy combined 2 stats " +
-                "+ (1d6 per level the enemy is higher than the hero).",
+                "+ (1d6 per level the enemy is higher than the hero). 2 mana. Uses your action.",
+        ),
+        skill(
+            id = "thief_weak_point", name = "Weak Point", level = 8,
+            type = SkillCastType.PREPARE, range = 2, mp = 2,
+            button = SkillButton.ACTION,
+            desc = "Mark an enemy within range. Each living hero may reroll once on their next " +
+                "failed melee dodge or spell resist against that enemy (not on a natural 1). " +
+                "2 mana. Uses your action.",
+        ),
+        skill(
+            id = "thief_double_strike", name = "Double Strike", level = 9,
+            type = SkillCastType.PREPARE, range = 1, mp = 3,
+            damage = 7, // 2d6 average
+            desc = "Next attack deals +2d6 damage. 3 mana.",
+            button = SkillButton.ACTION,
+        ),
+        skill(
+            id = "thief_evasive_maneuver", name = "Evasive Maneuver", level = 10,
+            type = SkillCastType.PREPARE, range = 1, mp = 1,
+            costsAction = false,
+            desc = "Increase dodge by 20% for the next 2 turns. 1 mana. Does not cost an action.",
         ),
     ).forClass(HeroClass.THIEF)
 
     // ---------- ARCHER ----------
     private val ARCHER: List<Skill> = listOf(
         skill(
-            id = "archer_feint_death", name = "Feint Death", level = 1,
-            type = SkillCastType.ACTIVE, range = 0, mp = 1,
+            id = "archer_aim_shot", name = "Aim Shot", level = 1,
+            type = SkillCastType.PREPARE, range = 4, mp = 0,
             costsAction = false,
-            desc = "Reduce hate by 2. 1 mana. Does not cost an action.",
+            desc = "Prepare as a free action, then attack: next damage +150%. If the defender " +
+                "dodges the first swing, roll a second hit check. Hate +2 on a connecting hit. " +
+                "Cannot take an action on your following turn.",
         ),
         skill(
-            id = "archer_poison_arrow", name = "Poison Arrow", level = 2,
-            type = SkillCastType.ACTIVE, range = 3, mp = 0,
-            requiredShard = Ingredient.STONE_SHARD,
-            desc = "Normal damage; on poison success, enemy takes 2 damage each turn for the " +
-                "next 2 turns. Requires a Stone Shard.",
-        ),
-        skill(
-            id = "archer_cooking", name = "Cooking", level = 3,
+            id = "archer_cooking", name = "Cooking", level = 2,
             type = SkillCastType.PREPARE, range = 0, mp = 0,
             desc = "Requires 'raw food'. Out of combat, restores party HP only (no MP), up to " +
                 "70% / 80% / 90% of max (potency 1 / 2 / 3; e.g. Raw Rabbit). Consumes one " +
                 "ingredient; creates nothing. Cannot heal dead.",
         ),
         skill(
-            id = "archer_mark_target", name = "Mark Target", level = 4,
-            type = SkillCastType.ACTIVE, range = 3, mp = 0,
-            desc = "Damage done to the marked enemy is increased by 20%.",
-        ),
-        skill(
-            id = "archer_rapid_fire", name = "Rapid Fire", level = 5,
+            id = "archer_rapid_fire", name = "Rapid Fire", level = 3,
             type = SkillCastType.PREPARE, range = 0, mp = 2,
             costsAction = false,
             desc = "80% chance to shoot more than 1 arrow next turn; 100% chance to shoot 2 " +
                 "arrows. 2 mana. Does not cost an action.",
         ),
         skill(
-            // Elemental arrows are hybrid: normal arrow damage is
-            // melee-class (STR + weapon) plus an elemental rider.
-            // We model the rider here via `damage + element`; the
-            // combat resolver layers it on top of the basic attack
-            // when both are present. 1d6 ice / fire averaged.
+            id = "archer_poison_arrow", name = "Poison Arrow", level = 4,
+            type = SkillCastType.ACTIVE, range = 3, mp = 0,
+            requiredShard = Ingredient.STONE_SHARD,
+            desc = "Normal damage; on poison success, enemy takes 2 damage each turn for the " +
+                "next 2 turns. Requires a Stone Shard.",
+        ),
+        skill(
+            id = "archer_close_range", name = "Close-Range", level = 5,
+            type = SkillCastType.PASSIVE, range = 0, mp = 0,
+            desc = "Reduces the penalty for attacking in close range (an enemy touching the " +
+                "party) by 25%. Always active.",
+        ),
+        skill(
             id = "archer_fire_arrow", name = "Fire Arrow", level = 6,
             type = SkillCastType.ACTIVE, range = 3, mp = 0,
             damage = 4, element = Element.FIRE,
@@ -308,25 +295,22 @@ object SkillCatalog {
                 "to Earth. Requires a Hydro Shard.",
         ),
         skill(
-            id = "archer_aim_shot", name = "Aim Shot", level = 8,
-            type = SkillCastType.PREPARE, range = 0, mp = 0,
+            id = "archer_feint_death", name = "Feint Death", level = 8,
+            type = SkillCastType.ACTIVE, range = 0, mp = 1,
             costsAction = false,
-            desc = "Prepare as a free action, then attack: next damage +150%. If the defender " +
-                "dodges the first swing, roll a second hit check. Hate +2 on a connecting hit. " +
-                "Cannot take an action on your following turn.",
+            desc = "Reduce hate by 2. 1 mana. Does not cost an action.",
         ),
         skill(
-            // Marked passive per description doc ("always active").
-            id = "archer_close_range", name = "Close-Range", level = 9,
-            type = SkillCastType.PASSIVE, range = 0, mp = 0,
-            desc = "Reduces the penalty for attacking in close range (an enemy touching the " +
-                "party) by 25%. Always active.",
-        ),
-        skill(
-            id = "archer_double_shot", name = "Double Shot", level = 10,
+            id = "archer_double_shot", name = "Double Shot", level = 9,
             type = SkillCastType.PREPARE, range = 3, mp = 1,
+            costsAction = false,
             desc = "Two attacks; the 2nd has a 25% miss chance. Hate +2 on a successful 2nd " +
-                "attack. 1 mana.",
+                "attack. 1 mana. Does not cost an action.",
+        ),
+        skill(
+            id = "archer_mark_target", name = "Mark Target", level = 10,
+            type = SkillCastType.ACTIVE, range = 3, mp = 0,
+            desc = "Damage done to the marked enemy is increased by 20%.",
         ),
     ).forClass(HeroClass.ARCHER)
 
@@ -374,6 +358,9 @@ object SkillCatalog {
     /** Thief passive: pick locks on doors and chests (DEX + 1d3 vs lock level). */
     const val THIEF_LOCK_PICK_ID: String = "thief_lock_pick"
 
+    /** Party-wide: diagonal one-cell moves during combat. */
+    const val THIEF_SIDE_STEP_ID: String = "thief_side_step"
+
     const val MAGE_MAKE_POTION_ID: String = "mage_make_potion_1"
     const val FIGHTER_CAMP_ID: String = "fighter_camp"
     const val THIEF_REST_ID: String = "thief_rest"
@@ -405,6 +392,20 @@ object SkillCatalog {
      */
     const val FIGHTER_CHARGE_ID: String = "fighter_charge"
 
+    /** Fighter prepare: shifts hate toward the taunter and away from allies. */
+    const val FIGHTER_TAUNT_ID: String = "fighter_taunt"
+
+    /** Thief prepare: marked enemy grants each hero one miss reroll (melee or spell). */
+    const val THIEF_WEAK_POINT_ID: String = "thief_weak_point"
+
+    const val THIEF_SNEAK_ATTACK_ID: String = "thief_sneak_attack"
+
+    const val THIEF_DOUBLE_STRIKE_ID: String = "thief_double_strike"
+
+    const val THIEF_TRICK_ATTACK_ID: String = "thief_trick_attack"
+
+    const val THIEF_HIDE_ID: String = "thief_hide"
+
     /** Archer prepare: extra arrows on the hero's next offensive commit. */
     const val ARCHER_RAPID_FIRE_ID: String = "archer_rapid_fire"
 
@@ -424,6 +425,18 @@ object SkillCatalog {
      * close a 2-cell gap.
      */
     const val FIGHTER_CHARGE_DAMAGE_PCT: Int = 50
+
+    /** Thief prepare: next connecting melee hit steals item then gold at reduced damage. */
+    const val THIEF_STEAL_ID: String = "thief_steal"
+
+    /** Melee damage multiplier while the Steal buff is active. */
+    const val THIEF_STEAL_DAMAGE_PCT: Int = 50
+
+    /** Fraction of [enemyCarriedGold] taken on a successful gold steal. */
+    const val THIEF_STEAL_GOLD_FRACTION_PCT: Int = 50
+
+    /** Chance (0..100) that the gold-steal attempt succeeds. */
+    const val THIEF_STEAL_GOLD_CHANCE_PCT: Int = 50
 
     /**
      * The default "Attack" action every hero has access to from
@@ -526,10 +539,14 @@ object SkillCatalog {
     fun byId(id: String): Skill? {
         if (id == BASIC_ATTACK_ID) return basicAttackFor(HeroClass.FIGHTER)
         if (id == BASIC_DEFEND_ID) return basicDefendFor(HeroClass.FIGHTER)
-        return allSkillsFor(HeroClass.MAGE).firstOrNull { it.id == id }
-            ?: allSkillsFor(HeroClass.FIGHTER).firstOrNull { it.id == id }
-            ?: allSkillsFor(HeroClass.THIEF).firstOrNull { it.id == id }
-            ?: allSkillsFor(HeroClass.ARCHER).firstOrNull { it.id == id }
+        val resolvedId = when (id) {
+            "thief_steal_item", "thief_steal_gold" -> THIEF_STEAL_ID
+            else -> id
+        }
+        return allSkillsFor(HeroClass.MAGE).firstOrNull { it.id == resolvedId }
+            ?: allSkillsFor(HeroClass.FIGHTER).firstOrNull { it.id == resolvedId }
+            ?: allSkillsFor(HeroClass.THIEF).firstOrNull { it.id == resolvedId }
+            ?: allSkillsFor(HeroClass.ARCHER).firstOrNull { it.id == resolvedId }
     }
 
     // ---------- Builder helper ----------

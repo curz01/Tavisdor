@@ -80,13 +80,16 @@ class InputHandler {
         val cellYf = (screenY - viewCy) / cellPx + game.camera.centerCellY
         val target = Cell(floor(cellXf).toInt(), floor(cellYf).toInt())
 
-        if (target !in floor.floorCells) return false
+        val onFloor = target in floor.floorCells
+        val onDoor = floor.doorAt(target) != null
+        val onChest = floor.chestAt(target) != null
+        if (!onFloor && !onDoor && !onChest) return false
+
+        if (game.isCombatTargetSelectionActive()) {
+            return game.handleCombatTargetTap(target)
+        }
 
         if (game.combat != null) {
-            if (game.isCombatTargetSelectionActive()) {
-                return game.handleCombatTargetTap(target)
-            }
-
             val tappedEnemy = floor.enemyAt(target)
             if (tappedEnemy != null && tappedEnemy.isAlive && floor.isVisibleToParty(target)) {
                 game.setSelectedEnemy(tappedEnemy)
@@ -101,6 +104,16 @@ class InputHandler {
 
             val result = game.attemptPartyMoveInCombat(target)
             return result != CombatController.PartyMoveResult.REJECTED
+        }
+
+        val explorationEnemy = floor.enemyAt(target)
+        if (
+            explorationEnemy != null &&
+            explorationEnemy.isAlive &&
+            floor.isVisibleToParty(target)
+        ) {
+            game.setSelectedEnemy(explorationEnemy)
+            return true
         }
 
         return game.requestMoveTo(target)

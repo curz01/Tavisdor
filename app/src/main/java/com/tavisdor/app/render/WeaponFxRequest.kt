@@ -60,6 +60,11 @@ data class WeaponFxRequest(
     /** When set, bow / fire-arrow kinds play multiple volleys instead of one shot. */
     val bowVolleyPlan: BowVolleyPlan? = null,
     /**
+     * One callback per arrow; fired when that arrow's flight reaches the
+     * defender so each shot rolls its own dodge / damage check.
+     */
+    val onBowShotImpact: List<() -> Unit>? = null,
+    /**
      * Animated overlay frames drawn at the staff tip during
      * [WeaponFxKind.STAFF_SPELL_RISE] (e.g. `fireball1`, `earthi_2`).
      */
@@ -98,6 +103,8 @@ enum class WeaponFxKind {
     STAFF_SPELL_RISE,
     /** Dagger two-hit: dagger_r thrust, then dagger_l. */
     DAGGER_COMBO,
+    /** Thief Double Strike: doubls1 then doubls2 spear-style thrusts. */
+    DOUBLE_STRIKE_THRUST,
     /** Bow draw cycle + arrow on string, then arrow flight. */
     BOW_SHOT,
     /** Fire spell projectile (fire_arrow sprite). */
@@ -149,6 +156,7 @@ object WeaponFxCatalog {
         WeaponFxKind.STAFF_MELEE_ARC -> "staff"
         WeaponFxKind.STAFF_SPELL_RISE -> "staff"
         WeaponFxKind.DAGGER_COMBO -> phase ?: "dagger_r"
+        WeaponFxKind.DOUBLE_STRIKE_THRUST -> phase ?: "doubls1"
         WeaponFxKind.BOW_SHOT -> phase ?: "bow1"
         WeaponFxKind.FIRE_PROJECTILE -> "fire_arrow"
         WeaponFxKind.CHARGE_SWORD_HOLD -> "sword"

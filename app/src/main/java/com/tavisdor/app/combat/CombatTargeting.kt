@@ -37,6 +37,28 @@ object CombatTargeting {
      * tapping Action (combat only). Covers weapon attacks, melee skills,
      * and elemental spells (Fire / Earth / etc.).
      */
+    /**
+     * True when [skill] needs a living enemy in range before it can
+     * fire (exploration ambush or combat commit).
+     */
+    fun anyLivingEnemyReachable(floor: Floor, origin: Cell, skill: Skill): Boolean {
+        if (skill.range <= 0) return false
+        return floor.enemies.any { enemy ->
+            enemy.isAlive &&
+                floor.isVisibleToParty(enemy.cell) &&
+                isTargetableEnemyCell(floor, origin, skill, enemy.cell)
+        }
+    }
+
+    /**
+     * Skills that commit against an enemy but use the combat picker
+     * overlay only for the subset in [requiresEnemyTargetSelection].
+     */
+    fun needsEnemyTargetForCommit(skill: Skill): Boolean =
+        requiresEnemyTargetSelection(skill) ||
+            skill.id == SkillCatalog.FIGHTER_CHARGE_ID ||
+            skill.id == SkillCatalog.FIGHTER_TAUNT_ID
+
     fun requiresEnemyTargetSelection(skill: Skill): Boolean {
         if (HealResolver.isHeal(skill)) return false
         if (skill.range <= 0) return false
@@ -47,8 +69,12 @@ object CombatTargeting {
             SkillCatalog.ARCHER_DOUBLE_SHOT_ID,
             SkillCatalog.ARCHER_AIM_SHOT_ID,
             SkillCatalog.FIGHTER_CHARGE_ID,
+            SkillCatalog.FIGHTER_TAUNT_ID,
+            SkillCatalog.THIEF_DOUBLE_STRIKE_ID,
+            SkillCatalog.THIEF_STEAL_ID,
             -> return false
         }
+        if (skill.id == SkillCatalog.THIEF_WEAK_POINT_ID) return true
         if (skill.castType == SkillCastType.PREPARE &&
             skill.damage == null &&
             !skill.isSpell

@@ -141,11 +141,8 @@ class SkillPickerDialog(
         if (skill.mpCost > 0) {
             sb.append("   ").append(skill.mpCost).append(" MP")
         }
-        when {
-            skill.castType == SkillCastType.PASSIVE ->
-                sb.append("   [").append(context.getString(R.string.hero_skill_passive_tag)).append("]")
-            !skill.costsAction ->
-                sb.append("   [").append(context.getString(R.string.skill_picker_free_tag)).append("]")
+        if (!skill.costsAction) {
+            sb.append("   [").append(context.getString(R.string.skill_picker_free_tag)).append("]")
         }
         return sb.toString()
     }

@@ -4,8 +4,8 @@
         <shape android:shape="rectangle">
             <solid android:color="@color/inventory_tab_pickup_selected" />
             <stroke
-                android:width="2dp"
-                android:color="@color/inventory_tab_pickup_border" />
+                android:width="3dp"
+                android:color="@color/inventory_tab_pickup_selected" />
             <corners
                 android:bottomLeftRadius="0dp"
                 android:bottomRightRadius="0dp"

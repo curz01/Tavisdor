@@ -603,9 +603,8 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         val now = SystemClock.uptimeMillis()
         val cycle = set.cycle
         val idleFrame = if (cycle.isNotEmpty()) {
-            val phase = slot * (CYCLE_FRAME_MS / MAX_SLOTS)
-            val idx = ((now + phase) / CYCLE_FRAME_MS).toInt().mod(cycle.size)
-            cycle[idx]
+            val phase = slot * (set.cyclePeriodMs / MAX_SLOTS)
+            cycle[idleCycleFrameIndex(now + phase, set)]
         } else null
 
         val blinkStart = hurtBlinkStartMs[slot]
@@ -642,12 +641,37 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         val spec = PortraitCatalog.specFor(cls, gender)
         val cycle = spec.cycleAssets.mapNotNull { path ->
             val bmp = tryLoadBitmap(assets, path) ?: return@mapNotNull null
-            PortraitFrame(bmp, Rect(0, 0, bmp.width, bmp.height))
+            val durationMs = if (isBlinkPortraitAsset(path)) {
+                CYCLE_BLINK_FRAME_MS
+            } else {
+                CYCLE_FRAME_MS
+            }
+            PortraitFrame(
+                bitmap = bmp,
+                src = Rect(0, 0, bmp.width, bmp.height),
+                durationMs = durationMs,
+            )
         }
         val hurt = spec.hurtAsset
             .let { tryLoadBitmap(assets, it) }
-            ?.let { bmp -> PortraitFrame(bmp, Rect(0, 0, bmp.width, bmp.height)) }
-        return PortraitSet(cycle = cycle, hurt = hurt)
+            ?.let { bmp ->
+                PortraitFrame(bmp, Rect(0, 0, bmp.width, bmp.height), durationMs = CYCLE_FRAME_MS)
+            }
+        val cyclePeriodMs = cycle.sumOf { it.durationMs }
+        return PortraitSet(cycle = cycle, hurt = hurt, cyclePeriodMs = cyclePeriodMs)
+    }
+
+    /** Maps wall-clock time within one full idle loop to a frame index. */
+    private fun idleCycleFrameIndex(elapsedMs: Long, set: PortraitSet): Int {
+        val cycle = set.cycle
+        if (cycle.isEmpty()) return 0
+        val period = set.cyclePeriodMs.coerceAtLeast(1L)
+        var t = elapsedMs % period
+        for (i in cycle.indices) {
+            t -= cycle[i].durationMs
+            if (t < 0L) return i
+        }
+        return cycle.lastIndex
     }
 
     private fun portraitColorFor(cls: HeroClass): Int = when (cls) {
@@ -695,7 +719,8 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         game: Game?,
     ) {
         val g = game ?: return
-        val icons = ArrayList<String>(3)
+        val icons = ArrayList<String>(4)
+        if (g.isPartyHidden) icons += HIDDEN_ICON_ASSET
         if (g.isHeroWaiting(heroSlot)) icons += WAIT_ICON_ASSET
         for (skill in g.stagedSkillsForPanel(heroSlot)) {
             actionIconAssetFor(skill)?.let { icons += it }
@@ -787,7 +812,11 @@ class HeroPanelRenderer(private val assets: AssetManager) {
      * doesn't allocate a new [Rect] every time we draw. Created
      * once per decoded sprite in [loadPortraitSet].
      */
-    private data class PortraitFrame(val bitmap: Bitmap, val src: Rect)
+    private data class PortraitFrame(
+        val bitmap: Bitmap,
+        val src: Rect,
+        val durationMs: Long,
+    )
 
     /**
      * Holds the decoded idle cycle + hurt sprite for a single
@@ -795,7 +824,11 @@ class HeroPanelRenderer(private val assets: AssetManager) {
      * asset failed to decode; the renderer falls back to the
      * initial-glyph placeholder in that case.
      */
-    private data class PortraitSet(val cycle: List<PortraitFrame>, val hurt: PortraitFrame?)
+    private data class PortraitSet(
+        val cycle: List<PortraitFrame>,
+        val hurt: PortraitFrame?,
+        val cyclePeriodMs: Long,
+    )
 
     /** Map key for [portraitSets]; pure value type, safe to use as a HashMap key. */
     private data class PortraitKey(val cls: HeroClass, val gender: Gender)
@@ -806,16 +839,31 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         private const val ACTION_ATTACK_ASSET = "action_attack"
         private const val WAIT_ICON_ASSET = "wait"
         private const val ACTION_GUARD_ASSET = "action_guard"
+        private const val HIDDEN_ICON_ASSET = "hidden"
 
         /** Always 4 hero slots; cached so the per-slot state arrays stay sized correctly. */
         private const val MAX_SLOTS: Int = 4
 
         /**
-         * Milliseconds each idle portrait frame stays on screen
-         * before the cycle advances. 625ms gives a ~1.25s loop for the
-         * 2-frame fighter / thief / archer and ~2.5s for the 4-frame mage.
+         * Milliseconds each normal idle portrait frame stays on screen.
+         * Blink frames ([BLINK_PORTRAIT_ASSETS]) use [CYCLE_BLINK_FRAME_MS].
          */
-        private const val CYCLE_FRAME_MS: Long = 625L
+        private const val CYCLE_FRAME_MS: Long = 1_250L
+
+        /** *pic2 blink sprites (thief / mage / archer). */
+        private const val CYCLE_BLINK_FRAME_MS: Long = 150L
+
+        private val BLINK_PORTRAIT_ASSETS: Set<String> = setOf(
+            "thiefFpic2.png",
+            "thiefMpic2.png",
+            "mageFpic2.png",
+            "mageMpic2.png",
+            "archerFpic2.png",
+            "archerMpic2.png",
+        )
+
+        private fun isBlinkPortraitAsset(assetPath: String): Boolean =
+            assetPath.substringAfterLast('/') in BLINK_PORTRAIT_ASSETS
 
         /**
          * Milliseconds between hurt-blink flashes (one hurt frame +

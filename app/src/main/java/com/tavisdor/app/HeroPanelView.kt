@@ -48,6 +48,7 @@ class HeroPanelView @JvmOverloads constructor(
         // goblin, instead of waiting for the next animation tick.
         g.onSelectedEnemyChanged = { invalidate() }
         g.onSkillStagingChanged = { invalidate() }
+        g.onPartyHideChanged = { invalidate() }
         invalidate()
     }
 

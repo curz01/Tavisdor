@@ -15,7 +15,8 @@ package com.tavisdor.app.dungeon
  *
  * [visuallyOpen] is the only flag that selects the opened door sprite.
  * Unlocking ([locked] = false) does not change the art — the door stays
- * closed until the party walks through or a template sets [visuallyOpen].
+ * closed until the party steps onto that tile, which also reveals fog
+ * beyond the doorway ([Floor.recordVisited] / [Floor.applyDoorUnlockPresentation]).
  */
 class Door(
     var locked: Boolean,
@@ -36,16 +37,23 @@ enum class DoorAxis {
 
 /**
  * Picks NS when walkable floor extends further north/south than east/west
- * from [doorCell]; otherwise EW.
+ * from [doorCell]; otherwise EW. Rays stop at other [doorCells] and after
+ * [maxRay] steps so merged dungeon floor does not skew local doorways.
  */
-fun inferDoorAxis(doorCell: Cell, floorCells: Set<Cell>): DoorAxis {
-    fun walkable(c: Cell): Boolean = c in floorCells
+fun inferDoorAxis(
+    doorCell: Cell,
+    floorCells: Set<Cell>,
+    doorCells: Set<Cell> = emptySet(),
+    maxRay: Int = 12,
+): DoorAxis {
+    fun walkable(c: Cell): Boolean =
+        c in floorCells && c !in doorCells && c != doorCell
 
     fun rayLength(dx: Int, dy: Int): Int {
         var len = 0
         var x = doorCell.x + dx
         var y = doorCell.y + dy
-        while (walkable(Cell(x, y))) {
+        while (len < maxRay && walkable(Cell(x, y))) {
             len++
             x += dx
             y += dy
@@ -53,7 +61,15 @@ fun inferDoorAxis(doorCell: Cell, floorCells: Set<Cell>): DoorAxis {
         return len
     }
 
+    fun adjacentOpen(dx: Int, dy: Int): Boolean =
+        walkable(Cell(doorCell.x + dx, doorCell.y + dy))
+
+    val nsAdj = (if (adjacentOpen(0, -1)) 1 else 0) + (if (adjacentOpen(0, 1)) 1 else 0)
+    val ewAdj = (if (adjacentOpen(-1, 0)) 1 else 0) + (if (adjacentOpen(1, 0)) 1 else 0)
+    if (ewAdj > nsAdj) return DoorAxis.EW
+    if (nsAdj > ewAdj) return DoorAxis.NS
+
     val nsScore = rayLength(0, -1) + rayLength(0, 1)
-    val ewScore = rayLength(1, 0) + rayLength(-1, 0)
-    return if (nsScore >= ewScore) DoorAxis.NS else DoorAxis.EW
+    val ewScore = rayLength(-1, 0) + rayLength(1, 0)
+    return if (nsScore > ewScore) DoorAxis.NS else DoorAxis.EW
 }

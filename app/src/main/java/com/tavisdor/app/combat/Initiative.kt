@@ -9,7 +9,7 @@ data class InitiativeEntry(
     val index: Int,
     val dexterity: Int,
     /**
-     * Tie-break d6 used to disambiguate when [dexterity] is shared
+     * Tie-break d10 used to disambiguate when [dexterity] is shared
      * with another entry. Captured at initiative-build time so the
      * order is STABLE across rounds - rerolling each round would
      * confuse the player ("why did Mage jump ahead of Thief?").
@@ -27,14 +27,14 @@ data class InitiativeEntry(
  * Builds a per-encounter turn order. Sort key:
  *
  *   1. DEX descending (high DEX = goes first).
- *   2. On a tie, both combatants roll a d6 each; higher roll wins.
+ *   2. On a tie, both combatants roll 1d10 each; higher roll wins.
  *      Re-roll on a draw until one wins. Winning roll is captured
  *      on the entry for UI tooltips.
  *
  * Notes:
- *   - Hero-vs-enemy ties go through the same d6 procedure (no
+ *   - Hero-vs-enemy ties go through the same d10 procedure (no
  *     automatic hero-first short-circuit). The previous "hero
- *     wins ties" rule is superseded by the d6 mechanic.
+ *     wins ties" rule is superseded by the d10 mechanic.
  *   - The order returned here is STABLE for the lifetime of the
  *     encounter; combat rounds just iterate it from the top each
  *     round. Don't re-roll across rounds.
@@ -47,7 +47,7 @@ object Initiative {
     /**
      * @param heroDex   DEX values for each living hero, in party slot order.
      * @param enemyDex  DEX values for each enemy in the encounter, in spawn order.
-     * @param rng       RNG used for tie-break d6 rolls. Default = Random.Default;
+     * @param rng       RNG used for tie-break d10 rolls. Default = Random.Default;
      *                  pass a seeded instance in tests for deterministic order.
      */
     fun build(
@@ -63,7 +63,7 @@ object Initiative {
         }
         // Step 1: build the flat list. Heroes first so when we later
         // sort with a stable comparator, the order within an equal
-        // DEX block starts predictable - the d6 pass below resolves
+        // DEX block starts predictable - the d10 pass below resolves
         // it for real.
         val raw = buildList {
             heroDex.forEachIndexed { i, dex ->
@@ -75,7 +75,7 @@ object Initiative {
         }
 
         // Step 2: group by DEX, descending. Within each group we
-        // either pass through directly (size 1) or run the d6
+        // either pass through directly (size 1) or run the d10
         // tournament to fix the order.
         val byDex = raw.groupBy { it.dexterity }
             .toSortedMap(compareByDescending { it })
@@ -92,7 +92,7 @@ object Initiative {
 
     /**
      * Orders [tied] entries (all sharing one DEX value) by a
-     * pairwise d6 tournament: each entry rolls; whoever rolls
+     * pairwise d10 tournament: each entry rolls; whoever rolls
      * highest goes earliest, then we recurse on the remainder.
      * Re-rolls on draws within a single comparison.
      *
@@ -110,12 +110,12 @@ object Initiative {
             // Roll once per entry. Winner = highest roll. On draws
             // across the leaderboard, re-roll just the leaders.
             var leaders: MutableList<Pair<InitiativeEntry, Int>> =
-                remaining.map { it to rollD6(rng) }.toMutableList()
+                remaining.map { it to CombatMath.rollCheckDie(rng) }.toMutableList()
             while (true) {
                 val topRoll = leaders.maxOf { it.second }
                 leaders = leaders.filter { it.second == topRoll }.toMutableList()
                 if (leaders.size == 1) break
-                leaders = leaders.map { it.first to rollD6(rng) }.toMutableList()
+                leaders = leaders.map { it.first to CombatMath.rollCheckDie(rng) }.toMutableList()
             }
             val winner = leaders[0]
             ordered += winner.first.copy(tiebreakRoll = winner.second)
@@ -125,5 +125,4 @@ object Initiative {
         return ordered
     }
 
-    private fun rollD6(rng: Random): Int = rng.nextInt(1, 7)
 }

@@ -91,6 +91,21 @@ class CombatRound(
         return initiative[idx]
     }
 
+    /**
+     * Jumps [queuePos] to [heroSlot]'s next pending turn this round so
+     * an exploration ambush can resolve the attack immediately.
+     */
+    fun beginWithHeroActing(heroSlot: Int): Boolean {
+        val initIdx = initiative.indexOfFirst {
+            it.kind == InitiativeEntry.Kind.HERO && it.index == heroSlot
+        }
+        if (initIdx < 0) return false
+        val queueIndex = _roundQueue.indexOf(initIdx)
+        if (queueIndex < 0) return false
+        queuePos = queueIndex
+        return true
+    }
+
     fun displayedSlotOf(entry: InitiativeEntry): Int {
         if (entry in _removedEntries) return -1
         var slot = 0

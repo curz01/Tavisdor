@@ -83,6 +83,28 @@ class HateTracker(
     }
 
     /**
+     * Fighter Taunt: each enemy in [enemyIndices] gains +[TAUNT_CASTER_DELTA]
+     * hate toward [casterSlot] and -[TAUNT_OTHERS_DELTA] toward every other
+     * living hero ([isHeroAlive]). Dead heroes are skipped.
+     */
+    fun applyTaunt(
+        casterSlot: Int,
+        enemyIndices: Iterable<Int>,
+        isHeroAlive: (heroSlot: Int) -> Boolean,
+    ) {
+        if (casterSlot !in 0 until partySize) return
+        for (enemyIdx in enemyIndices) {
+            if (enemyIdx !in 0 until enemyCount) continue
+            bumpHate(enemyIdx, casterSlot, TAUNT_CASTER_DELTA)
+            for (heroSlot in 0 until partySize) {
+                if (heroSlot == casterSlot) continue
+                if (!isHeroAlive(heroSlot)) continue
+                bumpHate(enemyIdx, heroSlot, TAUNT_OTHERS_DELTA)
+            }
+        }
+    }
+
+    /**
      * Accumulates [amount] damage dealt by hero [heroSlot] against
      * enemy [enemyIdx] this round. Non-positive amounts are ignored
      * so a 0-damage hit (AC fully soaked) doesn't bump aggro.
@@ -132,6 +154,26 @@ class HateTracker(
      *
      * Returns null when there are no living heroes left.
      */
+    /**
+     * True when [heroSlot]'s hate from [enemyIdx] is strictly greater than
+     * every other living hero's hate from that enemy (ties do not count).
+     */
+    fun isStrictlyHighestHateToward(
+        enemyIdx: Int,
+        heroSlot: Int,
+        isHeroAlive: (heroSlot: Int) -> Boolean,
+    ): Boolean {
+        if (enemyIdx !in 0 until enemyCount) return false
+        if (heroSlot !in 0 until partySize) return false
+        val self = hateFor(enemyIdx, heroSlot)
+        for (other in 0 until partySize) {
+            if (other == heroSlot) continue
+            if (!isHeroAlive(other)) continue
+            if (hateFor(enemyIdx, other) >= self) return false
+        }
+        return true
+    }
+
     fun pickTarget(
         enemyIdx: Int,
         isAlive: (heroSlot: Int) -> Boolean,
@@ -166,5 +208,11 @@ class HateTracker(
 
         /** Default at combat start unless an enemy template overrides. */
         const val HATE_DEFAULT: Int = 1
+
+        /** Fighter Taunt: hate delta applied to the taunting hero per enemy. */
+        const val TAUNT_CASTER_DELTA: Int = 2
+
+        /** Fighter Taunt: hate delta applied to each other living hero per enemy. */
+        const val TAUNT_OTHERS_DELTA: Int = -1
     }
 }

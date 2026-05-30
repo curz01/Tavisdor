@@ -19,12 +19,19 @@ import com.tavisdor.app.skills.SkillCatalog
  */
 object UtilitySkillResolver {
 
+    data class RecoveryTotals(
+        val totalHp: Int,
+        val totalMp: Int,
+    )
+
     data class CastPlan(
         val ingredient: Ingredient,
         val fxRequest: WeaponFxRequest,
         val recovery: UtilityRecoverySession?,
         /** Set when Make Potion finishes (no HP/MP ticks during the cast). */
         val potionToGrant: Potion? = null,
+        /** Pre-computed recovery for the combat log summary line. */
+        val recoveryTotals: RecoveryTotals? = null,
     )
 
     fun isUtility(skill: Skill): Boolean =
@@ -81,6 +88,17 @@ object UtilitySkillResolver {
         } else {
             null
         }
+        val recoveryTotals = if (targets.isEmpty()) {
+            null
+        } else {
+            var hp = 0
+            var mp = 0
+            for (t in targets) {
+                hp += t.totalHp
+                mp += t.totalMp
+            }
+            RecoveryTotals(totalHp = hp, totalMp = mp)
+        }
         return CastPlan(
             ingredient = ingredient,
             fxRequest = WeaponFxRequest(
@@ -107,6 +125,7 @@ object UtilitySkillResolver {
             } else {
                 null
             },
+            recoveryTotals = recoveryTotals,
         )
     }
 
@@ -117,13 +136,16 @@ object UtilitySkillResolver {
             .maxByOrNull { it.potency }
     }
 
-    private fun categoryFor(skillId: String): IngredientCategory? = when (skillId) {
+    /** Ingredient family consumed by an out-of-combat utility skill, if any. */
+    fun ingredientCategoryFor(skillId: String): IngredientCategory? = when (skillId) {
         SkillCatalog.MAGE_MAKE_POTION_ID -> IngredientCategory.REAGENT
         SkillCatalog.FIGHTER_CAMP_ID -> IngredientCategory.CAMP
         SkillCatalog.THIEF_REST_ID -> IngredientCategory.BEVERAGE
         SkillCatalog.ARCHER_COOKING_ID -> IngredientCategory.RAW_MEAT
         else -> null
     }
+
+    private fun categoryFor(skillId: String): IngredientCategory? = ingredientCategoryFor(skillId)
 
     private fun recoveryTargets(
         party: Party,

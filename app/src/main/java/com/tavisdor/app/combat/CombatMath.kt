@@ -16,11 +16,18 @@ import kotlin.random.Random
  *   - [resolveSpell]:  resist check on INT, then damage scaled by the
  *                      elemental triangle.
  *
- * Both share the same d6 mechanic:
- *   - Natural 6 always hits (ignores stat math).
- *   - Natural 1 always misses (ignores stat math).
- *   - Otherwise: attacker.stat + d6 must STRICTLY exceed defender.stat.
+ * Combat stat checks (melee, spells) share one die:
+ *   - Roll 1d[CHECK_DIE_SIDES] (10).
+ *   - Natural 1 always fails (ignores stat math).
+ *   - Natural 10 always succeeds and scores a critical on attacks.
+ *   - Otherwise: attacker.stat + die must STRICTLY exceed defender.stat.
  *     Ties favor the defender (dodge / resist succeeds).
+ *
+ * Criticals (natural 10 on a connecting attack):
+ *   - Physical (melee / ranged, non-spell): +[CRITICAL_DAMAGE_BONUS_PCT]% damage.
+ *   - Spells: elemental resistance drops from 50% to 25% damage taken
+ *     ([DISADVANTAGE]); weakness bonus rises from 150% to 175%
+ *     ([ADVANTAGE]). Neutral matchups are unchanged.
  *
  * INT scaling on spells uses [SPELL_INT_DIVISOR]; integer division
  * means low-INT casters add 0. Tunable from this one constant.
@@ -29,14 +36,34 @@ object CombatMath {
 
     // ----- Tuning constants -----
 
-    /** Sides on the attack die. Hard-coded at 6 per design. */
-    const val ATTACK_DIE_SIDES: Int = 6
+    /** Sides on the shared check die (1d10). */
+    const val CHECK_DIE_SIDES: Int = 10
 
-    /** Natural roll that always hits / always resists check. */
-    const val CRIT_ROLL: Int = 6
+    /** @deprecated Use [CHECK_DIE_SIDES]. */
+    const val ATTACK_DIE_SIDES: Int = CHECK_DIE_SIDES
 
-    /** Natural roll that always misses / always-resists outcome. */
+    /** Natural roll that always succeeds on a check (critical on attacks). */
+    const val CRIT_ROLL: Int = 10
+
+    /** Natural roll that always fails a check. */
     const val FUMBLE_ROLL: Int = 1
+
+    /** Bonus damage (or spell matchup %) on a natural-10 critical hit. */
+    const val CRITICAL_DAMAGE_BONUS_PCT: Int = 25
+
+    /** Roll one check die (1..[CHECK_DIE_SIDES]). */
+    fun rollCheckDie(rng: Random): Int = rng.nextInt(1, CHECK_DIE_SIDES + 1)
+
+    /**
+     * Opposed check: [attackerStat] + [roll] vs [defenderStat].
+     * Natural 1 fails; natural 10 succeeds; ties favor the defender.
+     */
+    fun checkSucceeds(attackerStat: Int, defenderStat: Int, roll: Int): Boolean =
+        when (roll) {
+            FUMBLE_ROLL -> false
+            CRIT_ROLL -> true
+            else -> attackerStat + roll > defenderStat
+        }
 
     /**
      * INT divisor for spell damage scaling.
@@ -69,13 +96,10 @@ object CombatMath {
         defenderAc: Int,
         rng: Random = Random.Default,
     ): MeleeOutcome {
-        val roll = rng.nextInt(1, ATTACK_DIE_SIDES + 1)
-        val hit = when (roll) {
-            FUMBLE_ROLL -> false
-            CRIT_ROLL -> true
-            else -> attackerDex + roll > defenderDex
-        }
-        val damage = if (hit) max(0, attackPower - defenderAc) else 0
+        val roll = rollCheckDie(rng)
+        val hit = checkSucceeds(attackerDex, defenderDex, roll)
+        val baseDamage = if (hit) max(0, attackPower - defenderAc) else 0
+        val damage = scalePhysicalDamageForCritical(baseDamage, roll)
         return MeleeOutcome(
             hit = hit,
             naturalRoll = roll,
@@ -109,15 +133,12 @@ object CombatMath {
         defenderElement: Element,
         rng: Random = Random.Default,
     ): SpellOutcome {
-        val roll = rng.nextInt(1, ATTACK_DIE_SIDES + 1)
-        val hit = when (roll) {
-            FUMBLE_ROLL -> false
-            CRIT_ROLL -> true
-            else -> attackerInt + roll > defenderInt
-        }
+        val roll = rollCheckDie(rng)
+        val hit = checkSucceeds(attackerInt, defenderInt, roll)
         val matchup = elementalMatchup(spellElement, defenderElement)
         val pre = skillDamage + (attackerInt / SPELL_INT_DIVISOR)
-        val damage = if (hit) (pre * matchup.multiplierPct) / 100 else 0
+        val multiplierPct = spellMultiplierPctForCritical(matchup, roll)
+        val damage = if (hit) (pre * multiplierPct) / 100 else 0
         return SpellOutcome(
             hit = hit,
             naturalRoll = roll,
@@ -138,7 +159,7 @@ object CombatMath {
      * party to slip away.
      *
      * Per check vs enemy E:
-     *   - Roll a d6.
+     *   - Roll a d6 (not the combat 1d10).
      *   - Natural 1 -> auto-fail (regardless of stats).
      *   - Natural 6 -> auto-succeed (regardless of stats).
      *   - Otherwise: `heroDex + heroInt + d6` must STRICTLY exceed
@@ -173,7 +194,7 @@ object CombatMath {
         val checks = ArrayList<DisengageCheck>(enemyDexInts.size)
         var allPassed = true
         for ((idx, enemyDexInt) in enemyDexInts.withIndex()) {
-            val d6 = rng.nextInt(1, ATTACK_DIE_SIDES + 1)
+            val d6 = rng.nextInt(1, DISENGAGE_DIE_SIDES + 1)
             var crowdingExtra = 0
             repeat(crowdingDicePerCheck) {
                 crowdingExtra += rng.nextInt(1, DISENGAGE_CROWDING_DIE_SIDES + 1)
@@ -181,8 +202,8 @@ object CombatMath {
             val heroSide = heroDexInt + d6
             val enemySide = enemyDexInt + crowdingExtra
             val passed = when (d6) {
-                FUMBLE_ROLL -> false
-                CRIT_ROLL -> true
+                DISENGAGE_FUMBLE_ROLL -> false
+                DISENGAGE_CRIT_ROLL -> true
                 else -> heroSide > enemySide
             }
             if (!passed) allPassed = false
@@ -197,6 +218,13 @@ object CombatMath {
         }
         return DisengageOutcome(success = allPassed, checks = checks)
     }
+
+    /** Sides on the disengage check die (1d6, separate from combat 1d10). */
+    const val DISENGAGE_DIE_SIDES: Int = 6
+
+    const val DISENGAGE_CRIT_ROLL: Int = 6
+
+    const val DISENGAGE_FUMBLE_ROLL: Int = 1
 
     /** Sides on the crowding die used by [resolveDisengage]. d3 per design. */
     const val DISENGAGE_CROWDING_DIE_SIDES: Int = 3
@@ -232,6 +260,26 @@ object CombatMath {
         if (defenderBeatsAttacker) return ElementalMatchup.DISADVANTAGE
         return ElementalMatchup.NEUTRAL
     }
+
+    /** +25% damage on a natural-10 physical hit (melee / ranged, non-spell). */
+    fun scalePhysicalDamageForCritical(baseDamage: Int, naturalRoll: Int): Int {
+        if (naturalRoll != CRIT_ROLL || baseDamage <= 0) return baseDamage
+        return (baseDamage * (100 + CRITICAL_DAMAGE_BONUS_PCT)) / 100
+    }
+
+    /**
+     * Spell damage multiplier for [matchup], boosted on a natural-10 crit:
+     * resisted (50%) -> 75%; weak (150%) -> 175%; neutral unchanged.
+     */
+    fun spellMultiplierPctForCritical(matchup: ElementalMatchup, naturalRoll: Int): Int {
+        if (naturalRoll != CRIT_ROLL) return matchup.multiplierPct
+        return when (matchup) {
+            ElementalMatchup.ADVANTAGE,
+            ElementalMatchup.DISADVANTAGE,
+            -> matchup.multiplierPct + CRITICAL_DAMAGE_BONUS_PCT
+            ElementalMatchup.NEUTRAL -> matchup.multiplierPct
+        }
+    }
 }
 
 /**
@@ -242,7 +290,7 @@ object CombatMath {
 data class MeleeOutcome(
     /** Did the swing connect? false = dodged or fumbled. */
     val hit: Boolean,
-    /** Natural d6 roll (1..6). 1 = always-miss, 6 = always-hit. */
+    /** Natural check die (1..10). 1 = fumble, 10 = critical hit. */
     val naturalRoll: Int,
     /** Damage dealt after AC subtraction. Never negative. */
     val damage: Int,

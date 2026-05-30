@@ -31,10 +31,7 @@ object HeroEquipment {
         if (!weapon.type.canBeUsedBy(hero.heroClass)) return EquipResult.NOT_USABLE_BY_HERO
 
         val inv = party.inventory
-        val bagIndex = inv.indexOfWeapon(weapon)
-        if (bagIndex < 0) return EquipResult.NOT_IN_INVENTORY
-
-        val fromBag = inv.removeWeaponAt(bagIndex) ?: return EquipResult.NOT_IN_INVENTORY
+        val fromBag = inv.removeFirstWeapon(weapon) ?: return EquipResult.NOT_IN_INVENTORY
         val previous = when (slot) {
             WeaponSlot.PRIMARY -> hero.weapon1
             WeaponSlot.OFF_HAND -> hero.weapon2

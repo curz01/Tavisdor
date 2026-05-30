@@ -1,7 +1,7 @@
 package com.tavisdor.app.ui
 
-import android.app.AlertDialog
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.util.TypedValue
 import android.view.View
@@ -19,7 +19,6 @@ import com.tavisdor.app.party.defensiveSkillsForAssign
 import com.tavisdor.app.party.offensiveSkillsForAssign
 import com.tavisdor.app.party.passiveSkillsForAssign
 import com.tavisdor.app.skills.Skill
-import com.tavisdor.app.skills.SkillCastType
 import com.tavisdor.app.skills.SkillCatalog
 
 /**
@@ -45,6 +44,7 @@ class HeroSkillAssignScreen(
     private val tvHeader: TextView = root.findViewById(R.id.tvHeroSkillAssignHeader)
     private val tvMana: TextView = root.findViewById(R.id.tvHeroSkillAssignMana)
     private val btnWait: ImageButton = root.findViewById(R.id.btnHeroSkillAssignWait)
+    private val btnSkillbook: ImageButton = root.findViewById(R.id.btnHeroSkillAssignSkillbook)
     private val btnClose: MaterialButton = root.findViewById(R.id.btnHeroSkillAssignClose)
     private val btnConfirm: MaterialButton = root.findViewById(R.id.btnHeroSkillAssignConfirm)
     private val listOffensive: LinearLayout = root.findViewById(R.id.heroSkillAssignOffensiveList)
@@ -60,13 +60,27 @@ class HeroSkillAssignScreen(
 
     init {
         panelHost.setOnClickListener { /* consume */ }
-        btnWait.setOnClickListener { onWaitTapped?.invoke() }
+        btnWait.setOnClickListener {
+            if (btnWait.isEnabled) onWaitTapped?.invoke()
+        }
+        btnSkillbook.setOnClickListener { openSkillBook() }
         btnClose.setOnClickListener { commitAndDismiss() }
         btnConfirm.setOnClickListener { commitAndDismiss() }
+        loadWaitIcon()
+        loadSkillbookIcon()
     }
 
-    fun setWaitVisible(visible: Boolean) {
-        btnWait.visibility = if (visible) View.VISIBLE else View.GONE
+    /** Wait is always shown bottom-left; dimmed when not in combat or not activatable. */
+    fun updateWaitButton() {
+        btnWait.visibility = View.VISIBLE
+        val controller = game.combatController
+        val canWait = game.combat != null &&
+            slot >= 0 &&
+            controller != null &&
+            controller.awaitingHeroInput &&
+            controller.canHeroWait(slot)
+        btnWait.isEnabled = canWait
+        btnWait.alpha = if (canWait) 1f else 0.4f
     }
 
     val isVisible: Boolean get() = root.visibility == View.VISIBLE
@@ -94,7 +108,29 @@ class HeroSkillAssignScreen(
         }
 
         refreshSelectionHighlight()
+        updateWaitButton()
         root.visibility = View.VISIBLE
+    }
+
+    private fun loadWaitIcon() {
+        runCatching {
+            ctx.assets.open("sprites/wait.png").use { stream ->
+                BitmapFactory.decodeStream(stream)?.let { btnWait.setImageBitmap(it) }
+            }
+        }
+    }
+
+    private fun loadSkillbookIcon() {
+        runCatching {
+            ctx.assets.open("sprites/skillbook.png").use { stream ->
+                BitmapFactory.decodeStream(stream)?.let { btnSkillbook.setImageBitmap(it) }
+            }
+        }
+    }
+
+    private fun openSkillBook() {
+        val h = hero ?: return
+        HeroSkillBookDialog(ctx).show(h)
     }
 
     fun hide() {
@@ -139,22 +175,20 @@ class HeroSkillAssignScreen(
             orientation = LinearLayout.VERTICAL
             setPadding(padH, padV, padH, padV)
             layoutParams = rowLayoutParams()
-            isClickable = true
-            isFocusable = true
-            val outValue = TypedValue()
-            ctx.theme.resolveAttribute(
-                android.R.attr.selectableItemBackground, outValue, true,
-            )
-            foreground = AppCompatResources.getDrawable(ctx, outValue.resourceId)
-            setOnClickListener { onSkillTapped(skill, assignable) }
+            if (assignable) {
+                isClickable = true
+                isFocusable = true
+                val outValue = TypedValue()
+                ctx.theme.resolveAttribute(
+                    android.R.attr.selectableItemBackground, outValue, true,
+                )
+                foreground = AppCompatResources.getDrawable(ctx, outValue.resourceId)
+                setOnClickListener { onSkillTapped(skill) }
+            }
         }
 
         row.addView(metaTextView(skill.displayName, bold = true, nameColor = true))
         row.addView(metaTextView(formatStatsLine(skill)))
-
-        formatTagLine(skill)?.let { tag ->
-            row.addView(metaTextView(tag))
-        }
 
         return row
     }
@@ -217,18 +251,7 @@ class HeroSkillAssignScreen(
         return game.party?.inventory?.hasIngredient(shard) == true
     }
 
-    private fun formatTagLine(skill: Skill): String? =
-        if (skill.castType == SkillCastType.PASSIVE) {
-            "[${ctx.getString(R.string.hero_skill_passive_tag)}]"
-        } else {
-            null
-        }
-
-    private fun onSkillTapped(skill: Skill, assignable: Boolean) {
-        if (!assignable) {
-            showPassiveInfoDialog(skill)
-            return
-        }
+    private fun onSkillTapped(skill: Skill) {
         if (game.isSkillStaged(slot, skill)) {
             game.unstageSkill(slot, skill)
             refreshSelectionHighlight()
@@ -253,21 +276,6 @@ class HeroSkillAssignScreen(
         }
         refreshSelectionHighlight()
         onSelectionChanged?.invoke()
-    }
-
-    private fun showPassiveInfoDialog(skill: Skill) {
-        val body = buildString {
-            if (skill.description.isNotBlank()) {
-                append(skill.description)
-                append("\n\n")
-            }
-            append(ctx.getString(R.string.skill_picker_passive_locked))
-        }
-        AlertDialog.Builder(ctx)
-            .setTitle(ctx.getString(R.string.hero_skill_assign_confirm_title, skill.displayName))
-            .setMessage(body)
-            .setPositiveButton(R.string.hero_skill_assign_passive_ok, null)
-            .show()
     }
 
     private fun refreshSelectionHighlight() {

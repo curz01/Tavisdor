@@ -39,6 +39,7 @@ data class Enemy(
      * Floor-lock ids this enemy drops on defeat. Assigned at floor gen
      * for enemies reachable without crossing a locked door.
      */
+    /** At most one dungeon key per enemy; first entry is the drop on defeat. */
     val floorKeyLockIds: MutableList<String> = mutableListOf(),
 ) {
     // ----- Forwarded authoring fields (convenience accessors) -----

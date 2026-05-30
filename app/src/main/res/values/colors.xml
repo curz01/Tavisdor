@@ -33,8 +33,8 @@
     <color name="skill_picker_free_tag">#FFE6C12C</color>
     <color name="skill_picker_passive_tag">#FF8C7A52</color>
     <color name="hero_skill_assign_divider">#FF8C7A52</color>
-    <color name="hero_skill_assign_confirm_bg">#FF3A2568</color>
-    <color name="hero_skill_assign_confirm_ripple">#66B8A0D8</color>
+    <color name="hero_skill_assign_confirm_bg">#FF4A8C55</color>
+    <color name="hero_skill_assign_confirm_ripple">#6652B06A</color>
 
     <!-- Items panel: shares the scrim + parchment palette with the
          hero detail overlay so the two modals read as the same
@@ -48,26 +48,31 @@
     <color name="items_panel_gold">#FFE6C12C</color>
     <color name="items_panel_hint">#FFC9BC97</color>
     <color name="items_panel_row_text">#FFEFE7D0</color>
+    <color name="items_panel_stack_count">#FFE6C12C</color>
 
-    <!-- Inventory side tabs (binder-style dividers on the panel edge). -->
-    <color name="inventory_tab_pickup">#FF3D8B52</color>
-    <color name="inventory_tab_pickup_selected">#FF52B06A</color>
+    <!-- Inventory top tabs (Loot green / Equip blue / Mat tan). -->
+    <color name="inventory_tab_pickup">#FF3D7345</color>
+    <color name="inventory_tab_pickup_selected">#FF4A8C55</color>
     <color name="inventory_tab_pickup_border">#FF1E4F32</color>
-    <color name="inventory_tab_equipment">#FF3D5F9E</color>
-    <color name="inventory_tab_equipment_selected">#FF5A82C8</color>
+    <color name="inventory_tab_equipment">#FF2F4A78</color>
+    <color name="inventory_tab_equipment_selected">#FF3B5998</color>
     <color name="inventory_tab_equipment_border">#FF1E3358</color>
-    <color name="inventory_tab_ingredients">#FFC47A28</color>
-    <color name="inventory_tab_ingredients_selected">#FFE89A42</color>
+    <color name="inventory_tab_ingredients">#FF9E6530</color>
+    <color name="inventory_tab_ingredients_selected">#FFD9934D</color>
     <color name="inventory_tab_ingredients_border">#FF6B4210</color>
     <color name="inventory_tab_label">#FF1A1610</color>
+    <color name="inventory_tab_body_fill">#FF0F0F0F</color>
 
-    <!-- Inventory grid cell fills (borders use [inventory_tab_*] colours). -->
-    <color name="inventory_slot_pickup_fill">#FF1A3326</color>
-    <color name="inventory_slot_pickup_fill_empty">#FF101A14</color>
-    <color name="inventory_slot_equipment_fill">#FF1A2840</color>
-    <color name="inventory_slot_equipment_fill_empty">#FF101820</color>
-    <color name="inventory_slot_materials_fill">#FF332018</color>
-    <color name="inventory_slot_materials_fill_empty">#FF1A120C</color>
+    <!-- Slot interiors (accent border comes from the active tab). -->
+    <color name="inventory_slot_fill">#FF2D1B14</color>
+    <color name="inventory_slot_fill_empty">#FF1A100C</color>
+    <!-- Legacy per-tab fills (unused; kept so old drawables still resolve). -->
+    <color name="inventory_slot_pickup_fill">@color/inventory_slot_fill</color>
+    <color name="inventory_slot_pickup_fill_empty">@color/inventory_slot_fill_empty</color>
+    <color name="inventory_slot_equipment_fill">@color/inventory_slot_fill</color>
+    <color name="inventory_slot_equipment_fill_empty">@color/inventory_slot_fill_empty</color>
+    <color name="inventory_slot_materials_fill">@color/inventory_slot_fill</color>
+    <color name="inventory_slot_materials_fill_empty">@color/inventory_slot_fill_empty</color>
 
     <!-- Combat target-picker overlay (dim out-of-range, tint in-range). -->
     <color name="combat_target_dim">#AA000000</color>

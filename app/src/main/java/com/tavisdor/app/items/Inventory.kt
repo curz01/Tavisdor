@@ -9,11 +9,8 @@ import com.tavisdor.app.party.Party
  *   1. [weapons]        - spare melee weapons + future ranged /
  *                         armor entries. The currently-wielded
  *                         weapon still lives on [com.tavisdor.app.party.Hero.weapon1].
- *   2. [ingredients]    - crafting / consumable ingredient stack.
- *                         Duplicates are stored as repeated entries
- *                         rather than a `Map<Ingredient, Int>` so
- *                         the UI can render them as individual
- *                         rows (matches the per-row pickup model).
+ *   2. [ingredients]    - crafting / consumable ingredients. Duplicate
+ *                         kinds stack in one grid cell (count badge).
  *   3. [pendingPickup]  - drops queued for the player to either
  *                         pick up or discard via the items panel.
  *                         Populated by combat at victory and (later)
@@ -89,12 +86,14 @@ class Inventory {
 
     val maxSlotsPerTab: Int get() = InventoryCapacity.SLOTS_PER_TAB
 
-    val usedEquipmentSlots: Int get() = _weapons.size
+    val usedEquipmentSlots: Int
+        get() = InventoryStacks.stackCount(_weapons) { a, b -> a == b }
 
     val usedMaterialsSlots: Int
-        get() = _ingredients.size + _potions.size + _floorKeys.size
+        get() = ingredientStackCount() + potionStackCount() + floorKeyStackCount()
 
-    val usedPickupSlots: Int get() = _pendingPickup.size
+    val usedPickupSlots: Int
+        get() = InventoryStacks.stackCount(_pendingPickup, InventoryStacks::lootDropsMatch)
 
     val freeEquipmentSlots: Int get() = (maxSlotsPerTab - usedEquipmentSlots).coerceAtLeast(0)
 
@@ -103,16 +102,30 @@ class Inventory {
     val freePickupSlots: Int
         get() = (maxSlotsPerTab - usedPickupSlots).coerceAtLeast(0)
 
-    /** Index of the first bag row matching [weapon] (data-class equality). */
-    fun indexOfWeapon(weapon: Weapon): Int =
-        _weapons.indexOfFirst { it == weapon }
+    fun weaponGridSlots(): List<InventoryGridSlot> =
+        InventoryStacks.slots(_weapons, label = { it.displayName }) { a, b -> a == b }
 
-    /** Index of the first bag row with this display name (stack pick). */
-    fun indexOfWeaponByDisplayName(displayName: String): Int =
-        _weapons.indexOfFirst { it.displayName == displayName }
+    /** Representative weapon for a Gear-tab stack index. */
+    fun weaponAtStackIndex(stackIndex: Int): Weapon? {
+        val index = InventoryStacks.backingIndexForStack(_weapons, stackIndex) { a, b -> a == b }
+        return index?.let { _weapons[it] }
+    }
 
-    /** Removes and returns the weapon at [index], or null if out of range. */
-    fun removeWeaponAt(index: Int): Weapon? {
+    /** Removes one instance from the stack at [stackIndex]. */
+    fun removeOneWeaponFromStack(stackIndex: Int): Weapon? {
+        val index = InventoryStacks.backingIndexForStack(_weapons, stackIndex) { a, b -> a == b }
+            ?: return null
+        return removeWeaponAtBackingIndex(index)
+    }
+
+    /** Removes and returns one copy of [weapon], or null when none remain. */
+    fun removeFirstWeapon(weapon: Weapon): Weapon? {
+        val index = _weapons.indexOfFirst { it == weapon }
+        if (index < 0) return null
+        return removeWeaponAtBackingIndex(index)
+    }
+
+    private fun removeWeaponAtBackingIndex(index: Int): Weapon? {
         if (index !in _weapons.indices) return null
         val removed = _weapons.removeAt(index)
         notifyChanged()
@@ -121,7 +134,8 @@ class Inventory {
 
     /** Adds a spare weapon to the Gear stash. Returns false when full. */
     fun addWeapon(weapon: Weapon): Boolean {
-        if (usedEquipmentSlots >= maxSlotsPerTab) return false
+        val newStack = _weapons.none { it == weapon }
+        if (newStack && usedEquipmentSlots >= maxSlotsPerTab) return false
         _weapons += weapon
         notifyChanged()
         return true
@@ -147,14 +161,15 @@ class Inventory {
     }
 
     fun addIngredient(ingredient: Ingredient): Boolean {
-        if (usedMaterialsSlots >= maxSlotsPerTab) return false
+        if (!hasIngredient(ingredient) && usedMaterialsSlots >= maxSlotsPerTab) return false
         _ingredients += ingredient
         notifyChanged()
         return true
     }
 
     fun addPotion(potion: Potion): Boolean {
-        if (usedMaterialsSlots >= maxSlotsPerTab) return false
+        val newStack = _potions.none { it.ingredientPotency == potion.ingredientPotency }
+        if (newStack && usedMaterialsSlots >= maxSlotsPerTab) return false
         _potions += potion
         notifyChanged()
         return true
@@ -185,23 +200,46 @@ class Inventory {
     }
 
     fun addFloorKey(key: FloorKey): Boolean {
-        if (usedMaterialsSlots >= maxSlotsPerTab) return false
+        val newStack = _floorKeys.none { it.floorDepth == key.floorDepth && it.lockId == key.lockId }
+        if (newStack && usedMaterialsSlots >= maxSlotsPerTab) return false
         _floorKeys += key
         notifyChanged()
         return true
     }
 
+    fun materialGridSlots(): List<InventoryGridSlot> = buildList {
+        addAll(
+            InventoryStacks.slots(_ingredients, label = { it.displayName }) { a, b -> a == b },
+        )
+        addAll(
+            InventoryStacks.slots(_potions, label = { it.displayName }) { a, b ->
+                a.ingredientPotency == b.ingredientPotency
+            },
+        )
+        addAll(
+            InventoryStacks.slots(_floorKeys, label = { it.displayName() }) { a, b -> a == b },
+        )
+    }
+
+    fun pickupGridSlots(label: (LootDrop) -> String): List<InventoryGridSlot> =
+        InventoryStacks.lootDropSlots(_pendingPickup, label)
+
     fun canQueuePickup(drop: LootDrop): Boolean =
-        freePickupSlots > 0
+        pendingPickupStackIndex(drop) >= 0 || freePickupSlots > 0
 
     /** Deposits one loot drop from a chest (or other direct source) into the bag. */
     fun tryDepositLoot(drop: LootDrop, party: Party): Boolean = depositPickup(drop, party)
 
     fun canDeposit(drop: LootDrop, party: Party? = null): Boolean = when (drop) {
-        is LootDrop.MeleeWeaponDrop -> freeEquipmentSlots > 0
-        is LootDrop.IngredientDrop,
-        is LootDrop.FloorKeyDrop,
-        -> freeMaterialsSlots > 0
+        is LootDrop.MeleeWeaponDrop -> {
+            val weapon = weaponFromDrop(drop)
+            _weapons.any { it == weapon } || freeEquipmentSlots > 0
+        }
+        is LootDrop.IngredientDrop ->
+            hasIngredient(drop.ingredient) || freeMaterialsSlots > 0
+        is LootDrop.FloorKeyDrop ->
+            _floorKeys.any { it.floorDepth == drop.key.floorDepth && it.lockId == drop.key.lockId } ||
+                freeMaterialsSlots > 0
         is LootDrop.ArmorDrop -> party?.heroes?.any { it.isAlive && it.armor == null } == true
     }
 
@@ -230,12 +268,20 @@ class Inventory {
      * [pendingPickup]. Returns the picked-up drop, or null when
      * [index] is out of range (e.g. stale UI tap after a race).
      */
-    fun pickUpAt(index: Int, party: Party? = null): LootDrop? {
-        val drop = _pendingPickup.getOrNull(index) ?: return null
+    fun pickUpAt(stackIndex: Int, party: Party? = null): LootDrop? {
+        val backing = InventoryStacks.lootDropBackingIndex(_pendingPickup, stackIndex)
+            ?: return null
+        val drop = _pendingPickup.getOrNull(backing) ?: return null
         if (!depositPickup(drop, party)) return null
-        _pendingPickup.removeAt(index)
+        _pendingPickup.removeAt(backing)
         notifyChanged()
         return drop
+    }
+
+    fun pendingPickupAtStack(stackIndex: Int): LootDrop? {
+        val backing = InventoryStacks.lootDropBackingIndex(_pendingPickup, stackIndex)
+            ?: return null
+        return _pendingPickup.getOrNull(backing)
     }
 
     /**
@@ -303,6 +349,43 @@ class Inventory {
      * melee weapons today. Bow / ranged drops will need their
      * own branch when those entries are authored.
      */
+    private fun ingredientStackCount(): Int =
+        InventoryStacks.stackCount(_ingredients) { a, b -> a == b }
+
+    private fun potionStackCount(): Int =
+        InventoryStacks.stackCount(_potions) { a, b -> a.ingredientPotency == b.ingredientPotency }
+
+    private fun floorKeyStackCount(): Int =
+        InventoryStacks.stackCount(_floorKeys) { a, b -> a == b }
+
+    private fun pendingPickupStackIndex(drop: LootDrop): Int {
+        val stacks = InventoryStacks.lootDropSlots(_pendingPickup) { "" }
+        for (i in stacks.indices) {
+            val backing = InventoryStacks.lootDropBackingIndex(_pendingPickup, i) ?: continue
+            val existing = _pendingPickup.getOrNull(backing) ?: continue
+            if (InventoryStacks.lootDropsMatch(existing, drop)) return i
+        }
+        return -1
+    }
+
+    fun potionStackIndexRange(): IntRange {
+        val start = ingredientStackCount()
+        val end = start + potionStackCount()
+        return start until end
+    }
+
+    fun consumePotionAtStackIndex(stackIndex: Int): Potion? {
+        if (stackIndex !in potionStackIndexRange()) return null
+        val local = stackIndex - ingredientStackCount()
+        val backing = InventoryStacks.backingIndexForStack(_potions, local) { a, b ->
+            a.ingredientPotency == b.ingredientPotency
+        } ?: return null
+        if (backing !in _potions.indices) return null
+        val removed = _potions.removeAt(backing)
+        notifyChanged()
+        return removed
+    }
+
     private fun weaponFromDrop(drop: LootDrop.MeleeWeaponDrop): Weapon {
         val type = drop.weapon
         val tier = drop.tier

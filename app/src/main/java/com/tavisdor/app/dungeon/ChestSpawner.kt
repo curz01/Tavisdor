@@ -6,11 +6,24 @@ import kotlin.random.Random
 /**
  * Places treasure chests on random room placements after the floor
  * layout is fully generated. Hallways and the starting room are excluded.
+ *
+ * Spawn tiles must have at least [MIN_OPEN_ACCESS_SIDES] cardinal neighbors
+ * the party can stand on (avoids hallway mouths and tight corners) and sit
+ * at least one walkable tile away from every door.
  */
 object ChestSpawner {
 
     private const val TAG = "ChestSpawner"
     private const val CHEST_LOCK_CHANCE = 0.50f
+    private const val MIN_OPEN_ACCESS_SIDES = 3
+    private const val MIN_MANHATTAN_DISTANCE_FROM_DOOR = 2
+
+    private val CARDINAL_OFFSETS = arrayOf(
+        Cell(0, -1),
+        Cell(0, 1),
+        Cell(-1, 0),
+        Cell(1, 0),
+    )
 
     fun spawn(floor: Floor, rng: Random) {
         val count = rollChestCount(floor.depth, rng)
@@ -22,9 +35,10 @@ object ChestSpawner {
             return
         }
 
-        val placements = eligible.shuffled(rng).take(count)
+        val placements = eligible.shuffled(rng)
         var placed = 0
         for (placementIdx in placements) {
+            if (placed >= count) break
             val cell = floor.pickRandomSpawnCell(placementIdx, rng) ?: continue
             val locked = rng.nextFloat() < CHEST_LOCK_CHANCE
             floor.placeChest(cell = cell, locked = locked)
@@ -49,11 +63,8 @@ object ChestSpawner {
             allowsTreasureChestInPlacement(idx) && spawnCellsInPlacement(idx).isNotEmpty()
         }
 
-    private fun Floor.pickRandomSpawnCell(placementIndex: Int, rng: Random): Cell? {
-        val candidates = spawnCellsInPlacement(placementIndex)
-        if (candidates.isEmpty()) return null
-        return candidates.random(rng)
-    }
+    private fun Floor.pickRandomSpawnCell(placementIndex: Int, rng: Random): Cell? =
+        spawnCellsInPlacement(placementIndex).shuffled(rng).firstOrNull()
 
     private fun Floor.spawnCellsInPlacement(placementIndex: Int): List<Cell> {
         val cells = cellsInPlacement(placementIndex)
@@ -64,7 +75,34 @@ object ChestSpawner {
                 !isStairsUp(c) &&
                 chestAt(c) == null &&
                 enemyAt(c) == null &&
-                c != partyCell
+                c != partyCell &&
+                isAtLeastOneCellFromAnyDoor(c) &&
+                openCardinalAccessCount(c) >= MIN_OPEN_ACCESS_SIDES
         }
+    }
+
+    /** True when [cell] is a floor tile the party can stand on beside a chest. */
+    private fun Floor.isOpenAccessNeighbor(cell: Cell): Boolean {
+        if (cell !in floorCells) return false
+        if (isDoor(cell)) return false
+        if (isStaircase(cell) || isStairsUp(cell)) return false
+        if (chestAt(cell) != null) return false
+        if (enemyAt(cell) != null) return false
+        return true
+    }
+
+    private fun Floor.openCardinalAccessCount(center: Cell): Int =
+        CARDINAL_OFFSETS.count { offset ->
+            isOpenAccessNeighbor(Cell(center.x + offset.x, center.y + offset.y))
+        }
+
+    /** At least one walkable tile between [cell] and every door on the floor. */
+    private fun Floor.isAtLeastOneCellFromAnyDoor(cell: Cell): Boolean {
+        for (doorCell in doors.keys) {
+            val dist = kotlin.math.abs(cell.x - doorCell.x) +
+                kotlin.math.abs(cell.y - doorCell.y)
+            if (dist < MIN_MANHATTAN_DISTANCE_FROM_DOOR) return false
+        }
+        return true
     }
 }
