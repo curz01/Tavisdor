@@ -29,6 +29,8 @@ import com.tavisdor.app.render.Camera
 import com.tavisdor.app.render.PartyLungeGateway
 import com.tavisdor.app.render.LockUnlockFxPlayer
 import com.tavisdor.app.render.WeaponAttackFxPlayer
+import com.tavisdor.app.render.BatStrikeFxGateway
+import com.tavisdor.app.render.BatStrikeFxPlayer
 import com.tavisdor.app.render.WeaponFxGateway
 import com.tavisdor.app.render.DefenderSpellFxGateway
 import com.tavisdor.app.render.EarthIImpactFxPlayer
@@ -90,6 +92,7 @@ class Game(
 
     /** Attack weapon sprites played over the dungeon grid during combat. */
     private val weaponAttackFxPlayer = WeaponAttackFxPlayer(context.assets)
+    private val batStrikeFxPlayer = BatStrikeFxPlayer(context.assets)
     private val earthIImpactFxPlayer = EarthIImpactFxPlayer(context.assets)
     private val earthIIImpactFxPlayer = EarthIIImpactFxPlayer(context.assets)
     private val earthIIIImpactFxPlayer = EarthIIIImpactFxPlayer(context.assets)
@@ -136,6 +139,9 @@ class Game(
     /** Fires when party-wide Hide activates or is cleared (hero panel icons). */
     var onPartyHideChanged: (() -> Unit)? = null
 
+    /** Fired when a hero's Evasive Maneuver buff starts or expires (status icon). */
+    var onEvasiveManeuverChanged: (() -> Unit)? = null
+
     val isWeaponFxPlaying: Boolean
         get() = weaponAttackFxPlayer.isActive
 
@@ -146,6 +152,35 @@ class Game(
         override val isPlaying: Boolean
             get() = weaponAttackFxPlayer.isActive
     }
+
+    private val batStrikeFxGateway: BatStrikeFxGateway = object : BatStrikeFxGateway {
+        override fun start(enemy: Enemy, partyCell: Cell, onComplete: () -> Unit): Boolean =
+            batStrikeFxPlayer.start(enemy, partyCell, onComplete)
+
+        override val isPlaying: Boolean
+            get() = batStrikeFxPlayer.isActive
+
+        override fun targets(enemy: Enemy): Boolean =
+            batStrikeFxPlayer.targets(enemy)
+
+        override fun spriteAssetOverride(enemy: Enemy): String? =
+            batStrikeFxPlayer.spriteAssetOverride(enemy)
+
+        override fun enemyScreenOffsetPx(enemy: Enemy, cellPx: Float): Pair<Float, Float> =
+            batStrikeFxPlayer.enemyScreenOffsetPx(enemy, cellPx)
+
+        override fun partyShakeOffsetPx(cellPx: Float): Pair<Float, Float> =
+            batStrikeFxPlayer.partyShakeOffsetPx(cellPx)
+    }
+
+    fun batStrikeSpriteAssetOverride(enemy: Enemy): String? =
+        batStrikeFxPlayer.spriteAssetOverride(enemy)
+
+    fun batStrikeEnemyScreenOffsetPx(enemy: Enemy, cellPx: Float): Pair<Float, Float> =
+        batStrikeFxPlayer.enemyScreenOffsetPx(enemy, cellPx)
+
+    fun batStrikePartyShakeOffsetPx(cellPx: Float): Pair<Float, Float> =
+        batStrikeFxPlayer.partyShakeOffsetPx(cellPx)
 
     val healPortraitFxGateway: HealPortraitFxGateway = object : HealPortraitFxGateway {
         override val isPlaying: Boolean
@@ -298,6 +333,7 @@ class Game(
 
     private fun isCombatVisualFxActive(): Boolean =
         weaponAttackFxPlayer.isActive ||
+            batStrikeFxPlayer.isActive ||
             earthIImpactFxPlayer.isActive ||
             earthIIImpactFxPlayer.isActive ||
             earthIIIImpactFxPlayer.isActive ||
@@ -313,6 +349,7 @@ class Game(
      * Hides the combat_target marker so it does not overlap the attack animation.
      */
     fun isActionAnimationTargeting(enemy: Enemy): Boolean {
+        if (batStrikeFxPlayer.targets(enemy)) return true
         if (weaponAttackFxPlayer.isActive) {
             val req = weaponAttackFxPlayer.playbackRequest
             if (req != null && req.defenderCell == enemy.cell) return true
@@ -401,6 +438,14 @@ class Game(
      * visibility and bind the strip to the new fight.
      */
     var onCombatChanged: ((Combat?) -> Unit)? = null
+
+    /**
+     * Fired when the acting hero or hero-input readiness changes
+     * (turn handoff, stale attack FX cleared). MainActivity uses
+     * this to refresh the skill panel Wait button without waiting
+     * for a portrait re-tap.
+     */
+    var onCombatHeroInputChanged: (() -> Unit)? = null
 
     /**
      * Fired whenever the party lands on a new dungeon floor
@@ -520,6 +565,9 @@ class Game(
 
     fun isHeroWaiting(slot: Int): Boolean = slot in heroesWaitingThisRound
 
+    fun isEvasiveManeuverActive(slot: Int): Boolean =
+        combatController?.isEvasiveManeuverActive(slot) == true
+
     /**
      * Fired when the player taps a valid enemy cell during target selection.
      * MainActivity commits the staged combat action here.
@@ -542,6 +590,7 @@ class Game(
         combat = next
         combatController = null
         weaponAttackFxPlayer.cancel()
+        batStrikeFxPlayer.cancel()
         earthIImpactFxPlayer.cancel()
         earthIIImpactFxPlayer.cancel()
         earthIIIImpactFxPlayer.cancel()
@@ -595,8 +644,11 @@ class Game(
                         if (pending != null && slot != pending.heroSlot) {
                             endCombatTargetSelection()
                         }
+                        onCombatHeroInputChanged?.invoke()
                     },
+                    onHeroInputChanged = { onCombatHeroInputChanged?.invoke() },
                     weaponFx = weaponFxGateway,
+                    batStrikeFx = batStrikeFxGateway,
                     defenderSpellFx = defenderSpellFxGateway,
                     healPortraitFx = healPortraitFxGateway,
                     partyLunge = partyLungeGateway,
@@ -605,6 +657,7 @@ class Game(
                     breakPartyHideFromHeroAction = ::breakPartyHideFromHeroAction,
                     breakPartyHideFromHeroTurn = ::breakPartyHideFromHeroTurn,
                     isPartyHidden = { isPartyHidden },
+                    onEvasiveManeuverChanged = { onEvasiveManeuverChanged?.invoke() },
                 )
             }
             // Auto-select the first living enemy so the hate icons
@@ -665,9 +718,10 @@ class Game(
         val f = floor ?: return true
         if (cell !in f.floorCells) return true
 
+        val caster = party?.heroes?.getOrNull(selection.heroSlot)
         val enemy = CombatTargeting.livingEnemyAt(f, cell)
         if (enemy != null &&
-            CombatTargeting.isTargetableEnemyCell(f, f.partyCell, selection.skill, cell)
+            CombatTargeting.isTargetableEnemyCell(f, f.partyCell, selection.skill, cell, caster)
         ) {
             setSelectedEnemy(enemy)
             onCombatTargetConfirmed?.invoke(selection.heroSlot, enemy)
@@ -699,7 +753,7 @@ class Game(
         if (!caster.isAlive) return false
         val main = selectedSkillFor(slot) ?: return false
         if (projectedStagedMpCost(slot) > caster.mp) return false
-        if (!CombatTargeting.isTargetableEnemyCell(f, f.partyCell, main, target.cell)) {
+        if (!CombatTargeting.isTargetableEnemyCell(f, f.partyCell, main, target.cell, caster)) {
             return false
         }
 
@@ -1088,6 +1142,7 @@ class Game(
 
     private fun applyUtilityTestSetup() {
         grantUtilityTestIngredients()
+        grantTestElementalShards()
         setPartyHalfHpMpForTesting()
     }
 
@@ -1104,6 +1159,20 @@ class Game(
             Ingredient.RAW_RABBIT,
         ).forEach { ing ->
             if (!inv.hasIngredient(ing)) inv.addIngredient(ing)
+        }
+    }
+
+    /**
+     * Ensures the party has [DebugConfig.TEST_ELEMENTAL_SHARDS_EACH] of
+     * each potency-1 shard (Flame / Stone / Wind / Hydro) for arrow and
+     * other shard-gated skills.
+     */
+    fun grantTestElementalShards() {
+        val inv = party?.inventory ?: return
+        val target = DebugConfig.TEST_ELEMENTAL_SHARDS_EACH
+        Ingredient.elementalAtPotency(Ingredient.MIN_POTENCY).forEach { shard ->
+            val need = (target - inv.countOf(shard)).coerceAtLeast(0)
+            repeat(need) { inv.addIngredient(shard) }
         }
     }
 
@@ -1137,6 +1206,8 @@ class Game(
      */
     fun breakPartyHideFromHeroAction(skill: Skill?) {
         if (!isPartyHidden) return
+        // Ambush strikes from concealment keep Hide; other actions still reveal the party.
+        if (skill?.id == SkillCatalog.BASIC_ATTACK_ID) return
         val breaks = skill == null || skill.costsAction
         if (breaks) clearPartyHide()
     }
@@ -1441,6 +1512,20 @@ class Game(
      * ever swings back to runtime tap-to-extend.
      */
     fun canExtendAt(@Suppress("UNUSED_PARAMETER") cell: Cell): Boolean = false
+
+    /**
+     * After enough rooms are revealed, stitches the reserved `end_*`
+     * template onto the deepest open connector ([FloorGenerator] leaves
+     * that connector uncapped until this runs).
+     */
+    private fun maybePlacePendingStairsDown(f: Floor) {
+        if (!f.stairPlacementPending) return
+        val endTiles = templates.rooms.filter { it.isEnd }
+        if (endTiles.isEmpty()) return
+        val hallTiles = templates.rooms.filter { it.isHall }
+        val rng = Random(f.seed xor 0x535441495253L)
+        f.tryPlacePendingStairsDown(endTiles, hallTiles, rng)
+    }
 
     // ---- Auto-move API ----
 
@@ -1804,6 +1889,7 @@ class Game(
         // Fog of war reveal lives inside recordVisited too via the
         // one-room-ahead lookahead.
         f.recordVisited(next)
+        maybePlacePendingStairsDown(f)
         pruneSelectedEnemyIfHidden()
         if (cameraFollowParty) {
             camera.centerOn(next.x, next.y)
@@ -2053,7 +2139,12 @@ class Game(
                 tier = w.tier,
                 attackBonus = w.attackBonus,
                 range = w.range,
+                plusLevel = w.plusLevel,
+                suffixes = w.suffixes,
             )
+        }
+        val armorSaves = p.inventory.armor.map { a ->
+            com.tavisdor.app.save.ArmorSaveData(a.type, a.slot, a.plusLevel, a.suffixes)
         }
         return SaveData(
             schemaVersion = SaveData.CURRENT_SCHEMA,
@@ -2064,6 +2155,7 @@ class Game(
             inventoryWeapons = weaponSaves,
             inventoryIngredients = p.inventory.ingredients,
             inventoryPotions = p.inventory.potions,
+            inventoryArmor = armorSaves,
         )
     }
 
@@ -2086,6 +2178,7 @@ class Game(
             val deltaMs = (dtSec * 1000f).toLong().coerceAtLeast(0L)
             var redraw = controller.tick(deltaMs)
             weaponAttackFxPlayer.tick(deltaMs)
+            batStrikeFxPlayer.tick(deltaMs)
             earthIImpactFxPlayer.tick(deltaMs)
             earthIIImpactFxPlayer.tick(deltaMs)
             earthIIIImpactFxPlayer.tick(deltaMs)

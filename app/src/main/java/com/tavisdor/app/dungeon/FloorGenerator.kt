@@ -29,10 +29,9 @@ import kotlin.random.Random
  *     Loop until the room budget is filled (start + room/sp/boss
  *     placements) MINUS 1 (we reserve the last slot for the
  *     stairs-down room).
- *  3. Designated stairs-down: find the open connector farthest from
- *     the entrance by BFS distance, prepend a hallway if the
- *     chosen connector is at depth 0, then stitch an `end_*`
- *     template there.
+ *  3. Reserve the open connector farthest from the entrance for the
+ *     stairs-down `end_*` room (placed at runtime once enough rooms
+ *     have been revealed; see [Floor.staircaseTemplateAllowed]).
  *  4. Cap every remaining open connector with an `end_room_tile`
  *     so the dungeon ships fully sealed - no runtime tap-to-extend.
  *
@@ -97,11 +96,15 @@ object FloorGenerator {
         // ---- 1. Entrance ----
         val entrance = pickEntrance(library, rng)
         val floor = Floor.withEntrance(depth, seed, entrance, rng)
+        val stairsRequired = Floor.staircaseRoomThresholdForFloor(depth, seed)
+        floor.setStaircaseRoomsRequired(stairsRequired)
         Log.d(
             TAG,
             "Entrance: ${entrance.id} at (0,0); " +
                 "${entrance.connectors.size} open connectors, " +
-                "${entrance.doors.size} door(s).",
+                "${entrance.doors.size} door(s); " +
+                "stairs after $stairsRequired revealed room(s) " +
+                "(range ${Floor.staircaseRoomThresholdRangeForFloor(depth)}).",
         )
 
         // ---- 2. Pre-grow ----
@@ -154,20 +157,21 @@ object FloorGenerator {
                 "fails=$fails (target=$preGrowTarget).",
         )
 
-        // ---- 3. Stairs-down (end_tile) ----
-        val placedEnd = placeStairsDown(floor, endTiles, hallTiles, rng)
-        if (placedEnd) {
-            Log.d(
-                TAG,
-                "Placed stairs-down. staircases=${floor.staircases.size} " +
-                    "openConnectors=${floor.openConnectors.size}.",
-            )
-        } else if (endTiles.isNotEmpty()) {
-            Log.w(
-                TAG,
-                "Could not place any end_* template; floor will lack " +
-                    "stairs-down. openConnectors=${floor.openConnectors.size}.",
-            )
+        // ---- 3. Reserve deepest connector for deferred stairs-down ----
+        if (endTiles.isNotEmpty()) {
+            val stairHost = farthestOpenConnector(floor)
+            if (stairHost != null) {
+                floor.reserveConnectorForPendingStairs(stairHost)
+                Log.d(
+                    TAG,
+                    "Reserved $stairHost for stairs-down (revealed-room gate).",
+                )
+            } else {
+                Log.w(
+                    TAG,
+                    "No open connector to reserve for stairs-down.",
+                )
+            }
         }
 
         // ---- 4. Cap remaining open connectors ----
@@ -236,66 +240,11 @@ object FloorGenerator {
         else -> hallTiles + roomTiles
     }
 
-    /**
-     * Finds the open connector furthest from the entrance and stitches
-     * an end_* template there. If the chosen connector is at hall
-     * depth 0 (i.e. it sits on a room's edge), drops a single hall in
-     * first so the stairs-down room is still preceded by at least
-     * one corridor. Returns true if the staircase template landed.
-     */
-    private fun placeStairsDown(
-        floor: Floor,
-        endTiles: List<RoomTemplate>,
-        hallTiles: List<RoomTemplate>,
-        rng: Random,
-    ): Boolean {
-        if (endTiles.isEmpty()) return false
-        if (floor.openConnectors.isEmpty()) return false
-
-        // Try candidates in farthest-first order so the stairs land
-        // at the dungeon's perceived "end". The actual placement may
-        // be rejected by the merge rules, in which case we fall back
-        // to the next-deepest connector.
-        val ranked = floor.openConnectors
+    private fun farthestOpenConnector(floor: Floor): Cell? =
+        floor.openConnectors
             .map { it to bfsDistance(floor, floor.partyCell, it) }
-            .sortedByDescending { it.second }
-            .map { it.first }
-
-        for (host in ranked) {
-            // Resolve a single-hall lead-in if the chosen connector
-            // is right against a room edge. Best-effort: if no hall
-            // fits the orientation we just place the stairs-down
-            // directly so the floor still has an exit.
-            val target: Cell = if (floor.hallDepthAt(host) <= 0 && hallTiles.isNotEmpty()) {
-                val before = floor.openConnectors.size
-                val placed = floor.tryPlaceAtConnector(host, hallTiles, rng)
-                if (placed != null) {
-                    // The hall consumed `host` and exposed >= 1 new
-                    // connector. Pick whichever new connector still
-                    // exists (the lead-in's far end).
-                    val candidates = floor.openConnectors - host
-                    if (candidates.isNotEmpty()) candidates.random(rng) else host
-                } else {
-                    // Hall didn't fit; fall back to placing end_*
-                    // directly on the original connector. Logged so
-                    // a degenerate template set is visible.
-                    Log.d(
-                        TAG,
-                        "Stairs lead-in hall failed at $host (openConnectors=$before); " +
-                            "placing end_* directly.",
-                    )
-                    host
-                }
-            } else {
-                host
-            }
-            if (target !in floor.openConnectors) continue
-            if (floor.tryPlaceAtConnector(target, endTiles, rng) != null) {
-                return true
-            }
-        }
-        return false
-    }
+            .maxByOrNull { it.second }
+            ?.first
 
     /**
      * Caps every remaining open connector with an `end_room_*`
@@ -327,6 +276,7 @@ object FloorGenerator {
         var failed = 0
         for (host in pending) {
             if (host !in floor.openConnectors) continue // already absorbed via a merge
+            if (floor.isReservedStairConnector(host)) continue
             if (floor.tryPlaceAtConnector(host, endCapTiles, rng) != null) {
                 capped++
             } else {

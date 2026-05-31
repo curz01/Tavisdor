@@ -5,15 +5,16 @@ package com.tavisdor.app.items
  * tier names the material / quality prefix used to construct items
  * for each of the four loot categories:
  *
- *   - [meleePrefix]: prepended to a [WeaponType] for melee weapons
- *                    and staves (e.g. "Iron" + "Spear" = "Iron Spear").
+ *   - [meleePrefix]: material prefix on weapons and armor; also sets
+ *                    base attack via [meleeWeaponBaseDamage] (Attack +1
+ *                    … +10 on the chart). Suffixes are separate —
+ *                    see [SuffixRoller] and [ItemDisplayNames].
  *   - [orbPrefix]:   prepended to "Orb" for the gem mounted on a
  *                    staff (e.g. "Marble Orb"). Drops independent of
  *                    the staff; combat math treats it as a separate
  *                    equipment slot.
- *   - [armorName]:   literal armor name used as-is, since the
- *                    authored chart already embeds the type
- *                    ("Iron Plate", "Chainmail", "Cloth", etc.).
+ *   - [armorName]:   legacy drop label; maps to [ArmorType] via
+ *                    [ArmorType.fromLootTier] for stats and slots.
  *   - [bowTierName]: bow quality tier, suffixed by " Bow" except
  *                    when the tier name already contains it
  *                    ("Longbow"). See [displayBowName].
@@ -53,12 +54,21 @@ enum class LootTier(
      * " Bow" so the player sees "Composite Bow" rather than just
      * "Composite".
      */
-    fun displayBowName(): String =
-        if (bowTierName.contains("bow", ignoreCase = true)) bowTierName
-        else "$bowTierName Bow"
+    fun displayBowName(plusLevel: Int = 0): String {
+        val base =
+            if (bowTierName.contains("bow", ignoreCase = true)) bowTierName
+            else "$bowTierName Bow"
+        return if (plusLevel > 0) "$base +$plusLevel" else base
+    }
 
-    /** Composes "Wood Spear" / "Mithril Staff" / etc. from this tier. */
-    fun displayMeleeName(weapon: WeaponType): String = "$meleePrefix ${weapon.displayName}"
+    /** Composes "Wood Spear" / "Wood Spear +1" / "Mithril Staff +2" etc. */
+    fun displayMeleeName(weapon: WeaponType, plusLevel: Int = 0): String {
+        val base = "$meleePrefix ${weapon.displayName}"
+        return if (plusLevel > 0) "$base +$plusLevel" else base
+    }
+
+    /** Melee attack bonus for this tier plus an optional enchant ([plusLevel]). */
+    fun meleeWeaponAttackBonus(plusLevel: Int = 0): Int = meleeWeaponBaseDamage + plusLevel
 
     /** Composes "Limestone Orb" / "Diamond Orb" / etc. */
     fun displayOrbName(): String = "$orbPrefix Orb"
@@ -68,7 +78,7 @@ enum class LootTier(
      * STR / skill modifiers are added. Linear scaling against the
      * enum ordinal until per-weapon damage values are authored:
      *
-     *   T1_3 = 1, T4_8 = 2, T9_12 = 3, ..., T37_40 = 10.
+     *   T1_3 (Wood) = 1, T4_8 = 2, T9_12 = 3, ..., T37_40 = 10.
      *
      * Combat math reads this via `weapon.tier.meleeWeaponBaseDamage`
      * when a weapon is equipped, and falls back to FISTS_DAMAGE

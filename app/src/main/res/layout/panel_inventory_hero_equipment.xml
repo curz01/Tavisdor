@@ -3,7 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/itemsHeroEquipPanel"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
+    android:layout_height="match_parent"
     android:background="@drawable/bg_hero_detail_panel"
     android:clipToOutline="true"
     android:orientation="vertical"
@@ -43,15 +43,20 @@
             android:textStyle="bold" />
     </FrameLayout>
 
-  <!-- 3x3 paper-doll: helmet / weapon / armor / off-hand / boots -->
-    <GridLayout
-        android:id="@+id/inventoryHeroEquipGrid"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center_horizontal"
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
         android:layout_marginTop="12dp"
-        android:columnCount="3"
-        android:rowCount="3">
+        android:layout_weight="1">
+
+        <!-- 3x3 paper-doll: helmet / weapon / armor / off-hand / boots -->
+        <GridLayout
+            android:id="@+id/inventoryHeroEquipGrid"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:columnCount="3"
+            android:rowCount="3">
 
         <Space
             android:layout_width="@dimen/inventory_equip_slot_size"
@@ -135,5 +140,36 @@
         <Space
             android:layout_width="@dimen/inventory_equip_slot_size"
             android:layout_height="@dimen/inventory_equip_slot_size" />
-    </GridLayout>
+        </GridLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnInventoryHeroEquipPrev"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="bottom|start"
+            android:contentDescription="@string/inventory_hero_equip_prev"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="4dp"
+            android:text="‹"
+            android:textColor="@color/hero_detail_value"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnInventoryHeroEquipNext"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="bottom|end"
+            android:contentDescription="@string/inventory_hero_equip_next"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="4dp"
+            android:text="›"
+            android:textColor="@color/hero_detail_value"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+    </FrameLayout>
 </LinearLayout>

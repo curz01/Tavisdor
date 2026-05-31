@@ -58,7 +58,7 @@
 
     <!-- Hero detail overlay (modal opened by tapping a portrait). -->
     <dimen name="hero_detail_panel_padding">16dp</dimen>
-    <dimen name="hero_skill_assign_body_height">540dp</dimen>
+    <dimen name="hero_skill_assign_body_height">600dp</dimen>
     <!-- 75% of assign body — skill book dialog scroll area. -->
     <dimen name="hero_skill_book_scroll_height">405dp</dimen>
     <dimen name="hero_skill_book_title_text">15sp</dimen>

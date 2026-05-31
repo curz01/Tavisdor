@@ -24,10 +24,12 @@ import kotlin.random.Random
  *      1 see the upper buckets collapse into a single enemy.
  *   4. Cell pick: uniformly random distinct cells from
  *      [RoomTemplate.nonSpecialFloorCells], translated by [offset].
- *   5. Enemy template pick: prefer an exact level == [floorDepth]
- *      match in [EnemyCatalog]; fall back to the deepest authored
- *      template with `level <= floorDepth`. Returns empty when no
- *      template is authored for this depth or shallower.
+     *   5. Enemy template pick: prefer an exact level == [floorDepth]
+     *      match in [EnemyCatalog]; fall back to the deepest authored
+     *      template with `level <= floorDepth`. Within a level, RNG
+     *      respects each template's [EnemyTemplate.spawnWeight]
+     *      (e.g. spear goblin 2 : bow goblin 1). Returns empty when
+     *      no template is authored for this depth or shallower.
  *
  * Pure - just returns the proposed enemies. Caller registers them
  * onto [Floor] (see [Floor.commitTemplate]).
@@ -171,10 +173,11 @@ object EnemySpawner {
      */
     private fun pickEnemyTemplate(floorDepth: Int, rng: Random): EnemyTemplate? {
         val exact = EnemyCatalog.atLevel(floorDepth)
-        if (exact.isNotEmpty()) return exact.random(rng)
+        if (exact.isNotEmpty()) return EnemyCatalog.pickWeighted(exact, rng)
         val belowOrEqual = EnemyCatalog.all().filter { it.level <= floorDepth }
         if (belowOrEqual.isEmpty()) return null
         val deepestLevel = belowOrEqual.maxOf { it.level }
-        return belowOrEqual.filter { it.level == deepestLevel }.random(rng)
+        val pool = belowOrEqual.filter { it.level == deepestLevel }
+        return EnemyCatalog.pickWeighted(pool, rng)
     }
 }

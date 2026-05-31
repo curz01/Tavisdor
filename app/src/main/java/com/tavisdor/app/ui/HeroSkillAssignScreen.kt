@@ -23,8 +23,8 @@ import com.tavisdor.app.skills.SkillCatalog
 
 /**
  * Modal panel for staging which skill the top Action button will commit
- * for a hero. Layout mirrors the design wireframe: offensive column on
- * the left, defensive + passive stacked on the right. Each skill shows
+ * for a hero. Layout mirrors the design wireframe: Active column on
+ * the left, Reactive + passive stacked on the right. Each skill shows
  * its name with range / MP cost on lines below; tapping a row stages or
  * unstages it immediately.
  *
@@ -56,6 +56,9 @@ class HeroSkillAssignScreen(
     private var slot: Int = -1
     private var hero: Hero? = null
 
+    /** Hero slot whose skills this panel is showing (for wait eligibility). */
+    val displayedSlot: Int get() = slot
+
     var onWaitTapped: (() -> Unit)? = null
 
     init {
@@ -74,13 +77,22 @@ class HeroSkillAssignScreen(
     fun updateWaitButton() {
         btnWait.visibility = View.VISIBLE
         val controller = game.combatController
-        val canWait = game.combat != null &&
-            slot >= 0 &&
-            controller != null &&
-            controller.awaitingHeroInput &&
-            controller.canHeroWait(slot)
-        btnWait.isEnabled = canWait
-        btnWait.alpha = if (canWait) 1f else 0.4f
+        if (game.combat == null || controller == null || slot < 0) {
+            setWaitEnabled(false)
+            return
+        }
+        val heroForWait = hero ?: game.party?.heroes?.getOrNull(slot) ?: run {
+            setWaitEnabled(false)
+            return
+        }
+        val mainSkill = game.selectedSkillFor(slot) ?: heroForWait.basicAttackSkill
+        setWaitEnabled(controller.canHeroWait(slot, mainSkill))
+    }
+
+    private fun setWaitEnabled(enabled: Boolean) {
+        btnWait.isEnabled = enabled
+        btnWait.alpha = if (enabled) 1f else 0.4f
+        btnWait.refreshDrawableState()
     }
 
     val isVisible: Boolean get() = root.visibility == View.VISIBLE
@@ -108,8 +120,11 @@ class HeroSkillAssignScreen(
         }
 
         refreshSelectionHighlight()
-        updateWaitButton()
         root.visibility = View.VISIBLE
+        updateWaitButton()
+        // Re-check after the combat tick / FX callbacks for this frame
+        // (panel may open in the same frame a leaver ends or FX clears).
+        root.post { updateWaitButton() }
     }
 
     private fun loadWaitIcon() {

@@ -43,6 +43,22 @@ object LineOfSight {
         manhattan(origin, target) <= range
 
     /**
+     * Grid cells on the straight line from [from] to [to], including
+     * both endpoints (Bresenham). Used by enemy positioning AI.
+     */
+    fun lineCells(from: Cell, to: Cell): List<Cell> = bresenhamLine(from, to)
+
+    /**
+     * True when [blocker] sits on the interior of the line between
+     * [from] and [to] (not on either endpoint).
+     */
+    fun blocksLineBetween(blocker: Cell, from: Cell, to: Cell): Boolean {
+        val line = lineCells(from, to)
+        if (line.size <= 2) return false
+        return blocker in line.subList(1, line.size - 1)
+    }
+
+    /**
      * True iff a straight line from [origin] to [target] passes
      * through only walkable cells (floor + open doors). Both
      * endpoints are excluded from the check - the attacker stands

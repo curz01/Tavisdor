@@ -1,7 +1,9 @@
 package com.tavisdor.app.party
 
 import com.tavisdor.app.debug.DebugConfig
+import com.tavisdor.app.items.ArmorItem
 import com.tavisdor.app.items.Inventory
+import com.tavisdor.app.items.ItemDisplayNames
 import com.tavisdor.app.items.Weapon
 import com.tavisdor.app.save.HeroSaveData
 
@@ -169,20 +171,31 @@ class Party private constructor(
             party.restoreGold(saved.partyGold)
             val weapons = saved.inventoryWeapons.map { w ->
                 val tier = w.tier
-                val displayName = tier?.displayMeleeName(w.type)
-                    ?: "Crude ${w.type.displayName}"
+                val plus = w.plusLevel
+                val suffixes = w.suffixes
+                val displayName = if (tier != null) {
+                    ItemDisplayNames.composeWeapon(tier, w.type, suffixes, plus)
+                } else {
+                    "Crude ${w.type.displayName}"
+                }
                 Weapon(
                     type = w.type,
                     tier = tier,
                     displayName = displayName,
                     attackBonus = w.attackBonus,
                     range = w.range,
+                    plusLevel = plus,
+                    suffixes = suffixes,
                 )
+            }
+            val armor = saved.inventoryArmor.map {
+                ArmorItem(it.type, it.slot, it.suffixes, it.plusLevel)
             }
             party.inventory.restore(
                 weapons = weapons,
                 ingredients = saved.inventoryIngredients,
                 potions = saved.inventoryPotions,
+                armor = armor,
             )
             return party
         }
@@ -211,7 +224,7 @@ class Party private constructor(
                     // the old (lower) level and would otherwise be
                     // displayed against a different denominator.
                     xp = if (effectiveLevel == it.level) it.xp else 0,
-                    armorClass = Hero.defaultArmorClassFor(it.heroClass),
+                    baseArmorClass = Hero.defaultArmorClassFor(it.heroClass),
                     // Weapons aren't part of the save schema yet, so
                     // re-issue the crude starter on every load. Once
                     // looted weapons can be carried across saves this

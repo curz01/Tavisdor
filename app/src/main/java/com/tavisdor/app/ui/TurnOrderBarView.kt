@@ -383,6 +383,9 @@ class TurnOrderBarView @JvmOverloads constructor(
      */
     private fun isSlotPast(initIdx: Int, round: CombatRound): Boolean {
         if (round.isRoundComplete) return true
+        // Deferred heroes stay in the pending group at the tail until
+        // their turn resolves — never in the "already acted" bucket.
+        if (round.isDeferredInitiativeIndex(initIdx)) return false
         val qi = round.queueIndexOf(initIdx)
         if (qi < 0) return true
         return qi < round.queuePos

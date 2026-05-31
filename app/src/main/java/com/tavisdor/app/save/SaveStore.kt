@@ -3,6 +3,10 @@ package com.tavisdor.app.save
 import android.content.Context
 import android.content.SharedPreferences
 import com.tavisdor.app.items.Ingredient
+import com.tavisdor.app.items.ArmorItem
+import com.tavisdor.app.items.ArmorPieceSlot
+import com.tavisdor.app.items.ArmorType
+import com.tavisdor.app.items.ItemSuffixCodec
 import com.tavisdor.app.items.LootTier
 import com.tavisdor.app.items.WeaponType
 import com.tavisdor.app.party.Gender
@@ -67,6 +71,14 @@ class SaveStore(context: Context) {
         } else {
             emptyList()
         }
+        val armor = when {
+            schema >= 7 -> decodeArmorStructured(prefs.getString(KEY_INV_ARMOR, null))
+            schema >= 6 -> decodeArmorLegacy(prefs.getString(KEY_INV_ARMOR, null)).map { name ->
+                val item = ArmorItem.fromLegacyDisplayName(name)
+                ArmorSaveData(item.type, item.slot, item.plusLevel, item.suffixes)
+            }
+            else -> emptyList()
+        }
         return SaveData(
             schemaVersion = schema,
             heroes = heroes,
@@ -76,6 +88,7 @@ class SaveStore(context: Context) {
             inventoryWeapons = weapons,
             inventoryIngredients = ingredients,
             inventoryPotions = potions,
+            inventoryArmor = armor,
         )
     }
 
@@ -99,6 +112,7 @@ class SaveStore(context: Context) {
             putString(KEY_INV_WEAPONS, encodeWeapons(data.inventoryWeapons))
             putString(KEY_INV_INGREDIENTS, encodeIngredients(data.inventoryIngredients))
             putString(KEY_INV_POTIONS, encodePotions(data.inventoryPotions))
+            putString(KEY_INV_ARMOR, encodeArmor(data.inventoryArmor))
             apply()
         }
     }
@@ -108,7 +122,7 @@ class SaveStore(context: Context) {
      * [WEAPON_ROW_SEPARATOR], with intra-row fields separated by
      * [WEAPON_FIELD_SEPARATOR]. Format:
      *
-     *   `WeaponType.name | tierOrNull | attackBonus | range`
+     *   `WeaponType.name | tierOrNull | attackBonus | range | plusLevel`
      *
      * The pipe character is reserved for the field separator;
      * [WeaponType] / [LootTier] enum names never contain it, and
@@ -123,6 +137,8 @@ class SaveStore(context: Context) {
                 w.tier?.name ?: WEAPON_TIER_NONE,
                 w.attackBonus.toString(),
                 w.range.toString(),
+                w.plusLevel.toString(),
+                ItemSuffixCodec.encode(w.suffixes),
             ).joinToString(WEAPON_FIELD_SEPARATOR)
         }
 
@@ -130,7 +146,7 @@ class SaveStore(context: Context) {
         if (raw.isNullOrEmpty()) return emptyList()
         return raw.split(WEAPON_ROW_SEPARATOR).mapNotNull { row ->
             val parts = row.split(WEAPON_FIELD_SEPARATOR)
-            if (parts.size != 4) return@mapNotNull null
+            if (parts.size !in 4..6) return@mapNotNull null
             val type = runCatching { WeaponType.valueOf(parts[0]) }.getOrNull() ?: return@mapNotNull null
             val tier = if (parts[1] == WEAPON_TIER_NONE) {
                 null
@@ -139,7 +155,12 @@ class SaveStore(context: Context) {
             }
             val atk = parts[2].toIntOrNull() ?: return@mapNotNull null
             val rng = parts[3].toIntOrNull() ?: return@mapNotNull null
-            WeaponSaveData(type, tier, atk, rng)
+            val plus = when {
+                parts.size >= 5 -> parts[4].toIntOrNull() ?: return@mapNotNull null
+                else -> if (tier != null) (atk - tier.meleeWeaponBaseDamage).coerceAtLeast(0) else 0
+            }
+            val suffixes = if (parts.size >= 6) ItemSuffixCodec.decode(parts[5]) else emptyList()
+            WeaponSaveData(type, tier, atk, rng, plus, suffixes)
         }
     }
 
@@ -171,6 +192,48 @@ class SaveStore(context: Context) {
         }
     }
 
+    /** v8: type|slot|plus|suffixes. v7 rows (tier|plus|suffixes) still load. */
+    private fun encodeArmor(list: List<ArmorSaveData>): String =
+        if (list.isEmpty()) "" else list.joinToString(ARMOR_ROW_SEPARATOR) { a ->
+            listOf(
+                a.type.name,
+                a.slot.name,
+                a.plusLevel.toString(),
+                ItemSuffixCodec.encode(a.suffixes),
+            ).joinToString(ARMOR_FIELD_SEPARATOR)
+        }
+
+    private fun decodeArmorStructured(raw: String?): List<ArmorSaveData> {
+        if (raw.isNullOrEmpty()) return emptyList()
+        return raw.split(ARMOR_ROW_SEPARATOR).mapNotNull { row ->
+            if (!row.contains(ARMOR_FIELD_SEPARATOR)) {
+                val legacy = ArmorItem.fromLegacyDisplayName(row)
+                return@mapNotNull ArmorSaveData(
+                    legacy.type, legacy.slot, legacy.plusLevel, legacy.suffixes,
+                )
+            }
+            val parts = row.split(ARMOR_FIELD_SEPARATOR)
+            val typeFromRow = runCatching { ArmorType.valueOf(parts[0]) }.getOrNull()
+            if (typeFromRow != null && parts.size >= 3) {
+                val slot = runCatching { ArmorPieceSlot.valueOf(parts[1]) }.getOrNull()
+                    ?: return@mapNotNull null
+                val plus = parts[2].toIntOrNull() ?: return@mapNotNull null
+                val suffixes = if (parts.size >= 4) ItemSuffixCodec.decode(parts[3]) else emptyList()
+                return@mapNotNull ArmorSaveData(typeFromRow, slot, plus, suffixes)
+            }
+            if (parts.size !in 2..3) return@mapNotNull null
+            val tier = runCatching { LootTier.valueOf(parts[0]) }.getOrNull() ?: return@mapNotNull null
+            val plus = parts[1].toIntOrNull() ?: return@mapNotNull null
+            val suffixes = if (parts.size >= 3) ItemSuffixCodec.decode(parts[2]) else emptyList()
+            ArmorSaveData(ArmorType.fromLootTier(tier), ArmorPieceSlot.ARMOR, plus, suffixes)
+        }
+    }
+
+    private fun decodeArmorLegacy(raw: String?): List<String> {
+        if (raw.isNullOrEmpty()) return emptyList()
+        return raw.split(ARMOR_ROW_SEPARATOR).filter { it.isNotEmpty() }
+    }
+
     fun clear() {
         prefs.edit().clear().apply()
     }
@@ -188,6 +251,7 @@ class SaveStore(context: Context) {
         private const val KEY_INV_WEAPONS = "inv_weapons"
         private const val KEY_INV_INGREDIENTS = "inv_ingredients"
         private const val KEY_INV_POTIONS = "inv_potions"
+        private const val KEY_INV_ARMOR = "inv_armor"
 
         // Inventory serialization separators. Chosen so the
         // characters never appear in enum names (which are the
@@ -196,5 +260,7 @@ class SaveStore(context: Context) {
         private const val WEAPON_FIELD_SEPARATOR = "|"
         private const val WEAPON_TIER_NONE = "_"
         private const val INGREDIENT_SEPARATOR = ","
+        private const val ARMOR_ROW_SEPARATOR = ";"
+        private const val ARMOR_FIELD_SEPARATOR = "|"
     }
 }

@@ -7,6 +7,9 @@ import com.tavisdor.app.enemies.Enemy
 import com.tavisdor.app.items.LootDrop
 import com.tavisdor.app.items.LootTableCatalog
 import com.tavisdor.app.items.LootTier
+import com.tavisdor.app.items.Weapon
+import com.tavisdor.app.items.WeaponClassRules
+import com.tavisdor.app.items.WeaponType
 import com.tavisdor.app.party.ClassStats
 import com.tavisdor.app.party.Hero
 import com.tavisdor.app.party.HeroClass
@@ -17,6 +20,8 @@ import com.tavisdor.app.render.BowVolleyPlan
 import com.tavisdor.app.render.DefenderSpellFxGateway
 import com.tavisdor.app.render.HealPortraitFxGateway
 import com.tavisdor.app.render.CombatPartyRiseFxCatalog
+import com.tavisdor.app.render.FeintDeathFxCatalog
+import com.tavisdor.app.render.BatStrikeFxGateway
 import com.tavisdor.app.render.WeaponFxCatalog
 import com.tavisdor.app.render.WeaponFxGateway
 import com.tavisdor.app.render.WeaponFxKind
@@ -130,10 +135,17 @@ class CombatController(
      */
     private val onActorChanged: (Int?) -> Unit = {},
     /**
+     * Fired when hero input becomes available again for UI affordances
+     * (e.g. Wait) — turn handoff to a hero, or [attackFxPending] cleared
+     * while [awaitingHeroInput] is still true.
+     */
+    private val onHeroInputChanged: () -> Unit = {},
+    /**
      * Host-owned weapon attack animations. When playback starts,
      * damage resolution is deferred until the FX completes.
      */
     private val weaponFx: WeaponFxGateway,
+    private val batStrikeFx: BatStrikeFxGateway,
     private val defenderSpellFx: DefenderSpellFxGateway,
     private val healPortraitFx: HealPortraitFxGateway,
     /** Host-owned party lunge tween (used by Fighter Charge). */
@@ -143,6 +155,8 @@ class CombatController(
     private val breakPartyHideFromHeroAction: (Skill?) -> Unit = {},
     private val breakPartyHideFromHeroTurn: () -> Unit = {},
     private val isPartyHidden: () -> Boolean = { false },
+    /** Hero panel status icon while Evasive Maneuver is active. */
+    private val onEvasiveManeuverChanged: () -> Unit = {},
 ) {
 
     /**
@@ -169,6 +183,9 @@ class CombatController(
      * to the destination for gameplay logic.
      */
     private var enemyMoveAnim: EnemyMoveAnim? = null
+
+    /** Set when the acting enemy steps at least once this turn. */
+    private var enemyMovedThisTurn: Boolean = false
 
     /**
      * True while a weapon attack animation is playing and combat
@@ -199,6 +216,14 @@ class CombatController(
 
     private val thiefPrepareBuffs = Array(4) { ThiefPrepareBuffs() }
 
+    private val fighterPrepareBuffs = Array(4) { FighterPrepareBuffs() }
+
+    /** Remaining hero turns per slot for [SkillCatalog.THIEF_EVASIVE_MANEUVER_ID]. */
+    private val evasiveManeuverTurnsRemaining = IntArray(4)
+
+    /** Enemy indices that skip their next turn (Mace stun). */
+    private val stunnedEnemyIndices = mutableSetOf<Int>()
+
     /** Per-enemy rolls used only for Steal (kill loot is rolled separately). */
     private val enemyStealPools: Array<MutableList<LootDrop>> = buildEnemyStealPools()
 
@@ -218,6 +243,9 @@ class CombatController(
     /** Steal buff applies to the first offensive swing of the action only. */
     private val stealResolvedThisAction = BooleanArray(4)
 
+    /** Disarm buff applies to the first connecting offensive shot only. */
+    private val disarmResolvedThisAction = BooleanArray(4)
+
     /**
      * Enemy list index marked by Weak Point, or null when none.
      * Each hero slot may consume one reroll against that enemy while
@@ -225,6 +253,19 @@ class CombatController(
      */
     private var weakPointEnemyIdx: Int? = null
     private val weakPointRerollUsed = BooleanArray(4)
+
+    /** Enemy index marked by Mark Target; [markTargetRoundsLeft] ticks down each round. */
+    private var markTargetEnemyIdx: Int? = null
+    private var markTargetRoundsLeft: Int = 0
+
+    /**
+     * DoT (poison today; burn/bleed/etc. later). Ticks at turn-start in
+     * initiative order — see [TurnOrderDotEffects].
+     */
+    private val dotEffects: TurnOrderDotEffects = TurnOrderDotEffects(combat.enemies.size)
+
+    /** Remaining combat rounds an enemy's attack is halved by Disarm. */
+    private val enemyDisarmTurnsRemaining: IntArray = IntArray(combat.enemies.size)
 
     /**
      * Fractional grid coordinates for drawing [enemy] this frame.
@@ -305,6 +346,7 @@ class CombatController(
 
         if (
             weaponFx.isPlaying ||
+            batStrikeFx.isPlaying ||
             defenderSpellFx.isPlaying ||
             healPortraitFx.isPlaying ||
             attackFxPending
@@ -316,10 +358,13 @@ class CombatController(
         // The view reads CombatRound state for rendering but does
         // NOT advance it - keeping the single advance call here
         // means animation pacing is independent of how often the
-        // bar gets to invalidate.
-        if (awaitingLeaver) {
+        // bar gets to invalidate. Includes pre-emptive Wait shifts
+        // while the acting hero's turn is still open.
+        if (combat.round.isAnimating) {
             combat.round.advanceAnimation(deltaMs)
             redraw = true
+        }
+        if (awaitingLeaver) {
             // Wait for EVERY leaver (TURN_ENDED + DEFEATED) and
             // the trailing shift animation to finish before
             // queuing the next actor. Otherwise the next turn's
@@ -350,8 +395,32 @@ class CombatController(
             redraw = true
         }
 
+        if (clearStaleAttackFxPending()) {
+            redraw = true
+        }
+
         return redraw
     }
+
+    /**
+     * If [attackFxPending] outlived the FX players (callback missed),
+     * clear it so Wait / staged commits are not stuck dimmed until
+     * the panel is reopened.
+     */
+    private fun clearStaleAttackFxPending(): Boolean {
+        if (!attackFxPending || !awaitingHeroInput) return false
+        if (isAttackFxPlaying()) return false
+        attackFxPending = false
+        flushPendingMainAfterFreeFx()
+        onHeroInputChanged()
+        return true
+    }
+
+    private fun isAttackFxPlaying(): Boolean =
+        weaponFx.isPlaying ||
+            batStrikeFx.isPlaying ||
+            defenderSpellFx.isPlaying ||
+            healPortraitFx.isPlaying
 
     /**
      * Outcomes a tap-driven combat move can produce. Returned by
@@ -544,7 +613,7 @@ class CombatController(
         // can't actually fire.
         if (isPartySurroundedForMove(current, heroSlot)) return false
 
-        return countPendingHeroTurnsAfterCurrent() > 0
+        return countPendingTurnsAfterCurrent() > 0
     }
 
     /**
@@ -557,49 +626,138 @@ class CombatController(
      * party-move confirmation prompt: "the rest of the heroes"
      * is exactly this set.
      */
-    private fun countPendingHeroTurnsAfterCurrent(): Int {
+    private fun countPendingTurnsAfterCurrent(): Int {
         val round = combat.round
         val pos = round.queuePos
         if (pos !in round.roundQueue.indices) return 0
-        var n = 0
-        for (i in (pos + 1) until round.roundQueue.size) {
-            val entry = combat.initiative[round.roundQueue[i]]
-            if (entry.kind != InitiativeEntry.Kind.HERO) continue
-            if (entry in round.removedEntries) continue
-            val hero = combat.party.heroes.getOrNull(entry.index) ?: continue
-            if (!hero.isAlive) continue
-            n++
-        }
-        return n
+        return countPendingTurnsAfterQueueIndex(pos)
     }
 
     /**
-     * Defer this hero's turn until after every other pending hero
-     * this round. Requires at least one later living hero in the
-     * queue.
+     * Defer [slot]'s turn to the back of the round queue.
+     *
+     * - When [slot] is the acting hero, ends their turn (same as before).
+     * - When another hero is acting, [slot] may still declare Wait if they
+     *   have a later pending turn, an enemy is in range for [skill], and
+     *   at least one other living combatant would act before them
+     *   after deferring (heroes or enemies).
      */
-    fun commitHeroWait(slot: Int): Boolean {
-        if (ended || !awaitingHeroInput || attackFxPending) return false
-        if (currentHeroSlot != slot) return false
+    fun commitHeroWait(slot: Int, skill: Skill): Boolean {
+        if (ended || combat.round.heroActionsLockedThisRound) return false
+        if (!hasPendingEnemyTurnsThisRound()) return false
         val hero = combat.party.heroes.getOrNull(slot) ?: return false
         if (!hero.isAlive) return false
-        if (countPendingHeroTurnsAfterCurrent() <= 0) return false
-        if (!combat.round.completeCurrentActionWithWait()) return false
+        if (!heroCanReachEnemyForWait(hero, skill)) return false
 
-        breakPartyHideFromHeroTurn()
+        if (currentHeroSlot == slot) {
+            if (!awaitingHeroInput || attackFxPending) return false
+            if (countPendingTurnsAfterCurrent() <= 0) return false
+            if (!combat.round.completeCurrentActionWithWait()) return false
+            breakPartyHideFromHeroTurn()
+            log.append(CombatLogEntry.Info("${hero.name} waits."))
+            awaitingHeroInput = false
+            currentHeroSlot = null
+            awaitingLeaver = true
+            return true
+        }
+
+        val queueIndex = upcomingQueueIndexFor(slot) ?: return false
+        if (countPendingTurnsAfterQueueIndex(queueIndex) <= 0) return false
+        if (!combat.round.deferUpcomingHeroAt(queueIndex)) return false
         log.append(CombatLogEntry.Info("${hero.name} waits."))
-        awaitingHeroInput = false
-        currentHeroSlot = null
-        awaitingLeaver = true
+        onHeroInputChanged()
         return true
     }
 
-    fun canHeroWait(slot: Int): Boolean {
-        if (ended || !awaitingHeroInput || attackFxPending) return false
-        if (currentHeroSlot != slot) return false
+    fun canHeroWait(slot: Int, skill: Skill): Boolean {
+        if (ended || combat.round.heroActionsLockedThisRound) return false
+        if (!hasPendingEnemyTurnsThisRound()) return false
         val hero = combat.party.heroes.getOrNull(slot) ?: return false
         if (!hero.isAlive) return false
-        return countPendingHeroTurnsAfterCurrent() > 0
+        if (!heroCanReachEnemyForWait(hero, skill)) return false
+
+        if (currentHeroSlot == slot) {
+            if (!awaitingHeroInput || attackFxPending) return false
+            return countPendingTurnsAfterCurrent() > 0
+        }
+
+        // Pre-emptive wait: any hero still later in this round's queue
+        // may defer (including during another hero's turn or enemy turns).
+        val queueIndex = upcomingQueueIndexFor(slot) ?: return false
+        return countPendingTurnsAfterQueueIndex(queueIndex) > 0
+    }
+
+    /**
+     * Index in [CombatRound.roundQueue] for [slot]'s next pending turn
+     * (strictly after [CombatRound.queuePos]), or null if already acted
+     * or already in the deferred tail.
+     */
+    private fun heroInitiativeIndex(slot: Int): Int =
+        combat.initiative.indexOfFirst {
+            it.kind == InitiativeEntry.Kind.HERO && it.index == slot
+        }
+
+    private fun upcomingQueueIndexFor(slot: Int): Int? {
+        val round = combat.round
+        val initIdx = heroInitiativeIndex(slot)
+        if (initIdx < 0) return null
+        if (round.isDeferredInitiativeIndex(initIdx)) return null
+        val entry = combat.initiative[initIdx]
+        if (entry in round.removedEntries) return null
+        for (qi in (round.queuePos + 1) until round.roundQueue.size) {
+            if (round.roundQueue[qi] == initIdx) return qi
+        }
+        return null
+    }
+
+    /**
+     * True while at least one living enemy still has a turn slot at
+     * or after [CombatRound.queuePos] in this round. Once every enemy
+     * has acted (or been removed), Wait is disabled until the next
+     * round re-seeds the queue.
+     */
+    private fun hasPendingEnemyTurnsThisRound(): Boolean {
+        val round = combat.round
+        for (qi in round.queuePos until round.roundQueue.size) {
+            val entry = combat.initiative[round.roundQueue[qi]]
+            if (entry in round.removedEntries) continue
+            if (entry.kind != InitiativeEntry.Kind.ENEMY) continue
+            if (combat.enemies.getOrNull(entry.index)?.isAlive == true) return true
+        }
+        return false
+    }
+
+    /**
+     * Wait is allowed while the party is in an active fight with at
+     * least one living enemy. Uses [stagedSkill] when it can reach,
+     * otherwise the hero's basic attack, otherwise any living foe in
+     * the encounter (so range-0 staged skills like Defend do not
+     * dim Wait for everyone).
+     */
+    private fun heroCanReachEnemyForWait(hero: Hero, stagedSkill: Skill): Boolean {
+        if (!combat.enemies.any { it.isAlive }) return false
+        if (anyEnemyReachable(hero, stagedSkill)) return true
+        if (anyEnemyReachable(hero, hero.basicAttackSkill)) return true
+        return true
+    }
+
+    /** Living heroes and enemies still to act after [queueIndex]. */
+    private fun countPendingTurnsAfterQueueIndex(queueIndex: Int): Int {
+        val round = combat.round
+        if (queueIndex !in round.roundQueue.indices) return 0
+        var n = 0
+        for (i in (queueIndex + 1) until round.roundQueue.size) {
+            val entry = combat.initiative[round.roundQueue[i]]
+            if (entry in round.removedEntries) continue
+            val alive = when (entry.kind) {
+                InitiativeEntry.Kind.HERO ->
+                    combat.party.heroes.getOrNull(entry.index)?.isAlive == true
+                InitiativeEntry.Kind.ENEMY ->
+                    combat.enemies.getOrNull(entry.index)?.isAlive == true
+            }
+            if (alive) n++
+        }
+        return n
     }
 
     /**
@@ -790,11 +948,16 @@ class CombatController(
             SkillCatalog.ARCHER_DOUBLE_SHOT_ID,
             SkillCatalog.ARCHER_AIM_SHOT_ID,
             SkillCatalog.FIGHTER_TAUNT_ID,
+            SkillCatalog.FIGHTER_COUNTER_ATTACK_ID,
+            SkillCatalog.FIGHTER_DISARM_ID,
             SkillCatalog.THIEF_WEAK_POINT_ID,
+            SkillCatalog.ARCHER_MARK_TARGET_ID,
+            SkillCatalog.ARCHER_FEINT_DEATH_ID,
             SkillCatalog.THIEF_STEAL_ID,
             SkillCatalog.THIEF_DOUBLE_STRIKE_ID,
             SkillCatalog.THIEF_TRICK_ATTACK_ID,
             SkillCatalog.THIEF_HIDE_ID,
+            SkillCatalog.THIEF_EVASIVE_MANEUVER_ID,
             -> true
             else -> HealResolver.isHeal(skill)
         }
@@ -817,12 +980,16 @@ class CombatController(
         }
         if (skill.id == SkillCatalog.ARCHER_RAPID_FIRE_ID) {
             return commitArcherPrepare(hero, skill) {
-                archerPrepareBuffs[slot].rapidFirePending = true
+                val buffs = archerPrepareBuffs[slot]
+                buffs.doubleShotPending = false
+                buffs.rapidFirePending = true
             }
         }
         if (skill.id == SkillCatalog.ARCHER_DOUBLE_SHOT_ID) {
             return commitArcherPrepare(hero, skill) {
-                archerPrepareBuffs[slot].doubleShotPending = true
+                val buffs = archerPrepareBuffs[slot]
+                buffs.rapidFirePending = false
+                buffs.doubleShotPending = true
             }
         }
         if (skill.id == SkillCatalog.ARCHER_AIM_SHOT_ID) {
@@ -833,8 +1000,20 @@ class CombatController(
         if (skill.id == SkillCatalog.FIGHTER_TAUNT_ID) {
             return commitHeroTaunt(slot, hero, skill)
         }
+        if (skill.id == SkillCatalog.FIGHTER_COUNTER_ATTACK_ID) {
+            return commitFighterCounterAttackPrepare(slot, hero, skill)
+        }
+        if (skill.id == SkillCatalog.FIGHTER_DISARM_ID) {
+            return commitFighterDisarmPrepare(slot, hero, skill)
+        }
         if (skill.id == SkillCatalog.THIEF_WEAK_POINT_ID) {
             return commitHeroExposeWeakness(slot, hero, skill, preferredTarget)
+        }
+        if (skill.id == SkillCatalog.ARCHER_MARK_TARGET_ID) {
+            return commitHeroMarkTarget(slot, hero, skill, preferredTarget)
+        }
+        if (skill.id == SkillCatalog.ARCHER_FEINT_DEATH_ID) {
+            return commitHeroFeintDeath(slot, hero, skill)
         }
         if (skill.id == SkillCatalog.THIEF_STEAL_ID) {
             return commitThiefStealPrepare(slot, hero, skill)
@@ -848,8 +1027,15 @@ class CombatController(
         if (skill.id == SkillCatalog.THIEF_HIDE_ID) {
             return commitHeroHide(slot, hero, skill)
         }
+        if (skill.id == SkillCatalog.THIEF_EVASIVE_MANEUVER_ID) {
+            return commitThiefEvasiveManeuver(slot, hero, skill)
+        }
         return false
     }
+
+    fun isEvasiveManeuverActive(slot: Int): Boolean =
+        slot in evasiveManeuverTurnsRemaining.indices &&
+            evasiveManeuverTurnsRemaining[slot] > 0
 
     private fun executeMainAction(
         slot: Int,
@@ -862,11 +1048,12 @@ class CombatController(
         if (!hero.isAlive) return false
         aimShotResolvedThisAction[slot] = false
         stealResolvedThisAction[slot] = false
+        disarmResolvedThisAction[slot] = false
         val chosen = skill ?: hero.basicAttackSkill
         if (HealResolver.isHeal(chosen)) return false
         if (routesToDedicatedCommit(chosen)) return false
         // Validate MP cost.
-        if (chosen.mpCost > hero.mp) return false
+        if (effectiveSkillMpCost(hero, chosen) > hero.mp) return false
 
         // Resolve the target. Priority order:
         //   1. Caller-supplied [preferredTarget] (typically the
@@ -890,8 +1077,9 @@ class CombatController(
         // pure-buff prepare skills) and there's no line to
         // walk. Heals route through [commitHeroHeal] and skip
         // this gate by design.
-        if (chosen.range > 0) {
-            if (!LineOfSight.isInRange(floor.partyCell, target.cell, chosen.range)) {
+        val skillRange = WeaponClassRules.effectiveSkillRange(hero, chosen)
+        if (skillRange > 0) {
+            if (!LineOfSight.isInRange(floor.partyCell, target.cell, skillRange)) {
                 log.append(
                     CombatLogEntry.OutOfRange(
                         attacker = hero.name,
@@ -903,7 +1091,7 @@ class CombatController(
                 // pick a different target without losing their beat.
                 return false
             }
-            if (chosen.range > 1 &&
+            if (skillRange > 1 &&
                 !LineOfSight.hasLineOfSight(floor, floor.partyCell, target.cell)
             ) {
                 log.append(
@@ -921,18 +1109,7 @@ class CombatController(
         val multiArrow = shotPlan.totalArrows > 1
 
         chosen.requiredShard?.let { shard ->
-            if (multiArrow) {
-                if (!combat.party.inventory.hasIngredient(shard)) {
-                    log.append(
-                        CombatLogEntry.MissingShard(
-                            attacker = hero.name,
-                            skillName = chosen.displayName,
-                            shardName = shard.displayName,
-                        ),
-                    )
-                    return false
-                }
-            } else if (!combat.party.inventory.consumeIngredient(shard)) {
+            if (!multiArrow && !combat.party.inventory.consumeIngredient(shard)) {
                 log.append(
                     CombatLogEntry.MissingShard(
                         attacker = hero.name,
@@ -949,10 +1126,10 @@ class CombatController(
         } else {
             null
         }
-        withAttackFx(buildHeroStrikeFx(hero, chosen, target, shotPlan, bowShotHandlers)) {
+        withAttackFx(buildHeroStrikeFx(hero, chosen, target, shotPlan, bowShotHandlers)) { fxPlayed ->
             withDefenderSpellFx(chosen, target) {
                 if (multiArrow) {
-                    if (!attackFxPending) {
+                    if (!fxPlayed) {
                         bowShotHandlers?.forEach { it() }
                     }
                 } else {
@@ -985,7 +1162,7 @@ class CombatController(
         skill: Skill,
         preferredTarget: Enemy?,
     ): Boolean {
-        if (skill.mpCost > hero.mp) return false
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
         val target = resolveAttackTarget(preferredTarget) ?: run {
             log.append(
                 CombatLogEntry.Info(
@@ -1020,7 +1197,7 @@ class CombatController(
         if (targetIdx < 0) return false
 
         withExposeWeaknessFx(target) {
-            if (skill.mpCost > 0) hero.spendMana(skill.mpCost)
+            spendHeroSkillMana(hero, skill)
             weakPointEnemyIdx = targetIdx
             weakPointRerollUsed.fill(false)
             log.append(
@@ -1047,9 +1224,123 @@ class CombatController(
         block()
     }
 
+    /**
+     * Archer Mark Target: debuff one enemy for
+     * [SkillCatalog.ARCHER_MARK_TARGET_DURATION_ROUNDS] combat rounds
+     * (+[SkillCatalog.ARCHER_MARK_TARGET_DAMAGE_BONUS_PCT]% damage).
+     */
+    private fun commitHeroMarkTarget(
+        slot: Int,
+        hero: Hero,
+        skill: Skill,
+        preferredTarget: Enemy?,
+    ): Boolean {
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
+        val target = resolveAttackTarget(preferredTarget) ?: run {
+            log.append(
+                CombatLogEntry.Info(
+                    "${hero.name} cannot mark a target — no valid enemy.",
+                ),
+            )
+            return false
+        }
+        if (!LineOfSight.isInRange(floor.partyCell, target.cell, skill.range)) {
+            log.append(
+                CombatLogEntry.OutOfRange(
+                    attacker = hero.name,
+                    skillName = skill.displayName,
+                    target = target.name,
+                ),
+            )
+            return false
+        }
+        if (skill.range > 1 &&
+            !LineOfSight.hasLineOfSight(floor, floor.partyCell, target.cell)
+        ) {
+            log.append(
+                CombatLogEntry.LineOfSightBlocked(
+                    attacker = hero.name,
+                    skillName = skill.displayName,
+                    target = target.name,
+                ),
+            )
+            return false
+        }
+        val targetIdx = combat.enemies.indexOf(target)
+        if (targetIdx < 0) return false
+
+        breakPartyHideFromHeroAction(skill)
+        spendHeroSkillMana(hero, skill)
+        markTargetEnemyIdx = targetIdx
+        markTargetRoundsLeft = SkillCatalog.ARCHER_MARK_TARGET_DURATION_ROUNDS
+        log.append(
+            CombatLogEntry.Info(
+                "${hero.name} marks ${target.name} for " +
+                    "${SkillCatalog.ARCHER_MARK_TARGET_DURATION_ROUNDS} rounds " +
+                    "(+${SkillCatalog.ARCHER_MARK_TARGET_DAMAGE_BONUS_PCT}% damage).",
+            ),
+        )
+        if (skill.costsAction) {
+            finishCurrentAction()
+        }
+        return true
+    }
+
+    /**
+     * Combat-log line whenever a skill lowers hate. Call after applying
+     * the hate change so every reduction skill stays consistent in the UI.
+     */
+    private fun logSkillHateReduction(
+        hero: Hero,
+        skill: Skill,
+        amount: Int,
+        targetLabel: String,
+    ) {
+        if (amount <= 0) return
+        log.append(
+            CombatLogEntry.Info(
+                "${hero.name} uses ${skill.displayName} — hate $targetLabel reduced by $amount.",
+            ),
+        )
+    }
+
+    /**
+     * Archer Feint Death: each living enemy loses
+     * [SkillCatalog.ARCHER_FEINT_DEATH_HATE_DELTA] hate toward the caster.
+     */
+    private fun commitHeroFeintDeath(slot: Int, hero: Hero, skill: Skill): Boolean {
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
+        val livingEnemies = combat.enemies.indices.filter { combat.enemies[it].isAlive }
+        if (livingEnemies.isEmpty()) {
+            log.append(
+                CombatLogEntry.Info(
+                    "${hero.name} uses ${skill.displayName}, but no enemies remain.",
+                ),
+            )
+            return false
+        }
+        withAttackFx(FeintDeathFxCatalog.buildFxRequest(floor.partyCell)) { _ ->
+            spendHeroSkillMana(hero, skill)
+            val delta = SkillCatalog.ARCHER_FEINT_DEATH_HATE_DELTA
+            for (enemyIdx in livingEnemies) {
+                combat.hate.bumpHate(enemyIdx, slot, delta)
+            }
+            logSkillHateReduction(
+                hero = hero,
+                skill = skill,
+                amount = -delta,
+                targetLabel = "toward ${hero.name}",
+            )
+            if (skill.costsAction) {
+                finishCurrentAction()
+            }
+        }
+        return true
+    }
+
     private fun commitHeroTaunt(slot: Int, hero: Hero, skill: Skill): Boolean {
-        if (skill.mpCost > hero.mp) return false
-        if (!anyEnemyReachable(skill)) {
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
+        if (!anyEnemyReachable(hero, skill)) {
             log.append(
                 CombatLogEntry.Info(
                     "${hero.name} taunts, but no enemy is in range.",
@@ -1057,7 +1348,7 @@ class CombatController(
             )
             return false
         }
-        if (skill.mpCost > 0) hero.spendMana(skill.mpCost)
+        spendHeroSkillMana(hero, skill)
         val livingEnemyIndices = combat.enemies.indices.filter {
             combat.enemies[it].isAlive
         }
@@ -1066,9 +1357,25 @@ class CombatController(
             enemyIndices = livingEnemyIndices,
             isHeroAlive = { h -> combat.party.heroes.getOrNull(h)?.isAlive == true },
         )
-        log.append(
-            CombatLogEntry.Info("${hero.name} taunts — drawing enemy attention."),
-        )
+        val otherHeroesPresent = combat.party.heroes.indices.any {
+            it != slot && combat.party.heroes[it].isAlive
+        }
+        val tauntText = buildString {
+            append(hero.name)
+            append(" uses ")
+            append(skill.displayName)
+            append(" — drawing enemy attention (+")
+            append(HateTracker.TAUNT_CASTER_DELTA)
+            append(" hate toward ")
+            append(hero.name)
+            append(')')
+            if (otherHeroesPresent) {
+                append("; other heroes' hate reduced by ")
+                append(-HateTracker.TAUNT_OTHERS_DELTA)
+            }
+            append('.')
+        }
+        log.append(CombatLogEntry.Info(tauntText))
         if (skill.costsAction) {
             finishCurrentAction()
         }
@@ -1081,11 +1388,11 @@ class CombatController(
         skill: Skill,
         hateTargetSlot: Int?,
     ): Boolean {
-        if (skill.mpCost > hero.mp) return false
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
         val redirectSlot = resolveTrickAttackHateTarget(slot, hateTargetSlot) ?: return false
         val redirectName = combat.party.heroes.getOrNull(redirectSlot)?.name ?: return false
         withPartyRiseCastFx(skill) {
-            if (skill.mpCost > 0) hero.spendMana(skill.mpCost)
+            spendHeroSkillMana(hero, skill)
             val buffs = thiefPrepareBuffs[slot]
             buffs.trickAttackPending = true
             buffs.trickAttackHateRedirectSlot = redirectSlot
@@ -1117,9 +1424,9 @@ class CombatController(
     }
 
     private fun commitHeroHide(slot: Int, hero: Hero, skill: Skill): Boolean {
-        if (skill.mpCost > hero.mp) return false
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
         withPartyRiseCastFx(skill) {
-            if (skill.mpCost > 0) hero.spendMana(skill.mpCost)
+            spendHeroSkillMana(hero, skill)
             tryActivateCombatPartyHide(slot, hero)
             log.append(
                 CombatLogEntry.Info("${hero.name} uses ${skill.displayName}."),
@@ -1161,6 +1468,7 @@ class CombatController(
     private fun endCombatFromHide() {
         if (ended) return
         ended = true
+        stunnedEnemyIndices.clear()
         log.append(CombatLogEntry.Info("The party slips away unseen."))
         awardVictoryXp()
         awardVictoryLoot()
@@ -1200,8 +1508,8 @@ class CombatController(
 
     /** Arms Double Strike for the hero's next melee attack (+bonus damage + FX). */
     private fun commitThiefDoubleStrikePrepare(slot: Int, hero: Hero, skill: Skill): Boolean {
-        if (skill.mpCost > hero.mp) return false
-        if (skill.mpCost > 0) hero.spendMana(skill.mpCost)
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
+        spendHeroSkillMana(hero, skill)
         thiefPrepareBuffs[slot].doubleStrikePending = true
         log.append(
             CombatLogEntry.Info("${hero.name} prepares ${skill.displayName}."),
@@ -1213,9 +1521,29 @@ class CombatController(
     }
 
     /** Arms Steal for the hero's next connecting melee attack. */
+    private fun commitThiefEvasiveManeuver(slot: Int, hero: Hero, skill: Skill): Boolean {
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
+        spendHeroSkillMana(hero, skill)
+        setEvasiveManeuverTurns(
+            slot,
+            SkillCatalog.THIEF_EVASIVE_MANEUVER_DURATION_TURNS,
+        )
+        log.append(
+            CombatLogEntry.Info(
+                "${hero.name} uses ${skill.displayName} " +
+                    "(+${SkillCatalog.THIEF_EVASIVE_MANEUVER_DODGE_BONUS_PCT}% dodge for " +
+                    "${SkillCatalog.THIEF_EVASIVE_MANEUVER_DURATION_TURNS} turns).",
+            ),
+        )
+        if (skill.costsAction) {
+            finishCurrentAction()
+        }
+        return true
+    }
+
     private fun commitThiefStealPrepare(slot: Int, hero: Hero, skill: Skill): Boolean {
-        if (skill.mpCost > hero.mp) return false
-        if (skill.mpCost > 0) hero.spendMana(skill.mpCost)
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
+        spendHeroSkillMana(hero, skill)
         thiefPrepareBuffs[slot].stealPending = true
         log.append(
             CombatLogEntry.Info("${hero.name} prepares ${skill.displayName}."),
@@ -1226,13 +1554,39 @@ class CombatController(
         return true
     }
 
+    private fun commitFighterDisarmPrepare(slot: Int, hero: Hero, skill: Skill): Boolean {
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
+        if (!hero.knownSkills.any { it.id == SkillCatalog.FIGHTER_DISARM_ID }) {
+            return false
+        }
+        spendHeroSkillMana(hero, skill)
+        fighterPrepareBuffs[slot].disarmPending = true
+        log.append(
+            CombatLogEntry.Info("${hero.name} prepares ${skill.displayName}."),
+        )
+        return true
+    }
+
+    private fun commitFighterCounterAttackPrepare(slot: Int, hero: Hero, skill: Skill): Boolean {
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
+        if (!hero.knownSkills.any { it.id == SkillCatalog.FIGHTER_COUNTER_ATTACK_ID }) {
+            return false
+        }
+        spendHeroSkillMana(hero, skill)
+        fighterPrepareBuffs[slot].counterAttackPending = true
+        log.append(
+            CombatLogEntry.Info("${hero.name} prepares ${skill.displayName}."),
+        )
+        return true
+    }
+
     private fun commitArcherPrepare(
         hero: Hero,
         skill: Skill,
         armBuff: () -> Unit,
     ): Boolean {
-        if (skill.mpCost > hero.mp) return false
-        if (skill.mpCost > 0) hero.spendMana(skill.mpCost)
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
+        spendHeroSkillMana(hero, skill)
         armBuff()
         log.append(
             CombatLogEntry.Info("${hero.name} prepares ${skill.displayName}."),
@@ -1250,40 +1604,37 @@ class CombatController(
     private fun consumeArcherShotPlan(slot: Int): ArcherShotPlan {
         val buffs = archerPrepareBuffs[slot]
         val volleys = mutableListOf<BowVolley>()
-        var secondArrowMissChancePct = 0
+        val perArrow = mutableListOf<BowArrowModifiers>()
 
-        val hadDouble = buffs.doubleShotPending
-        val hadRapid = buffs.rapidFirePending
-        if (hadDouble) {
-            buffs.doubleShotPending = false
-            secondArrowMissChancePct = ARCHER_DOUBLE_SHOT_SECOND_MISS_PCT
-            volleys += BowVolley.Parallel(arrowCount = 2)
-        }
-        if (hadRapid) {
-            buffs.rapidFirePending = false
-            var rapidArrows = 2
-            if (rng.nextDouble() < ARCHER_RAPID_FIRE_EXTRA_ARROW_CHANCE) {
-                rapidArrows += 1
-            }
-            if (hadDouble) {
-                val extra = rapidArrows - 2
-                if (extra > 0) {
-                    volleys += BowVolley.Sequential(
-                        arrowCount = extra,
-                        shotDurationMultipliers = rapidFireShotMultipliers(extra),
-                    )
-                }
-            } else {
-                volleys += BowVolley.Sequential(
-                    arrowCount = rapidArrows,
-                    shotDurationMultipliers = rapidFireShotMultipliers(rapidArrows),
+        when {
+            buffs.doubleShotPending -> {
+                buffs.doubleShotPending = false
+                volleys += BowVolley.Parallel(arrowCount = 2)
+                perArrow += BowArrowModifiers(
+                    physicalDamagePct = SkillCatalog.ARCHER_DOUBLE_SHOT_FIRST_DAMAGE_PCT,
+                )
+                perArrow += BowArrowModifiers(
+                    physicalDamagePct = SkillCatalog.ARCHER_DOUBLE_SHOT_SECOND_DAMAGE_PCT,
                 )
             }
+            buffs.rapidFirePending -> {
+                buffs.rapidFirePending = false
+                val rapidCount = SkillCatalog.ARCHER_RAPID_FIRE_ARROW_COUNT
+                volleys += BowVolley.Sequential(
+                    arrowCount = rapidCount,
+                    shotDurationMultipliers = rapidFireShotMultipliers(rapidCount),
+                )
+                repeat(rapidCount) { rapidIndex ->
+                    val missPct = when (rapidIndex) {
+                        1 -> SkillCatalog.ARCHER_RAPID_FIRE_SECOND_ARROW_MISS_PCT
+                        2 -> SkillCatalog.ARCHER_RAPID_FIRE_THIRD_ARROW_MISS_PCT
+                        else -> 0
+                    }
+                    perArrow += BowArrowModifiers(extraMissChancePct = missPct)
+                }
+            }
         }
-        return ArcherShotPlan(
-            volleys = volleys,
-            secondArrowMissChancePct = secondArrowMissChancePct,
-        )
+        return ArcherShotPlan(volleys = volleys, perArrow = perArrow)
     }
 
     /**
@@ -1341,7 +1692,7 @@ class CombatController(
     ): Boolean {
         val hero = combat.party.heroes.getOrNull(slot) ?: return false
         if (!hero.isAlive) return false
-        if (skill.mpCost > hero.mp) return false
+        if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
         breakPartyHideFromHeroTurn()
 
         val target = resolveAttackTarget(preferredTarget) ?: run {
@@ -1393,7 +1744,7 @@ class CombatController(
             return false
         }
 
-        hero.spendMana(skill.mpCost)
+        spendHeroSkillMana(hero, skill)
         val travelled = LineOfSight.manhattan(start, landing)
         val lungeMs = (travelled * CHARGE_MS_PER_CELL).coerceAtLeast(CHARGE_MIN_MS)
         pendingChargeLungeMs = lungeMs
@@ -1411,7 +1762,7 @@ class CombatController(
                 distance = travelled,
             ),
         )
-        withAttackFx(buildHeroStrikeFx(hero, skill, target, ArcherShotPlan.EMPTY)) {
+        withAttackFx(buildHeroStrikeFx(hero, skill, target, ArcherShotPlan.EMPTY)) { _ ->
             pendingChargeLungeMs = null
             resolveChargeStrike(hero, target)
             finishCurrentAction()
@@ -1525,12 +1876,13 @@ class CombatController(
      * by the range / LOS check" - no false positives where the
      * fallback fires but the actual commit still fails.
      */
-    fun anyEnemyReachable(skill: Skill): Boolean {
-        if (skill.range <= 0) return false
+    fun anyEnemyReachable(hero: Hero, skill: Skill): Boolean {
+        val range = WeaponClassRules.effectiveSkillRange(hero, skill)
+        if (range <= 0) return false
         return combat.enemies.any { enemy ->
             enemy.isAlive &&
-                LineOfSight.isInRange(floor.partyCell, enemy.cell, skill.range) &&
-                (skill.range <= 1 ||
+                LineOfSight.isInRange(floor.partyCell, enemy.cell, range) &&
+                (range <= 1 ||
                     LineOfSight.hasLineOfSight(floor, floor.partyCell, enemy.cell))
         }
     }
@@ -1592,12 +1944,12 @@ class CombatController(
         // a stale dialog from KO-fixing a corpse.
         if (!target.isAlive) return false
         val amount = HealResolver.amountFor(skill) ?: return false
-        if (skill.mpCost > caster.mp) return false
+        if (effectiveSkillMpCost(caster, skill) > caster.mp) return false
         breakPartyHideFromHeroTurn()
 
-        withAttackFx(buildHeroSpellCastFx(caster, skill, floor.partyCell)) {
+        withAttackFx(buildHeroSpellCastFx(caster, skill, floor.partyCell)) { _ ->
             withHealPortraitFx(targetSlot) {
-                caster.spendMana(skill.mpCost)
+                spendHeroSkillMana(caster, skill)
                 val restored = target.heal(amount)
                 log.append(
                     CombatLogEntry.HealCast(
@@ -1633,6 +1985,9 @@ class CombatController(
      * (skip-the-corpse) and recurses; this preserves the strip's
      * portrait-slide visual without burning real time on no-op
      * actions.
+     *
+     * DoT damage ([dotEffects]) always runs here first for the active
+     * initiative entry — at the start of that unit's turn order slot.
      */
     private fun queueCurrentActor() {
         if (ended) return
@@ -1640,8 +1995,15 @@ class CombatController(
 
         val entry = combat.round.currentActor()
         if (entry == null) {
-            // Round wrapped. CombatRound auto-resets on the next
-            // animation tick; nothing to do here.
+            // Round queue exhausted; advance to the next round if
+            // strip animations have finished (avoids a soft-lock
+            // where no hero ever gets awaitingHeroInput again).
+            if (combat.round.isRoundComplete && !combat.round.isAnimating) {
+                tickMarkTargetAtRoundEnd()
+                tickEnemyDisarmAtRoundEnd()
+                combat.round.startNextRoundIfComplete()
+                queueCurrentActor()
+            }
             return
         }
         when (entry.kind) {
@@ -1650,6 +2012,15 @@ class CombatController(
                 if (hero == null || !hero.isAlive) {
                     // Skip dead/empty slot - their portrait still
                     // animates off so initiative reads correctly.
+                    finishCurrentAction()
+                } else if (
+                    dotEffects.onActorTurnStart(
+                        entry = entry,
+                        enemy = null,
+                        log = log,
+                        onEnemyKo = ::handleEnemyKoIfDead,
+                    )
+                ) {
                     finishCurrentAction()
                 } else if (combat.round.heroActionsLockedThisRound) {
                     // Successful disengage earlier this round
@@ -1679,7 +2050,26 @@ class CombatController(
                 } else {
                     awaitingHeroInput = false
                     currentHeroSlot = null
-                    planEnemyTurn(enemy)
+                    if (
+                        dotEffects.onActorTurnStart(
+                            entry = entry,
+                            enemy = enemy,
+                            log = log,
+                            onEnemyKo = ::handleEnemyKoIfDead,
+                        )
+                    ) {
+                        finishCurrentAction()
+                    } else if (entry.index in stunnedEnemyIndices) {
+                        stunnedEnemyIndices.remove(entry.index)
+                        log.append(
+                            CombatLogEntry.Info(
+                                "${enemy.name} is stunned and cannot move or act.",
+                            ),
+                        )
+                        finishCurrentAction()
+                    } else {
+                        planEnemyTurn(enemy)
+                    }
                 }
             }
         }
@@ -1712,6 +2102,7 @@ class CombatController(
         enemyScript.clear()
         enemyStepRemainingMs = 0L
         enemyMoveAnim = null
+        enemyMovedThisTurn = false
 
         // 0. Hate bookkeeping FIRST so the target pick later in
         //    [tryEnemyStrike] uses the freshly-bumped values:
@@ -1733,11 +2124,14 @@ class CombatController(
         )
         enemyScript += EnemyStep.Wait(ENEMY_THINK_HOLD_MS)
 
-        val moveFirst = enemy.dexterity >= partyMaxDex()
+        val moveThenStrike = enemy.template.moveThenStrikeSameTurn ||
+            enemy.dexterity >= partyMaxDex()
         val moveCells = planEnemyMovePath(enemy)
+        val endCell = moveCells.lastOrNull() ?: enemy.cell
 
-        // 2. Strike before moving when slower than the party.
-        if (!moveFirst) {
+        // 2. Strike before moving when slower than the party (unless
+        //    this enemy always move-then-strikes in one action).
+        if (!moveThenStrike) {
             enemyScript += EnemyStep.Strike(ENEMY_STRIKE_HOLD_MS)
         }
 
@@ -1748,8 +2142,9 @@ class CombatController(
             enemyScript += EnemyStep.Move(cell, ENEMY_STEP_MS)
         }
 
-        // 4. Strike after moving for the fast / party-pace enemies.
-        if (moveFirst) {
+        // 4. Strike after moving when fast enough or authored for
+        //    combo turns (e.g. bat dive-bite after closing distance).
+        if (moveThenStrike && enemyCanStrikeFrom(enemy, endCell)) {
             enemyScript += EnemyStep.Strike(ENEMY_STRIKE_HOLD_MS)
         }
 
@@ -1770,33 +2165,19 @@ class CombatController(
      *     and stopping when the enemy would be Manhattan-1 to the
      *     party (its strike phase handles the final beat).
      */
-    private fun planEnemyMovePath(enemy: Enemy): List<Cell> {
-        val budget = enemy.template.movementSquares
-        if (budget <= 0) return emptyList()
+    private fun planEnemyMovePath(enemy: Enemy): List<Cell> =
+        EnemyCombatAi.planMovePath(
+            floor = floor,
+            enemy = enemy,
+            allEnemies = combat.enemies,
+            partyCell = floor.partyCell,
+        )
+
+    /** True when [enemy] at [from] can land a basic attack on the party. */
+    private fun enemyCanStrikeFrom(enemy: Enemy, from: Cell): Boolean {
         val partyCell = floor.partyCell
-        if (enemy.cell == partyCell) return emptyList()
-        if (manhattan(enemy.cell, partyCell) <= 1) return emptyList()
-
-        val blocked = otherEnemyCells(enemy)
-        val path = Pathfinder.findPath(floor, enemy.cell, partyCell, blocked)
-        if (path.size <= 1) return emptyList()
-
-        val cells = ArrayList<Cell>(budget)
-        var stepsTaken = 0
-        var i = 1
-        while (i < path.size && stepsTaken < budget) {
-            val next = path[i]
-            if (next == partyCell) break
-            cells += next
-            stepsTaken += 1
-            i += 1
-            // Stop the moment we'd be Manhattan-1 to the party -
-            // the strike phase handles the final beat, no need to
-            // burn the rest of the movement budget shuffling on
-            // the adjacent tile.
-            if (manhattan(next, partyCell) <= 1) break
-        }
-        return cells
+        if (!LineOfSight.isInRange(from, partyCell, enemy.attackRange)) return false
+        return LineOfSight.hasLineOfSight(floor, from, partyCell)
     }
 
     /**
@@ -1853,6 +2234,7 @@ class CombatController(
                         durationMs = step.durationMs,
                     )
                     floor.moveEnemy(enemy, step.target)
+                    enemyMovedThisTurn = true
                 } else {
                     enemyMoveAnim = null
                 }
@@ -1900,15 +2282,15 @@ class CombatController(
         combat.party.heroes.filter { it.isAlive }.maxOfOrNull { it.dexterity } ?: 0
 
     /**
-     * If [enemy] is adjacent to the party cell AND a living hero
-     * is around to receive the swing, resolves one melee attack.
-     * Quiet no-op otherwise - keeps the call site terse.
+     * If [enemy] is in [attackRange] with LOS to the party AND a
+     * living hero can be targeted, resolves one basic attack.
      */
     private fun tryEnemyStrike(enemy: Enemy) {
         if (!enemy.isAlive) return
-        if (manhattan(enemy.cell, floor.partyCell) > 1) return
+        if (!enemyCanStrikeFrom(enemy, enemy.cell)) return
         val target = pickHateTarget(enemy) ?: return
-        resolveEnemyMelee(enemy, target)
+        val riposte = resolveEnemyMelee(enemy, target)
+        if (riposte) playCounterRiposteFx(target, enemy)
     }
 
     /**
@@ -1973,18 +2355,23 @@ class CombatController(
      * missing, or playback fails to start; otherwise defers [block]
      * until the animation finishes.
      */
-    private fun withAttackFx(request: WeaponFxRequest?, block: () -> Unit) {
+    /**
+     * @param block Receives true when bow / weapon FX played and already
+     *   fired [WeaponFxRequest.onBowShotImpact]; false when [block] runs
+     *   immediately because FX did not start.
+     */
+    private fun withAttackFx(request: WeaponFxRequest?, block: (fxPlayed: Boolean) -> Unit) {
         if (request != null) {
             val started = weaponFx.start(request) {
                 attackFxPending = false
-                block()
+                block(true)
             }
             if (started) {
                 attackFxPending = true
                 return
             }
         }
-        block()
+        block(false)
     }
 
     private fun withStealFx(target: Enemy, block: () -> Unit) {
@@ -2116,11 +2503,23 @@ class CombatController(
                 weaponType = hero.weapon1?.type,
             )
         }
+        if (SkillCatalog.isArcherElementalArrow(skill.id)) {
+            val arrowAsset = SkillCatalog.arrowAssetForArcherArrow(skill.id) ?: "arrow"
+            val bowVolleyPlan = buildBowVolleyPlan(arrowAsset, shotPlan, ensureAtLeastOneVolley = true)
+            return WeaponFxRequest(
+                attackerCell = floor.partyCell,
+                defenderCell = target.cell,
+                kind = WeaponFxKind.BOW_SHOT,
+                weaponType = hero.weapon1?.type,
+                bowVolleyPlan = bowVolleyPlan,
+                onBowShotImpact = bowShotHandlers,
+            )
+        }
         if (skill.isSpell) {
             return buildHeroSpellCastFx(hero, skill, target.cell)
         }
         val kind = WeaponFxCatalog.kindForWeaponAttack(hero.weapon1?.type) ?: return null
-        val bowVolleyPlan = buildBowVolleyPlan(kind, shotPlan)
+        val bowVolleyPlan = buildBowVolleyPlan("arrow", shotPlan)
         return WeaponFxRequest(
             attackerCell = floor.partyCell,
             defenderCell = target.cell,
@@ -2132,18 +2531,6 @@ class CombatController(
     }
 
     private fun buildHeroSpellCastFx(hero: Hero, skill: Skill, targetCell: Cell): WeaponFxRequest? {
-        val kind = WeaponFxCatalog.kindForSpell(
-            weaponType = hero.weapon1?.type,
-            isFireArrowSkill = skill.id == FIRE_ARROW_SKILL_ID,
-        )
-        if (kind == WeaponFxKind.FIRE_PROJECTILE) {
-            return WeaponFxRequest(
-                attackerCell = floor.partyCell,
-                defenderCell = targetCell,
-                kind = kind,
-                weaponType = hero.weapon1?.type,
-            )
-        }
         val flowFrames = if (
             skill.id == SkillCatalog.MAGE_EARTH_1_ID ||
             skill.id == SkillCatalog.MAGE_EARTH_2_ID ||
@@ -2166,11 +2553,17 @@ class CombatController(
         )
     }
 
-    private fun buildBowVolleyPlan(kind: WeaponFxKind, shotPlan: ArcherShotPlan): BowVolleyPlan? {
-        if (shotPlan.volleys.isEmpty()) return null
-        if (kind != WeaponFxKind.BOW_SHOT && kind != WeaponFxKind.FIRE_PROJECTILE) return null
-        val arrowAsset = if (kind == WeaponFxKind.FIRE_PROJECTILE) "fire_arrow" else "arrow"
-        return BowVolleyPlan(volleys = shotPlan.volleys, arrowAsset = arrowAsset)
+    private fun buildBowVolleyPlan(
+        arrowAsset: String,
+        shotPlan: ArcherShotPlan,
+        ensureAtLeastOneVolley: Boolean = false,
+    ): BowVolleyPlan? {
+        val volleys = when {
+            shotPlan.volleys.isNotEmpty() -> shotPlan.volleys
+            ensureAtLeastOneVolley -> listOf(BowVolley.Parallel(arrowCount = 1))
+            else -> return null
+        }
+        return BowVolleyPlan(volleys = volleys, arrowAsset = arrowAsset)
     }
 
     /**
@@ -2192,13 +2585,22 @@ class CombatController(
      * will run on completion.
      */
     private fun playEnemyStrikeFx(enemy: Enemy): Boolean {
-        if (manhattan(enemy.cell, floor.partyCell) > 1) return false
+        if (!enemyCanStrikeFrom(enemy, enemy.cell)) return false
         val target = pickHateTarget(enemy) ?: return false
+        if (enemy.weaponType == WeaponType.BITE) {
+            return batStrikeFx.start(enemy, floor.partyCell) {
+                attackFxPending = false
+                enemyStepRemainingMs = ENEMY_STRIKE_HOLD_MS
+                val riposte = resolveEnemyMelee(enemy, target)
+                if (riposte) playCounterRiposteFx(target, enemy)
+            }
+        }
         val request = buildEnemyStrikeFx(enemy) ?: return false
         return weaponFx.start(request) {
             attackFxPending = false
             enemyStepRemainingMs = ENEMY_STRIKE_HOLD_MS
-            resolveEnemyMelee(enemy, target)
+            val riposte = resolveEnemyMelee(enemy, target)
+            if (riposte) playCounterRiposteFx(target, enemy)
         }
     }
 
@@ -2215,7 +2617,7 @@ class CombatController(
      * resolver lands with the broader skill effects pass.
      */
     private fun resolveHeroAction(hero: Hero, skill: Skill, target: Enemy) {
-        if (skill.mpCost > 0) hero.spendMana(skill.mpCost)
+        spendHeroSkillMana(hero, skill)
         resolveHeroActionShot(hero, skill, target)
     }
 
@@ -2251,36 +2653,42 @@ class CombatController(
         spendMp: Boolean,
     ) {
         if (!target.isAlive) return
-        if (spendMp && skill.mpCost > 0) hero.spendMana(skill.mpCost)
+        if (spendMp) spendHeroSkillMana(hero, skill)
 
         val shotLabel = bowShotLabel(arrowIndex, plan.totalArrows)
-
-        if (arrowIndex == 1 && plan.secondArrowMissChancePct > 0) {
-            if (rng.nextInt(100) < plan.secondArrowMissChancePct) {
-                log.append(
-                    CombatLogEntry.MeleeMiss(
-                        attacker = hero.name,
-                        target = target.name,
-                        shotLabel = shotLabel,
-                    ),
-                )
-                return
-            }
-        }
-
-        val hit = resolveHeroActionShot(hero, skill, target, shotLabel)
-        val shard = skill.requiredShard
+        val arrowMods = plan.modifiersFor(arrowIndex)
+        val effectiveSkill = effectiveBowSkillForArrow(hero, skill)
+        val hit = resolveHeroActionShot(
+            hero = hero,
+            skill = effectiveSkill,
+            target = target,
+            shotLabel = shotLabel,
+            arrowMods = arrowMods,
+            logSkillName = skill.displayName,
+        )
+        val shard = effectiveSkill.requiredShard
         if (hit && shard != null) {
             if (!combat.party.inventory.consumeIngredient(shard)) {
                 log.append(
                     CombatLogEntry.MissingShard(
                         attacker = hero.name,
-                        skillName = skill.displayName,
+                        skillName = effectiveSkill.displayName,
                         shardName = shard.displayName,
                     ),
                 )
             }
         }
+    }
+
+    /**
+     * Elemental bow skills fall back to a normal arrow when the matching
+     * shard is gone; later shots in the same volley keep checking inventory.
+     */
+    private fun effectiveBowSkillForArrow(hero: Hero, skill: Skill): Skill {
+        if (!SkillCatalog.isArcherElementalArrow(skill.id)) return skill
+        val shard = skill.requiredShard ?: return skill
+        if (combat.party.inventory.hasIngredient(shard)) return skill
+        return hero.basicAttackSkill
     }
 
     private fun bowShotLabel(arrowIndex: Int, totalArrows: Int): String? =
@@ -2295,19 +2703,107 @@ class CombatController(
         skill: Skill,
         target: Enemy,
         shotLabel: String? = null,
+        arrowMods: BowArrowModifiers = BowArrowModifiers(),
+        logSkillName: String? = null,
     ): Boolean {
         val heroSlot = combat.party.heroes.indexOf(hero)
         val targetIdx = combat.enemies.indexOf(target)
+
+        if (SkillCatalog.isArcherElementalArrow(skill.id)) {
+            return resolveArcherElementalArrow(
+                hero = hero,
+                skill = skill,
+                target = target,
+                heroSlot = heroSlot,
+                targetIdx = targetIdx,
+                shotLabel = shotLabel,
+                arrowMods = arrowMods,
+                logSkillName = logSkillName,
+            )
+        }
 
         if (skill.isSpell) {
             return resolveHeroSpellAttack(hero, skill, target, heroSlot, targetIdx)
         }
 
         if (skill.damage != null || isBasicAttack(skill)) {
-            return resolveHeroMeleeAttack(hero, skill, target, heroSlot, targetIdx, shotLabel)
+            return resolveHeroMeleeAttack(
+                hero = hero,
+                skill = skill,
+                target = target,
+                heroSlot = heroSlot,
+                targetIdx = targetIdx,
+                shotLabel = shotLabel,
+                logSkillName = logSkillName,
+                arrowMods = arrowMods,
+            )
         }
 
         return false
+    }
+
+    /**
+     * Fire / Ice / Poison Arrow: physical bow damage (DEX vs DEX, AC) plus
+     * optional elemental bonus or poison proc. Logs each part to [log].
+     */
+    private fun resolveArcherElementalArrow(
+        hero: Hero,
+        skill: Skill,
+        target: Enemy,
+        heroSlot: Int,
+        targetIdx: Int,
+        shotLabel: String?,
+        arrowMods: BowArrowModifiers = BowArrowModifiers(),
+        logSkillName: String? = null,
+    ): Boolean {
+        val physicalHit = resolveHeroMeleeAttack(
+            hero = hero,
+            skill = skill,
+            target = target,
+            heroSlot = heroSlot,
+            targetIdx = targetIdx,
+            shotLabel = shotLabel,
+            logSkillName = logSkillName ?: skill.displayName,
+            includeSkillDamageInAttackPower = false,
+            arrowMods = arrowMods,
+        )
+        if (!physicalHit || !target.isAlive) return physicalHit
+
+        val element = skill.element
+        if (element != null) {
+            val (bonusDamage, matchup) = CombatMath.rollElementalBonus1d6(
+                element = element,
+                defenderElement = target.element,
+                rng = rng,
+            )
+            val boostedBonus = applyMarkTargetDamageBonus(bonusDamage, targetIdx)
+            if (boostedBonus > 0) {
+                target.takeDamage(boostedBonus)
+                combat.hate.recordDamage(targetIdx, heroSlot, boostedBonus)
+            }
+            log.append(
+                CombatLogEntry.ElementalBonusHit(
+                    attacker = hero.name,
+                    skillName = skill.displayName,
+                    target = target.name,
+                    damage = boostedBonus,
+                    advantage = matchup == ElementalMatchup.ADVANTAGE,
+                    disadvantage = matchup == ElementalMatchup.DISADVANTAGE,
+                ),
+            )
+            handleEnemyKoIfDead(target)
+        } else if (skill.id == SkillCatalog.ARCHER_POISON_ARROW_ID) {
+            if (rng.nextInt(100) < SkillCatalog.ARCHER_POISON_ARROW_SUCCESS_PCT) {
+                dotEffects.applyPoisonArrowToEnemy(targetIdx, target, log)
+            } else {
+                log.append(
+                    CombatLogEntry.Info(
+                        "${target.name} resists the poison from ${skill.displayName}.",
+                    ),
+                )
+            }
+        }
+        return true
     }
 
     private fun resolveHeroSpellAttack(
@@ -2318,7 +2814,7 @@ class CombatController(
         targetIdx: Int,
     ): Boolean {
         fun roll() = CombatMath.resolveSpell(
-            attackerInt = hero.intelligence,
+            attackerInt = WeaponClassRules.effectiveIntelligence(hero, hero.weapon1),
             skillDamage = skill.damage ?: 0,
             spellElement = skill.element!!,
             defenderInt = target.intelligence,
@@ -2349,21 +2845,23 @@ class CombatController(
         }
 
         if (out.hit) {
-            if (out.damage > 0) target.takeDamage(out.damage)
+            val spellDamage = applyMarkTargetDamageBonus(out.damage, targetIdx)
+            if (spellDamage > 0) target.takeDamage(spellDamage)
             log.append(
                 CombatLogEntry.SpellHit(
                     attacker = hero.name,
                     spellName = skill.displayName,
                     target = target.name,
-                    damage = out.damage,
+                    damage = spellDamage,
                     advantage = out.matchup == ElementalMatchup.ADVANTAGE,
                     disadvantage = out.matchup == ElementalMatchup.DISADVANTAGE,
                     crit = out.naturalRoll == CombatMath.CRIT_ROLL,
                 ),
             )
-            if (out.damage > 0) {
-                combat.hate.recordDamage(targetIdx, heroSlot, out.damage)
+            if (spellDamage > 0) {
+                combat.hate.recordDamage(targetIdx, heroSlot, spellDamage)
             }
+            tryApplyDisarmFromPrepare(hero, heroSlot, targetIdx)
             handleEnemyKoIfDead(target)
             return true
         }
@@ -2386,14 +2884,20 @@ class CombatController(
         heroSlot: Int,
         targetIdx: Int,
         shotLabel: String? = null,
+        logSkillName: String? = null,
+        includeSkillDamageInAttackPower: Boolean = true,
+        arrowMods: BowArrowModifiers = BowArrowModifiers(),
     ): Boolean {
         val aimShot = consumeAimShotForAction(heroSlot)
         val stealing = consumeStealForAction(heroSlot)
         val doubleStrike = consumeDoubleStrikeForAction(heroSlot)
         val trickAttackRedirectSlot = consumeTrickAttackForAction(heroSlot)
         val trickAttack = trickAttackRedirectSlot != null
-        val weaponBonus = hero.weapon1?.attackBonus ?: LootTier.FISTS_DAMAGE
-        var attackPower = hero.strength + weaponBonus + (skill.damage ?: 0)
+        val weapon = hero.weapon1
+        val weaponBonus = weapon?.attackBonus ?: LootTier.FISTS_DAMAGE
+        val skillDamageBonus = if (includeSkillDamageInAttackPower) skill.damage ?: 0 else 0
+        var attackPower = hero.strength + weaponBonus + skillDamageBonus +
+            WeaponClassRules.meleeAttackPowerBonus(hero, weapon)
         if (doubleStrike) {
             attackPower += SkillCatalog.byId(SkillCatalog.THIEF_DOUBLE_STRIKE_ID)?.damage ?: 0
         }
@@ -2408,13 +2912,20 @@ class CombatController(
                 attackPower * SkillCatalog.THIEF_STEAL_DAMAGE_PCT / 100
                 ).coerceAtLeast(1)
         }
+        if (arrowMods.physicalDamagePct != 100) {
+            attackPower = (attackPower * arrowMods.physicalDamagePct / 100).coerceAtLeast(1)
+        }
+
+        logArcherCloseRangePenaltyIfNeeded(hero)
+        val enemyAdjacentToParty = touchingLivingEnemies(floor.partyCell).isNotEmpty()
+        logSpearCloseRangePenaltyIfNeeded(hero, weapon, enemyAdjacentToParty)
 
         fun roll(): MeleeOutcome {
-            var out = CombatMath.resolveMelee(
-                attackerDex = hero.dexterity,
+            var out = WeaponClassRules.resolveMelee(
+                hero = hero,
+                weapon = weapon,
                 attackPower = attackPower,
-                defenderDex = target.dexterity,
-                defenderAc = target.armorClass,
+                target = target,
                 rng = rng,
             )
             if (skill.id == SkillCatalog.THIEF_SNEAK_ATTACK_ID &&
@@ -2430,14 +2941,32 @@ class CombatController(
                 }
                 out = penalized
             }
+            out = WeaponClassRules.applySpearCloseRangeMissPenalty(
+                hero, weapon, enemyAdjacentToParty, out, rng,
+            )
+            out = applyArcherCloseRangePenaltyIfNeeded(hero, out)
+            if (arrowMods.extraMissChancePct > 0) {
+                out = applyMarginalHitPenalty(
+                    out,
+                    arrowMods.extraMissChancePct / 100f,
+                    rng,
+                )
+            }
             return out
         }
 
         var out = roll()
         var loggedSwing = false
+        var hammerRerollUsed = false
 
         fun logSwing(result: MeleeOutcome) {
-            appendMeleeLogEntry(hero.name, target.name, result, shotLabel)
+            appendMeleeLogEntry(
+                hero.name,
+                target.name,
+                result,
+                shotLabel,
+                meleeLogSkillName(skill, logSkillName),
+            )
             loggedSwing = true
         }
 
@@ -2445,6 +2974,22 @@ class CombatController(
             logSwing(out)
             log.append(
                 CombatLogEntry.Info("${hero.name}'s Aim Shot — second chance!"),
+            )
+            val retry = roll()
+            logSwing(retry)
+            if (retry.hit) out = retry
+        }
+
+        if (
+            !out.hit &&
+            !hammerRerollUsed &&
+            WeaponClassRules.hammerMageMayRerollMiss(hero, weapon) &&
+            out.naturalRoll != CombatMath.FUMBLE_ROLL
+        ) {
+            if (!loggedSwing) logSwing(out)
+            hammerRerollUsed = true
+            log.append(
+                CombatLogEntry.Info("${hero.name}'s hammer — second swing!"),
             )
             val retry = roll()
             logSwing(retry)
@@ -2488,9 +3033,11 @@ class CombatController(
                 ),
             )
         }
+        out = applyMarkTargetToMeleeOutcome(out, targetIdx)
         if (!loggedSwing) logSwing(out)
 
         if (out.hit) {
+            tryApplyDisarmFromPrepare(hero, heroSlot, targetIdx)
             if (out.damage > 0) {
                 target.takeDamage(out.damage)
                 combat.hate.recordDamage(targetIdx, heroSlot, out.damage)
@@ -2509,6 +3056,12 @@ class CombatController(
                     tryStealGoldFromEnemy(hero, targetIdx)
                 }
             }
+            if (WeaponClassRules.rollMaceStun(hero, weapon, target.template, rng)) {
+                stunnedEnemyIndices.add(targetIdx)
+                log.append(
+                    CombatLogEntry.Info("${target.name} is stunned!"),
+                )
+            }
         }
         handleEnemyKoIfDead(target)
         if (aimShot) {
@@ -2517,8 +3070,183 @@ class CombatController(
         return out.hit
     }
 
+    private fun isMarkTargetActive(targetIdx: Int): Boolean {
+        val idx = markTargetEnemyIdx ?: return false
+        if (idx != targetIdx || markTargetRoundsLeft <= 0) return false
+        return combat.enemies.getOrNull(idx)?.isAlive == true
+    }
+
+    private fun applyMarkTargetDamageBonus(baseDamage: Int, targetIdx: Int): Int {
+        if (baseDamage <= 0 || !isMarkTargetActive(targetIdx)) return baseDamage
+        return (
+            baseDamage * (100 + SkillCatalog.ARCHER_MARK_TARGET_DAMAGE_BONUS_PCT) / 100.0
+            ).toInt().coerceAtLeast(baseDamage)
+    }
+
+    private fun applyMarkTargetToMeleeOutcome(out: MeleeOutcome, targetIdx: Int): MeleeOutcome {
+        if (!out.hit || out.damage <= 0) return out
+        val boosted = applyMarkTargetDamageBonus(out.damage, targetIdx)
+        return if (boosted == out.damage) out else out.copy(damage = boosted)
+    }
+
+    private fun clearMarkTarget() {
+        markTargetEnemyIdx = null
+        markTargetRoundsLeft = 0
+    }
+
+    /**
+     * Called when a combat round ends. Ticks Mark Target duration and
+     * posts a combat-log line when the debuff expires.
+     */
+    private fun tryApplyDisarmFromPrepare(hero: Hero, heroSlot: Int, targetIdx: Int) {
+        if (heroSlot < 0 || targetIdx < 0) return
+        if (disarmResolvedThisAction[heroSlot]) return
+        if (!consumeDisarmPending(heroSlot, hero)) return
+        disarmResolvedThisAction[heroSlot] = true
+        val target = combat.enemies.getOrNull(targetIdx) ?: return
+        if (!target.isAlive) return
+        val successPct = if (combat.hate.isStrictlyHighestHateToward(targetIdx, heroSlot) { slot ->
+                combat.party.heroes.getOrNull(slot)?.isAlive == true
+            }
+        ) {
+            SkillCatalog.FIGHTER_DISARM_SUCCESS_PCT_HIGH
+        } else {
+            SkillCatalog.FIGHTER_DISARM_SUCCESS_PCT_LOW
+        }
+        if (rng.nextInt(100) >= successPct) {
+            log.append(
+                CombatLogEntry.Info(
+                    "${target.name} shrugs off ${hero.name}'s Disarm.",
+                ),
+            )
+            return
+        }
+        if (targetIdx in enemyDisarmTurnsRemaining.indices) {
+            enemyDisarmTurnsRemaining[targetIdx] =
+                SkillCatalog.FIGHTER_DISARM_DURATION_TURNS
+        }
+        log.append(
+            CombatLogEntry.Info(
+                "${hero.name} disarms ${target.name} — attack -" +
+                    "${SkillCatalog.FIGHTER_DISARM_ATTACK_REDUCTION_PCT}% for " +
+                    "${SkillCatalog.FIGHTER_DISARM_DURATION_TURNS} rounds.",
+            ),
+        )
+    }
+
+    private fun consumeDisarmPending(heroSlot: Int, hero: Hero): Boolean {
+        if (heroSlot !in fighterPrepareBuffs.indices) return false
+        val buffs = fighterPrepareBuffs[heroSlot]
+        if (!buffs.disarmPending) return false
+        buffs.disarmPending = false
+        return hero.knownSkills.any { it.id == SkillCatalog.FIGHTER_DISARM_ID }
+    }
+
+    private fun effectiveEnemyMeleeAttackPower(enemyIdx: Int, basePower: Int): Int {
+        if (enemyIdx !in enemyDisarmTurnsRemaining.indices) return basePower
+        if (enemyDisarmTurnsRemaining[enemyIdx] <= 0) return basePower
+        return (
+            basePower * (100 - SkillCatalog.FIGHTER_DISARM_ATTACK_REDUCTION_PCT) / 100
+            ).coerceAtLeast(1)
+    }
+
+    private fun tickEnemyDisarmAtRoundEnd() {
+        for (idx in enemyDisarmTurnsRemaining.indices) {
+            if (enemyDisarmTurnsRemaining[idx] <= 0) continue
+            enemyDisarmTurnsRemaining[idx] -= 1
+            if (enemyDisarmTurnsRemaining[idx] > 0) continue
+            val name = combat.enemies.getOrNull(idx)?.name
+            val expiryText = if (name != null) {
+                "Disarm wears off — $name attacks at full strength."
+            } else {
+                "Disarm has worn off."
+            }
+            log.append(CombatLogEntry.Info(expiryText))
+        }
+    }
+
+    private fun tickMarkTargetAtRoundEnd() {
+        val idx = markTargetEnemyIdx ?: return
+        if (markTargetRoundsLeft <= 0) return
+        markTargetRoundsLeft -= 1
+        if (markTargetRoundsLeft > 0) return
+        val enemyName = combat.enemies.getOrNull(idx)?.name
+        clearMarkTarget()
+        val expiryText = if (enemyName != null) {
+            "Mark Target fades — $enemyName is no longer marked."
+        } else {
+            "Mark Target has worn off."
+        }
+        log.append(CombatLogEntry.Info(expiryText))
+    }
+
     private fun isHiddenThiefAttacker(hero: Hero): Boolean =
         isPartyHidden() && hero.heroClass == HeroClass.THIEF
+
+    private fun heroFiringBow(hero: Hero): Boolean =
+        hero.heroClass == HeroClass.ARCHER && hero.weapon1?.type == WeaponType.BOW
+
+    private fun isArcherCloseRangeShot(): Boolean =
+        touchingLivingEnemies(floor.partyCell).isNotEmpty()
+
+    private fun heroHasArcherCloseRangeSkill(hero: Hero): Boolean =
+        hero.knownSkills.any { it.id == SkillCatalog.ARCHER_CLOSE_RANGE_ID }
+
+    private fun archerCloseRangeMissPenaltyPct(hero: Hero): Int? {
+        if (!heroFiringBow(hero) || !isArcherCloseRangeShot()) return null
+        return SkillCatalog.archerCloseRangeMissPenaltyPct(heroHasArcherCloseRangeSkill(hero))
+    }
+
+    private fun logArcherCloseRangePenaltyIfNeeded(hero: Hero) {
+        val penaltyPct = archerCloseRangeMissPenaltyPct(hero) ?: return
+        val hasSkill = heroHasArcherCloseRangeSkill(hero)
+        val text = if (hasSkill) {
+            "${hero.name} fires at close range — penalty reduced by " +
+                "${SkillCatalog.ARCHER_CLOSE_RANGE_PENALTY_RELIEF_PCT}%."
+        } else {
+            "${hero.name} fires at close range — $penaltyPct% miss penalty."
+        }
+        log.append(CombatLogEntry.Info(text))
+    }
+
+    private fun effectiveSkillMpCost(hero: Hero, skill: Skill): Int {
+        if (!skill.isSpell || skill.mpCost <= 0) return skill.mpCost
+        return WeaponClassRules.adjustedSpellMpCost(hero, skill.mpCost, rng)
+    }
+
+    private fun spendHeroSkillMana(hero: Hero, skill: Skill) {
+        val cost = effectiveSkillMpCost(hero, skill)
+        if (cost <= 0) return
+        if (WeaponClassRules.staffMpDiscountApplied(skill.mpCost, cost)) {
+            log.append(
+                CombatLogEntry.Info(
+                    "${hero.name}'s staff — spell costs $cost MP (${WeaponClassRules.STAFF_MAGE_MP_DISCOUNT_PCT}% less).",
+                ),
+            )
+        }
+        hero.spendMana(cost)
+    }
+
+    private fun logSpearCloseRangePenaltyIfNeeded(
+        hero: Hero,
+        weapon: Weapon?,
+        enemyAdjacentToParty: Boolean,
+    ) {
+        val penaltyPct = WeaponClassRules.spearCloseRangeMissPenaltyPct(
+            hero, weapon, enemyAdjacentToParty,
+        ) ?: return
+        log.append(
+            CombatLogEntry.Info(
+                "${hero.name} strikes at close range — $penaltyPct% miss penalty.",
+            ),
+        )
+    }
+
+    private fun applyArcherCloseRangePenaltyIfNeeded(hero: Hero, out: MeleeOutcome): MeleeOutcome {
+        val penaltyPct = archerCloseRangeMissPenaltyPct(hero) ?: return out
+        if (penaltyPct <= 0) return out
+        return applyMarginalHitPenalty(out, penaltyPct / 100f, rng)
+    }
 
     /**
      * Applies the highest hate outcome from every rule that fired on this
@@ -2648,7 +3376,7 @@ class CombatController(
 
     private fun lootDropShortLabel(drop: LootDrop): String = when (drop) {
         is LootDrop.IngredientDrop -> drop.ingredient.displayName
-        is LootDrop.MeleeWeaponDrop -> drop.tier.displayMeleeName(drop.weapon)
+        is LootDrop.MeleeWeaponDrop -> drop.displayName()
         is LootDrop.FloorKeyDrop -> drop.key.displayName()
         is LootDrop.ArmorDrop -> drop.armorName
     }
@@ -2726,14 +3454,26 @@ class CombatController(
      * After a successful dodge check (rolls 2–5), 50% chance to force a miss.
      * Natural 1 and 6 are unchanged.
      */
-    private fun applySneakAttackHitPenalty(out: MeleeOutcome, rng: Random): MeleeOutcome {
+    private fun applySneakAttackHitPenalty(out: MeleeOutcome, rng: Random): MeleeOutcome =
+        applyMarginalHitPenalty(out, SNEAK_ATTACK_HIT_PENALTY, rng)
+
+    /**
+     * After a successful opposed check (rolls 2–9), a [missChance]
+     * roll can force a miss. Natural 1 and 10 are unchanged.
+     * Used for sneak-attack hate penalty (50%) and bat move+strike (20%).
+     */
+    private fun applyMarginalHitPenalty(
+        out: MeleeOutcome,
+        missChance: Float,
+        rng: Random,
+    ): MeleeOutcome {
         if (!out.hit) return out
         if (out.naturalRoll == CombatMath.FUMBLE_ROLL ||
             out.naturalRoll == CombatMath.CRIT_ROLL
         ) {
             return out
         }
-        if (rng.nextBoolean()) return out
+        if (rng.nextFloat() >= missChance) return out
         return out.copy(hit = false, damage = 0)
     }
 
@@ -2748,15 +3488,58 @@ class CombatController(
      * wording in the design brief is about the swing landing, not
      * about chunking HP - this matches both readings.
      */
-    private fun resolveEnemyMelee(enemy: Enemy, target: Hero) {
-        val attackPower = enemy.strength + LootTier.FISTS_DAMAGE
-        val out = CombatMath.resolveMelee(
+    /**
+     * @return true when a prepared Counter Attack should riposte after this swing.
+     */
+    private fun resolveEnemyMelee(enemy: Enemy, target: Hero): Boolean {
+        val enemyIdx = combat.enemies.indexOf(enemy)
+        val heroSlot = combat.party.heroes.indexOf(target)
+        val baseAttackPower = enemy.strength + LootTier.FISTS_DAMAGE
+        val attackPower = effectiveEnemyMeleeAttackPower(enemyIdx, baseAttackPower)
+        val defenderDex = effectiveDefenderDexForEnemyMelee(target, heroSlot)
+        var out = CombatMath.resolveMelee(
             attackerDex = enemy.dexterity,
             attackPower = attackPower,
-            defenderDex = target.dexterity,
+            defenderDex = defenderDex,
             defenderAc = target.armorClass,
             rng = rng,
         )
+        if (enemy.template.moveThenStrikeSameTurn && enemyMovedThisTurn) {
+            out = applyMarginalHitPenalty(out, COMBO_MOVE_STRIKE_HIT_PENALTY, rng)
+        }
+        val counterArmed = consumeCounterAttackIfReady(heroSlot, target)
+        val enemyFumbled = out.naturalRoll == CombatMath.FUMBLE_ROLL
+        val counterCheckOk = counterArmed &&
+            enemyIdx >= 0 &&
+            out.hit &&
+            !enemyFumbled &&
+            rollCounterAttackCheck(target, enemy, heroSlot, enemyIdx)
+        val counterTriggers = counterArmed &&
+            (!out.hit || enemyFumbled || counterCheckOk)
+
+        if (counterTriggers) {
+            when {
+                !out.hit -> log.append(
+                    CombatLogEntry.Info(
+                        "${target.name} seizes the opening — ${SkillCatalog.byId(SkillCatalog.FIGHTER_COUNTER_ATTACK_ID)?.displayName ?: "Counter Attack"}!",
+                    ),
+                )
+                enemyFumbled -> log.append(
+                    CombatLogEntry.Info(
+                        "${enemy.name} falters — ${target.name} is ready to counter!",
+                    ),
+                )
+                counterCheckOk -> {
+                    log.append(
+                        CombatLogEntry.Info(
+                            "${target.name} turns aside the blow — Counter Attack!",
+                        ),
+                    )
+                    out = out.copy(damage = 0)
+                }
+            }
+        }
+
         appendMeleeLogEntry(
             attackerName = enemy.name,
             targetName = target.name,
@@ -2764,13 +3547,53 @@ class CombatController(
         )
         if (out.damage > 0) target.takeDamage(out.damage)
         if (out.hit) {
-            val enemyIdx = combat.enemies.indexOf(enemy)
-            val heroSlot = combat.party.heroes.indexOf(target)
             if (enemyIdx >= 0 && heroSlot >= 0) {
                 combat.hate.setHate(enemyIdx, heroSlot, HateTracker.HATE_MIN)
             }
         }
         handleHeroKoIfDead(target)
+        return counterTriggers && target.isAlive && enemy.isAlive
+    }
+
+    private fun consumeCounterAttackIfReady(heroSlot: Int, hero: Hero): Boolean {
+        if (heroSlot !in fighterPrepareBuffs.indices) return false
+        val buffs = fighterPrepareBuffs[heroSlot]
+        if (!buffs.counterAttackPending) return false
+        buffs.counterAttackPending = false
+        return hero.knownSkills.any { it.id == SkillCatalog.FIGHTER_COUNTER_ATTACK_ID }
+    }
+
+    /**
+     * Opposed check: hero STR + DEX + threat vs enemy STR + DEX (1d10).
+     * Natural 1 fails; natural 10 succeeds.
+     */
+    private fun rollCounterAttackCheck(
+        hero: Hero,
+        enemy: Enemy,
+        heroSlot: Int,
+        enemyIdx: Int,
+    ): Boolean {
+        val threat = combat.hate.hateFor(enemyIdx, heroSlot)
+        val heroStat = hero.strength + hero.dexterity + threat
+        val enemyStat = enemy.strength + enemy.dexterity
+        val roll = CombatMath.rollCheckDie(rng)
+        return CombatMath.checkSucceeds(heroStat, enemyStat, roll)
+    }
+
+    /** Free basic-attack riposte after Counter Attack; does not spend a hero turn. */
+    private fun playCounterRiposteFx(hero: Hero, enemy: Enemy): Boolean {
+        if (!hero.isAlive || !enemy.isAlive) return false
+        val skill = hero.basicAttackSkill
+        val request = buildHeroStrikeFx(hero, skill, enemy, ArcherShotPlan.EMPTY) ?: return false
+        val started = weaponFx.start(request) {
+            attackFxPending = false
+            resolveHeroActionShot(hero, skill, enemy)
+            log.append(
+                CombatLogEntry.Info("${hero.name} strikes back!"),
+            )
+        }
+        if (started) attackFxPending = true
+        return started
     }
 
     // ---------------------------------------------------------------
@@ -2793,6 +3616,15 @@ class CombatController(
         if (enemyIdx >= 0 && weakPointEnemyIdx == enemyIdx) {
             weakPointEnemyIdx = null
             weakPointRerollUsed.fill(false)
+        }
+        if (enemyIdx >= 0 && markTargetEnemyIdx == enemyIdx) {
+            clearMarkTarget()
+        }
+        if (enemyIdx >= 0 && enemyIdx in enemyDisarmTurnsRemaining.indices) {
+            enemyDisarmTurnsRemaining[enemyIdx] = 0
+        }
+        if (enemyIdx >= 0) {
+            dotEffects.clearEnemy(enemyIdx)
         }
         log.append(CombatLogEntry.Defeat(enemy.name))
         val entry = initiativeEntryFor(enemy)
@@ -2855,15 +3687,21 @@ class CombatController(
         targetName: String,
         outcome: MeleeOutcome,
         shotLabel: String? = null,
+        skillName: String? = null,
     ) {
         val entry = when {
-            !outcome.hit -> CombatLogEntry.MeleeMiss(attackerName, targetName, shotLabel)
-            outcome.damage <= 0 -> CombatLogEntry.MeleeNoDamage(attackerName, targetName)
+            !outcome.hit -> CombatLogEntry.MeleeMiss(
+                attackerName, targetName, shotLabel, skillName,
+            )
+            outcome.damage <= 0 -> CombatLogEntry.MeleeNoDamage(
+                attackerName, targetName, skillName,
+            )
             else -> CombatLogEntry.MeleeHit(
                 attacker = attackerName,
                 target = targetName,
                 damage = outcome.damage,
                 crit = outcome.naturalRoll == CombatMath.CRIT_ROLL,
+                skillName = skillName,
             )
         }
         log.append(entry)
@@ -2886,12 +3724,37 @@ class CombatController(
 
     private fun finishCurrentAction() {
         pendingMainAfterFreeFx = null
+        val heroSlotEndingTurn = currentHeroSlot
         if (combat.round.actingIndex in combat.initiative.indices) {
             combat.round.completeCurrentAction()
+        }
+        if (heroSlotEndingTurn != null) {
+            tickEvasiveManeuverAfterHeroTurn(heroSlotEndingTurn)
         }
         awaitingHeroInput = false
         currentHeroSlot = null
         awaitingLeaver = true
+    }
+
+    private fun setEvasiveManeuverTurns(slot: Int, turns: Int) {
+        if (slot !in evasiveManeuverTurnsRemaining.indices) return
+        val before = evasiveManeuverTurnsRemaining[slot]
+        evasiveManeuverTurnsRemaining[slot] = turns.coerceAtLeast(0)
+        if (before != evasiveManeuverTurnsRemaining[slot]) {
+            onEvasiveManeuverChanged()
+        }
+    }
+
+    private fun tickEvasiveManeuverAfterHeroTurn(slot: Int) {
+        if (slot !in evasiveManeuverTurnsRemaining.indices) return
+        if (evasiveManeuverTurnsRemaining[slot] <= 0) return
+        setEvasiveManeuverTurns(slot, evasiveManeuverTurnsRemaining[slot] - 1)
+    }
+
+    private fun effectiveDefenderDexForEnemyMelee(target: Hero, heroSlot: Int): Int {
+        if (!isEvasiveManeuverActive(heroSlot)) return target.dexterity
+        val bonusPct = SkillCatalog.THIEF_EVASIVE_MANEUVER_DODGE_BONUS_PCT
+        return target.dexterity + target.dexterity * bonusPct / 100
     }
 
     /**
@@ -2905,6 +3768,7 @@ class CombatController(
 
         if (!anyEnemyAlive) {
             ended = true
+            stunnedEnemyIndices.clear()
             log.append(CombatLogEntry.Victory)
             awardVictoryXp()
             awardVictoryLoot()
@@ -2914,6 +3778,7 @@ class CombatController(
         }
         if (!anyHeroAlive) {
             ended = true
+            stunnedEnemyIndices.clear()
             log.append(CombatLogEntry.PartyWipe)
             applyPartyWipeRespawn()
             onEnd(CombatEndResult.WIPE)
@@ -3135,6 +4000,10 @@ class CombatController(
     private fun isBasicAttack(skill: Skill): Boolean =
         skill.id == SkillCatalog.BASIC_ATTACK_ID
 
+    /** Combat-log label for [BASIC_ATTACK_ID] swings (weapon-aware name stays in the UI picker). */
+    private fun meleeLogSkillName(skill: Skill, override: String?): String? =
+        override ?: if (isBasicAttack(skill)) "basic attack" else null
+
     private fun manhattan(a: com.tavisdor.app.dungeon.Cell, b: com.tavisdor.app.dungeon.Cell): Int =
         kotlin.math.abs(a.x - b.x) + kotlin.math.abs(a.y - b.y)
 
@@ -3144,6 +4013,11 @@ class CombatController(
         var aimShotPending: Boolean = false,
     )
 
+    private data class FighterPrepareBuffs(
+        var counterAttackPending: Boolean = false,
+        var disarmPending: Boolean = false,
+    )
+
     private data class ThiefPrepareBuffs(
         var stealPending: Boolean = false,
         var doubleStrikePending: Boolean = false,
@@ -3151,9 +4025,14 @@ class CombatController(
         var trickAttackHateRedirectSlot: Int? = null,
     )
 
+    private data class BowArrowModifiers(
+        val extraMissChancePct: Int = 0,
+        val physicalDamagePct: Int = 100,
+    )
+
     private data class ArcherShotPlan(
         val volleys: List<BowVolley>,
-        val secondArrowMissChancePct: Int = 0,
+        val perArrow: List<BowArrowModifiers> = emptyList(),
     ) {
         val totalArrows: Int
             get() = volleys.sumOf { volley ->
@@ -3163,16 +4042,15 @@ class CombatController(
                 }
             }
 
+        fun modifiersFor(arrowIndex: Int): BowArrowModifiers =
+            perArrow.getOrElse(arrowIndex) { BowArrowModifiers() }
+
         companion object {
             val EMPTY = ArcherShotPlan(volleys = emptyList())
         }
     }
 
     companion object {
-        private const val FIRE_ARROW_SKILL_ID: String = "archer_fire_arrow"
-        private const val ARCHER_RAPID_FIRE_EXTRA_ARROW_CHANCE = 0.80
-        private const val ARCHER_DOUBLE_SHOT_SECOND_MISS_PCT = 25
-
         /** First arrow full speed; later Rapid Fire shots compress (animation only). */
         private fun rapidFireShotMultipliers(arrowCount: Int): List<Float> = when (arrowCount) {
             1 -> listOf(1f)
@@ -3183,6 +4061,10 @@ class CombatController(
         private const val ARCHER_AIM_SHOT_HATE_BUMP = 2
         private const val HIDDEN_THIEF_ATTACK_HATE_BUMP = 2
         private const val TRICK_ATTACK_HATE_BUMP = 2
+        /** Sneak Attack vs top-hate target: halve marginal hit chance. */
+        private const val SNEAK_ATTACK_HIT_PENALTY = 0.50f
+        /** Bat (and future combo movers): −20% hit when move+strike same turn. */
+        private const val COMBO_MOVE_STRIKE_HIT_PENALTY = 0.20f
         private const val CHARGE_MS_PER_CELL: Long = 190L
         private const val CHARGE_MIN_MS: Long = 320L
         /**

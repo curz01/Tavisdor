@@ -99,6 +99,7 @@ object SkillCatalog {
         skill(
             id = "fighter_taunt", name = "Taunt", level = 1,
             type = SkillCastType.PREPARE, range = 2, mp = 0,
+            button = SkillButton.ACTION,
             desc = "Requires an enemy within range. Your threat +2 from each enemy; " +
                 "each other living hero's threat -1. Uses your action.",
         ),
@@ -139,9 +140,12 @@ object SkillCatalog {
         ),
         skill(
             id = "fighter_disarm", name = "Disarm", level = 7,
-            type = SkillCastType.ACTIVE, range = 1, mp = 1,
-            desc = "Reduce the enemy's attack by 50% for 2 turns. 1 mana. Higher chance if this " +
-                "hero is the highest-hate target.",
+            type = SkillCastType.PREPARE, range = 0, mp = 1,
+            costsAction = false,
+            button = SkillButton.GUARD,
+            desc = "Prepare as a free action, then attack: on a connecting hit, 50% chance to " +
+                "reduce that enemy's attack by 50% for 2 turns (higher chance if you are the " +
+                "highest-hate target). 1 mana. Does not cost an action.",
         ),
         skill(
             id = "fighter_armor_break", name = "Armor Break", level = 8,
@@ -150,10 +154,13 @@ object SkillCatalog {
                 "this hero is not the highest-hate target.",
         ),
         skill(
-            id = "fighter_block", name = "Block", level = 9,
-            type = SkillCastType.PREPARE, range = 0, mp = 0,
-            desc = "Increase armor class by 2 (by 4 if equipping a shield) against the enemy's " +
-                "next attack; lasts 1 turn.",
+            id = "fighter_counter_attack", name = "Counter Attack", level = 9,
+            type = SkillCastType.PREPARE, range = 0, mp = 1,
+            costsAction = false,
+            button = SkillButton.GUARD,
+            desc = "On the next melee swing against this hero: STR + DEX + threat vs the attacker; " +
+                "on success, prevent damage (also triggers on a dodge or enemy fumble). Then " +
+                "strike back with a free normal attack. 1 mana. Does not cost an action.",
         ),
         skill(
             id = "fighter_shield_bash", name = "Shield Bash", level = 10,
@@ -179,7 +186,14 @@ object SkillCatalog {
                 "already at or above the cap on both. No mana cost. Cannot heal dead.",
         ),
         skill(
-            id = "thief_trick_attack", name = "Trick Attack", level = 3,
+            id = "thief_sneak_attack", name = "Sneak Attack", level = 3,
+            type = SkillCastType.ACTIVE, range = 1, mp = 3,
+            damage = 7, // 2d6 average
+            desc = "Attack +2d6. On a successful hit, hate is set to 5. If you have the " +
+                "highest threat on the target among other heroes, hit chance is halved. 3 mana.",
+        ),
+        skill(
+            id = "thief_trick_attack", name = "Trick Attack", level = 4,
             type = SkillCastType.ACTIVE, range = 1, mp = 1,
             costsAction = false,
             damage = 4, // 1d6 average rounded down (3.5 -> 4 in author table)
@@ -188,35 +202,29 @@ object SkillCatalog {
                 "your choice. 1 mana. Does not cost an action.",
         ),
         skill(
-            id = "thief_sneak_attack", name = "Sneak Attack", level = 4,
-            type = SkillCastType.ACTIVE, range = 1, mp = 3,
-            damage = 7, // 2d6 average
-            desc = "Attack +2d6. On a successful hit, hate is set to 5. If you have the " +
-                "highest threat on the target among other heroes, hit chance is halved. 3 mana.",
-        ),
-        skill(
             id = "thief_steal", name = "Steal", level = 5,
             type = SkillCastType.PREPARE, range = 1, mp = 1,
             costsAction = false,
-            button = SkillButton.ACTION,
+            button = SkillButton.GUARD,
             desc = "Next connecting melee attack deals 50% damage, then tries to steal 1 item " +
                 "(from a separate roll; does not reduce kill loot) and then tries to steal 50% " +
                 "of the gold the enemy is carrying (once per enemy, does not reduce kill gold). " +
                 "1 mana.",
         ),
         skill(
-            id = "thief_side_step", name = "Side Step", level = 6,
+            id = "thief_hide", name = "Hide", level = 6,
+            type = SkillCastType.PREPARE, range = 0, mp = 2,
+            button = SkillButton.ACTION,
+            desc = "Group is hidden from enemies 2 or more squares away. Must pass an INT + DEX " +
+                "check against the enemy: combined hero stats must beat enemy combined 2 stats " +
+                "+ (1d6 per level the enemy is higher than the hero). 2 mana. Uses your action.",
+        ),
+        skill(
+            id = "thief_side_step", name = "Side Step", level = 7,
             type = SkillCastType.PASSIVE, range = 0, mp = 1,
             desc = "Passive. While any living party member knows this skill, the party may " +
                 "move diagonally during combat (still one cell per move). Each diagonal step " +
                 "costs 1 mana (paid by a living hero who knows Side Step).",
-        ),
-        skill(
-            id = "thief_hide", name = "Hide", level = 7,
-            type = SkillCastType.PREPARE, range = 0, mp = 2,
-            desc = "Group is hidden from enemies 2 or more squares away. Must pass an INT + DEX " +
-                "check against the enemy: combined hero stats must beat enemy combined 2 stats " +
-                "+ (1d6 per level the enemy is higher than the hero). 2 mana. Uses your action.",
         ),
         skill(
             id = "thief_weak_point", name = "Weak Point", level = 8,
@@ -245,7 +253,7 @@ object SkillCatalog {
     private val ARCHER: List<Skill> = listOf(
         skill(
             id = "archer_aim_shot", name = "Aim Shot", level = 1,
-            type = SkillCastType.PREPARE, range = 4, mp = 0,
+            type = SkillCastType.PREPARE, range = 3, mp = 0,
             costsAction = false,
             desc = "Prepare as a free action, then attack: next damage +150%. If the defender " +
                 "dodges the first swing, roll a second hit check. Hate +2 on a connecting hit. " +
@@ -259,15 +267,17 @@ object SkillCatalog {
                 "ingredient; creates nothing. Cannot heal dead.",
         ),
         skill(
-            id = "archer_rapid_fire", name = "Rapid Fire", level = 3,
-            type = SkillCastType.PREPARE, range = 0, mp = 2,
+            id = "archer_double_shot", name = "Double Shot", level = 3,
+            type = SkillCastType.PREPARE, range = 2, mp = 1,
             costsAction = false,
-            desc = "80% chance to shoot more than 1 arrow next turn; 100% chance to shoot 2 " +
-                "arrows. 2 mana. Does not cost an action.",
+            desc = "Next attack fires two arrows: first at 80% physical damage, second at 60%. " +
+                "Elemental bonus damage is not reduced. If you run out of elemental shards " +
+                "mid-attack, later arrows are normal. Does not stack with Rapid Fire. " +
+                "1 mana. Does not cost an action.",
         ),
         skill(
             id = "archer_poison_arrow", name = "Poison Arrow", level = 4,
-            type = SkillCastType.ACTIVE, range = 3, mp = 0,
+            type = SkillCastType.ACTIVE, range = 2, mp = 0,
             requiredShard = Ingredient.STONE_SHARD,
             desc = "Normal damage; on poison success, enemy takes 2 damage each turn for the " +
                 "next 2 turns. Requires a Stone Shard.",
@@ -280,7 +290,7 @@ object SkillCatalog {
         ),
         skill(
             id = "archer_fire_arrow", name = "Fire Arrow", level = 6,
-            type = SkillCastType.ACTIVE, range = 3, mp = 0,
+            type = SkillCastType.ACTIVE, range = 2, mp = 0,
             damage = 4, element = Element.FIRE,
             requiredShard = Ingredient.FLAME_SHARD,
             desc = "Normal damage + 1d6 fire damage. Increased damage to Earth, reduced damage " +
@@ -288,7 +298,7 @@ object SkillCatalog {
         ),
         skill(
             id = "archer_ice_arrow", name = "Ice Arrow", level = 7,
-            type = SkillCastType.ACTIVE, range = 3, mp = 0,
+            type = SkillCastType.ACTIVE, range = 2, mp = 0,
             damage = 4, element = Element.WATER, // ice resolves under WATER per the triangle
             requiredShard = Ingredient.HYDRO_SHARD,
             desc = "Normal damage + 1d6 ice damage. Increased damage to Fire, reduced damage " +
@@ -297,20 +307,21 @@ object SkillCatalog {
         skill(
             id = "archer_feint_death", name = "Feint Death", level = 8,
             type = SkillCastType.ACTIVE, range = 0, mp = 1,
-            costsAction = false,
-            desc = "Reduce hate by 2. 1 mana. Does not cost an action.",
+            desc = "Reduce hate by 2 toward you from each living enemy. 1 mana. Uses your action.",
         ),
         skill(
-            id = "archer_double_shot", name = "Double Shot", level = 9,
-            type = SkillCastType.PREPARE, range = 3, mp = 1,
+            id = "archer_rapid_fire", name = "Rapid Fire", level = 9,
+            type = SkillCastType.PREPARE, range = 0, mp = 2,
             costsAction = false,
-            desc = "Two attacks; the 2nd has a 25% miss chance. Hate +2 on a successful 2nd " +
-                "attack. 1 mana. Does not cost an action.",
+            desc = "Next attack fires 3 arrows. The 2nd has a 30% extra miss chance and the 3rd " +
+                "50%; reroll-miss skills may retry those shots. Does not stack with Double Shot. " +
+                "2 mana. Does not cost an action.",
         ),
         skill(
             id = "archer_mark_target", name = "Mark Target", level = 10,
-            type = SkillCastType.ACTIVE, range = 3, mp = 0,
-            desc = "Damage done to the marked enemy is increased by 20%.",
+            type = SkillCastType.ACTIVE, range = 3, mp = 1,
+            desc = "Mark an enemy for 2 combat rounds. Damage to that enemy is increased by 20%. " +
+                "1 mana.",
         ),
     ).forClass(HeroClass.ARCHER)
 
@@ -395,6 +406,22 @@ object SkillCatalog {
     /** Fighter prepare: shifts hate toward the taunter and away from allies. */
     const val FIGHTER_TAUNT_ID: String = "fighter_taunt"
 
+    /** Fighter prepare: blocks the next incoming melee hit, then ripostes. */
+    const val FIGHTER_COUNTER_ATTACK_ID: String = "fighter_counter_attack"
+
+    /** Fighter prepare: next connecting offensive hit may disarm the target. */
+    const val FIGHTER_DISARM_ID: String = "fighter_disarm"
+
+    const val FIGHTER_DISARM_DURATION_TURNS: Int = 2
+
+    const val FIGHTER_DISARM_ATTACK_REDUCTION_PCT: Int = 50
+
+    /** Success when this hero tops threat on the target. */
+    const val FIGHTER_DISARM_SUCCESS_PCT_HIGH: Int = 75
+
+    /** Success when this hero does not top threat on the target. */
+    const val FIGHTER_DISARM_SUCCESS_PCT_LOW: Int = 40
+
     /** Thief prepare: marked enemy grants each hero one miss reroll (melee or spell). */
     const val THIEF_WEAK_POINT_ID: String = "thief_weak_point"
 
@@ -406,14 +433,98 @@ object SkillCatalog {
 
     const val THIEF_HIDE_ID: String = "thief_hide"
 
-    /** Archer prepare: extra arrows on the hero's next offensive commit. */
+    const val THIEF_EVASIVE_MANEUVER_ID: String = "thief_evasive_maneuver"
+
+    /** Dodge bonus percent while [THIEF_EVASIVE_MANEUVER_ID] is active (enemy melee). */
+    const val THIEF_EVASIVE_MANEUVER_DODGE_BONUS_PCT: Int = 20
+
+    /** Hero turns the buff lasts after it is committed. */
+    const val THIEF_EVASIVE_MANEUVER_DURATION_TURNS: Int = 2
+
+    /** Archer prepare: three arrows on the hero's next offensive commit. */
     const val ARCHER_RAPID_FIRE_ID: String = "archer_rapid_fire"
 
-    /** Archer prepare: two attacks on the next offensive commit. */
+    const val ARCHER_RAPID_FIRE_ARROW_COUNT: Int = 3
+
+    /** Extra miss chance (0..100) on the 2nd Rapid Fire arrow (after the hit roll). */
+    const val ARCHER_RAPID_FIRE_SECOND_ARROW_MISS_PCT: Int = 30
+
+    /** Extra miss chance (0..100) on the 3rd Rapid Fire arrow (after the hit roll). */
+    const val ARCHER_RAPID_FIRE_THIRD_ARROW_MISS_PCT: Int = 50
+
+    /** Archer prepare: two arrows on the next offensive commit. */
     const val ARCHER_DOUBLE_SHOT_ID: String = "archer_double_shot"
+
+    /** Physical damage percent for the first Double Shot arrow. */
+    const val ARCHER_DOUBLE_SHOT_FIRST_DAMAGE_PCT: Int = 80
+
+    /** Physical damage percent for the second Double Shot arrow. */
+    const val ARCHER_DOUBLE_SHOT_SECOND_DAMAGE_PCT: Int = 60
 
     /** Archer prepare staged as a free action; buffs the next attack. */
     const val ARCHER_AIM_SHOT_ID: String = "archer_aim_shot"
+
+    const val ARCHER_FEINT_DEATH_ID: String = "archer_feint_death"
+
+    /** Hate delta applied toward the caster from each living enemy. */
+    const val ARCHER_FEINT_DEATH_HATE_DELTA: Int = -2
+
+    const val ARCHER_MARK_TARGET_ID: String = "archer_mark_target"
+
+    /** Bonus damage percent while [ARCHER_MARK_TARGET_ID] is active. */
+    const val ARCHER_MARK_TARGET_DAMAGE_BONUS_PCT: Int = 20
+
+    /** How many full combat rounds the mark lasts (including the round it is applied). */
+    const val ARCHER_MARK_TARGET_DURATION_ROUNDS: Int = 2
+
+    const val ARCHER_CLOSE_RANGE_ID: String = "archer_close_range"
+
+    const val ARCHER_FIRE_ARROW_ID: String = "archer_fire_arrow"
+    const val ARCHER_POISON_ARROW_ID: String = "archer_poison_arrow"
+    const val ARCHER_ICE_ARROW_ID: String = "archer_ice_arrow"
+
+    /**
+     * Extra miss chance (0–100) when an archer fires while an enemy is
+     * adjacent to the party. [ARCHER_CLOSE_RANGE_ID] multiplies this
+     * by `(100 - [ARCHER_CLOSE_RANGE_PENALTY_RELIEF_PCT]) / 100`.
+     */
+    const val ARCHER_CLOSE_RANGE_BASE_PENALTY_PCT: Int = 50
+
+    /** Percent shaved off the close-range penalty (authored: "by 25%"). */
+    const val ARCHER_CLOSE_RANGE_PENALTY_RELIEF_PCT: Int = 25
+
+    fun archerCloseRangeMissPenaltyPct(hasCloseRangeSkill: Boolean): Int {
+        val base = ARCHER_CLOSE_RANGE_BASE_PENALTY_PCT
+        if (!hasCloseRangeSkill) return base
+        return (base * (100 - ARCHER_CLOSE_RANGE_PENALTY_RELIEF_PCT) / 100.0)
+            .toInt()
+            .coerceIn(0, 100)
+    }
+
+    private val ARCHER_ELEMENTAL_ARROW_IDS: Set<String> = setOf(
+        ARCHER_FIRE_ARROW_ID,
+        ARCHER_POISON_ARROW_ID,
+        ARCHER_ICE_ARROW_ID,
+    )
+
+    fun isArcherElementalArrow(skillId: String): Boolean =
+        skillId in ARCHER_ELEMENTAL_ARROW_IDS
+
+    /** Chance (0..100) that Poison Arrow applies its poison after a connecting shot. */
+    const val ARCHER_POISON_ARROW_SUCCESS_PCT: Int = 50
+
+    const val ARCHER_POISON_ARROW_DAMAGE_PER_TURN: Int = 2
+
+    /** Poison ticks at the start of each of the enemy's turns. */
+    const val ARCHER_POISON_ARROW_DURATION_TURNS: Int = 2
+
+    /** Bow projectile sprite for Fire / Poison / Ice Arrow; null for other skills. */
+    fun arrowAssetForArcherArrow(skillId: String): String? = when (skillId) {
+        ARCHER_FIRE_ARROW_ID -> "fire_arrow"
+        ARCHER_POISON_ARROW_ID -> "poison_arrow"
+        ARCHER_ICE_ARROW_ID -> "ice_arrow"
+        else -> null
+    }
 
     /** True passives are info-only in the assign panel; PREPARE skills stage normally. */
     fun isStageableInAssignPanel(skill: Skill): Boolean = !skill.isPassive

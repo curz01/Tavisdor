@@ -66,11 +66,13 @@ object InventoryStacks {
         a is LootDrop.IngredientDrop && b is LootDrop.IngredientDrop ->
             a.ingredient == b.ingredient
         a is LootDrop.MeleeWeaponDrop && b is LootDrop.MeleeWeaponDrop ->
-            a.weapon == b.weapon && a.tier == b.tier
+            a.weapon == b.weapon && a.tier == b.tier &&
+                a.plusLevel == b.plusLevel && a.suffixes == b.suffixes
         a is LootDrop.FloorKeyDrop && b is LootDrop.FloorKeyDrop ->
             a.key == b.key
         a is LootDrop.ArmorDrop && b is LootDrop.ArmorDrop ->
-            a.armorName == b.armorName
+            a.type == b.type && a.slot == b.slot &&
+                a.plusLevel == b.plusLevel && a.suffixes == b.suffixes
         else -> false
     }
 }

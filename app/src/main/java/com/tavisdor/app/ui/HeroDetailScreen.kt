@@ -96,7 +96,7 @@ class HeroDetailScreen(
         tvAc.text = ctx.getString(R.string.hero_detail_ac_format, hero.armorClass)
 
         bindSlot(slotHelmet, R.string.hero_detail_slot_helmet, hero.helmet)
-        bindSlot(slotArmor, R.string.hero_detail_slot_armor, hero.armor)
+        bindSlot(slotArmor, R.string.hero_detail_slot_armor, hero.armor?.displayName)
         bindSlot(slotWeapon1, R.string.hero_detail_slot_weapon1, hero.weapon1?.displayName)
         bindSlot(slotWeapon2, R.string.hero_detail_slot_weapon2, hero.weapon2?.displayName)
         bindSlot(slotBoots, R.string.hero_detail_slot_boots, hero.boots)

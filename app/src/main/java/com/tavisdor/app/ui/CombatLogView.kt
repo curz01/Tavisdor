@@ -70,8 +70,12 @@ class CombatLogView @JvmOverloads constructor(
 
     fun setExpanded(expanded: Boolean) {
         if (this.expanded == expanded) return
+        val collapsing = this.expanded && !expanded
         this.expanded = expanded
         applyPanelHeight()
+        if (collapsing) {
+            scrollToBottomAfterResize()
+        }
         onExpandedChanged?.invoke(expanded)
     }
 
@@ -118,6 +122,16 @@ class CombatLogView @JvmOverloads constructor(
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
+    /** After collapse, show the newest log lines in the shorter viewport. */
+    private fun scrollToBottomAfterResize() {
+        val scroll = scrollHost ?: return
+        scroll.post {
+            scroll.fullScroll(View.FOCUS_DOWN)
+            // Second pass once the collapsed height has been laid out.
+            scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        }
+    }
+
     private fun applyPanelHeight() {
         val scroll = scrollHost ?: return
         val heightRes = if (expanded) {
@@ -137,25 +151,42 @@ class CombatLogView @JvmOverloads constructor(
             is CombatLogEntry.MeleeHit -> {
                 whiteSeg(out, entry.attacker)
                 whiteSeg(out, " ")
-                attackSeg(out, if (entry.crit) "lands a critical hit on" else "attacks")
-                whiteSeg(out, " ${entry.target} ")
-                attackSeg(out, "for ${entry.damage} damage.")
+                if (entry.skillName != null) {
+                    attackSeg(out, "uses")
+                    whiteSeg(out, " ${entry.skillName} on ${entry.target} ")
+                    attackSeg(out, "for ${entry.damage} damage.")
+                } else {
+                    attackSeg(out, if (entry.crit) "lands a critical hit on" else "attacks")
+                    whiteSeg(out, " ${entry.target} ")
+                    attackSeg(out, "for ${entry.damage} damage.")
+                }
             }
             is CombatLogEntry.MeleeNoDamage -> {
                 whiteSeg(out, entry.attacker)
                 whiteSeg(out, " ")
-                attackSeg(out, "attacks")
-                whiteSeg(out, " ${entry.target} ")
-                whiteSeg(out, "but deals no damage.")
+                if (entry.skillName != null) {
+                    attackSeg(out, "uses")
+                    whiteSeg(out, " ${entry.skillName} on ${entry.target} ")
+                    whiteSeg(out, "but deals no damage.")
+                } else {
+                    attackSeg(out, "attacks")
+                    whiteSeg(out, " ${entry.target} ")
+                    whiteSeg(out, "but deals no damage.")
+                }
             }
             is CombatLogEntry.MeleeMiss -> {
                 whiteSeg(out, entry.attacker)
                 whiteSeg(out, " ")
-                attackSeg(out, "attacks")
+                if (entry.skillName != null) {
+                    attackSeg(out, "uses")
+                    whiteSeg(out, " ${entry.skillName}")
+                } else {
+                    attackSeg(out, "attacks")
+                }
                 if (entry.shotLabel != null) {
                     whiteSeg(out, " (${entry.shotLabel})")
                 }
-                whiteSeg(out, " but ${entry.target} dodges the attack.")
+                whiteSeg(out, " but ${entry.target} dodges.")
             }
             is CombatLogEntry.SpellHit -> {
                 whiteSeg(out, entry.attacker)
@@ -181,6 +212,25 @@ class CombatLogView @JvmOverloads constructor(
                 attackSeg(out, "casts")
                 whiteSeg(out, " ${entry.spellName} ")
                 whiteSeg(out, "but ${entry.target} resists.")
+            }
+            is CombatLogEntry.ElementalBonusHit -> {
+                whiteSeg(out, entry.attacker)
+                whiteSeg(out, "'s ")
+                attackSeg(out, entry.skillName)
+                whiteSeg(out, " adds ")
+                attackSeg(out, "${entry.damage}")
+                whiteSeg(out, " elemental damage to ${entry.target}")
+                when {
+                    entry.advantage -> {
+                        whiteSeg(out, " ")
+                        advantageSeg(out, "(super effective!)")
+                    }
+                    entry.disadvantage -> {
+                        whiteSeg(out, " ")
+                        disadvantageSeg(out, "(resisted)")
+                    }
+                    else -> whiteSeg(out, ".")
+                }
             }
             is CombatLogEntry.HealCast -> {
                 whiteSeg(out, entry.caster)

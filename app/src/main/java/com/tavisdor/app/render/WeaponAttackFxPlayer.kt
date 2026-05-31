@@ -155,11 +155,12 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
                 drawDaggerCombo(canvas, attacker, defender, aimDeg, scale, elapsedMs)
             }
             WeaponFxKind.BOW_SHOT, WeaponFxKind.FIRE_PROJECTILE -> {
-                val arrowAsset = if (request.kind == WeaponFxKind.FIRE_PROJECTILE) {
-                    "fire_arrow"
-                } else {
-                    "arrow"
-                }
+                val arrowAsset = request.bowVolleyPlan?.arrowAsset
+                    ?: if (request.kind == WeaponFxKind.FIRE_PROJECTILE) {
+                        "fire_arrow"
+                    } else {
+                        "arrow"
+                    }
                 val plan = request.bowVolleyPlan
                 if (plan != null) {
                     drawBowVolleys(
@@ -196,6 +197,20 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
                         targetHeight = scale,
                     )
                 }
+            }
+            WeaponFxKind.FEINT_DEATH_RISE -> {
+                val partyScreen = attacker
+                val partyPivot = if (request.castFromPartyIcon) {
+                    partyIconCenter(partyScreen.first, partyScreen.second, cellPx)
+                } else {
+                    partyScreen
+                }
+                drawFeintDeathCast(
+                    canvas = canvas,
+                    pivot = partyPivot,
+                    spriteHeight = scale,
+                    elapsed = elapsedMs,
+                )
             }
         }
     }
@@ -277,9 +292,13 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
             bitmap("dagger_r") != null && bitmap("dagger_l") != null
         WeaponFxKind.DOUBLE_STRIKE_THRUST ->
             bitmap("doubls1") != null && bitmap("doubls2") != null
-        WeaponFxKind.BOW_SHOT -> bowAssetsReady("arrow", request.bowVolleyPlan)
-        WeaponFxKind.FIRE_PROJECTILE -> bowAssetsReady("fire_arrow", request.bowVolleyPlan)
+        WeaponFxKind.BOW_SHOT, WeaponFxKind.FIRE_PROJECTILE -> {
+            val arrowAsset = request.bowVolleyPlan?.arrowAsset
+                ?: if (request.kind == WeaponFxKind.FIRE_PROJECTILE) "fire_arrow" else "arrow"
+            bowAssetsReady(arrowAsset, request.bowVolleyPlan)
+        }
         WeaponFxKind.CHARGE_SWORD_HOLD -> bitmap("sword") != null
+        WeaponFxKind.FEINT_DEATH_RISE -> bitmap("scythe") != null
         WeaponFxKind.STAFF_SPELL_RISE ->
             if (request.showStaffDuringCast) {
                 bitmap("staff") != null && staffFlowAssetsReady(request)
@@ -314,6 +333,7 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         WeaponFxKind.DOUBLE_STRIKE_THRUST -> "doubls1"
         WeaponFxKind.BOW_SHOT -> "bow1"
         WeaponFxKind.CHARGE_SWORD_HOLD -> "sword"
+        WeaponFxKind.FEINT_DEATH_RISE -> "scythe"
     }
 
     private fun durationMs(request: WeaponFxRequest): Long {
@@ -331,8 +351,11 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
             WeaponFxKind.DOUBLE_STRIKE_THRUST -> DOUBLE_STRIKE_PHASE_MS * 2L
             WeaponFxKind.BOW_SHOT, WeaponFxKind.FIRE_PROJECTILE -> singleBowShotMs()
             WeaponFxKind.CHARGE_SWORD_HOLD -> CHARGE_HOLD_MS
+            WeaponFxKind.FEINT_DEATH_RISE -> feintDeathDurationMs()
         }
     }
+
+    private fun feintDeathDurationMs(): Long = STAFF_SPELL_MS + FEINT_DEATH_TOP_HOLD_MS
 
     private fun singleBowShotMs(): Long = BOW_DRAW_MS + BOW_HOLD_MS + ARROW_FLIGHT_MS
 
@@ -509,6 +532,36 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
     }
 
     /**
+     * Feint Death: [scythe.png] follows [drawStaffSpellCast] rise motion
+     * (party icon pivot, same eased ascent). After the peak, holds and
+     * rotates 90° counter-clockwise around the sprite bottom center.
+     */
+    private fun drawFeintDeathCast(
+        canvas: Canvas,
+        pivot: Pair<Float, Float>,
+        spriteHeight: Float,
+        elapsed: Long,
+    ) {
+        val bmp = bitmap("scythe") ?: return
+        val riseDuration = STAFF_SPELL_MS.coerceAtLeast(1L)
+        val riseT = (elapsed.toFloat() / riseDuration).coerceIn(0f, 1f)
+        val riseEased = easeInOutQuad(riseT)
+        val maxRise = spriteHeight * STAFF_CAST_RISE_HEIGHT_MULTIPLIER
+        val atTop = elapsed >= riseDuration
+        val riseDistance = if (atTop) maxRise else maxRise * riseEased
+        val pivotY = pivot.second - riseDistance
+        val rotationDeg = if (atTop) FEINT_DEATH_TOP_ROTATION_DEG else 0f
+        drawBitmapUpright(
+            canvas = canvas,
+            bmp = bmp,
+            pivotX = pivot.first,
+            pivotY = pivotY,
+            targetHeight = spriteHeight,
+            extraRotationDeg = rotationDeg,
+        )
+    }
+
+    /**
      * Gandalf-style cast: [staff.png] stays upright, rises from the
      * party icon center to ~98% of its drawn height while flow
      * frames cycle at the staff tip.
@@ -591,12 +644,16 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         pivotX: Float,
         pivotY: Float,
         targetHeight: Float,
+        extraRotationDeg: Float = 0f,
     ) {
         val aspect = bmp.width.toFloat() / bmp.height.coerceAtLeast(1)
         val h = targetHeight
         val w = h * aspect
         canvas.save()
         canvas.translate(pivotX, pivotY)
+        if (extraRotationDeg != 0f) {
+            canvas.rotate(extraRotationDeg)
+        }
         srcRect.set(0, 0, bmp.width, bmp.height)
         dstRect.set(-w / 2f, -h, w / 2f, 0f)
         canvas.drawBitmap(bmp, srcRect, dstRect, drawPaint)
@@ -1021,5 +1078,9 @@ class WeaponAttackFxPlayer(private val assets: AssetManager) {
         private const val BOW_HOLD_MS = 120L
         private const val ARROW_FLIGHT_MS = 380L
         private const val CHARGE_HOLD_MS = 280L
+        /** Hold at peak rise before Feint Death cast resolves. */
+        private const val FEINT_DEATH_TOP_HOLD_MS = 400L
+        /** Counter-clockwise rotation applied at the top of the rise. */
+        private const val FEINT_DEATH_TOP_ROTATION_DEG = -90f
     }
 }

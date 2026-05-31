@@ -3,6 +3,7 @@ package com.tavisdor.app.ui
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import androidx.core.content.ContextCompat
 import android.widget.CheckBox
 import android.widget.GridLayout
@@ -18,6 +19,7 @@ import com.tavisdor.app.items.InventoryGridSlot
 import com.tavisdor.app.items.InventoryStacks
 import com.tavisdor.app.items.LootDrop
 import com.tavisdor.app.items.Potion
+import com.tavisdor.app.items.ArmorItem
 import com.tavisdor.app.items.Weapon
 import com.tavisdor.app.party.HeroEquipment
 import com.tavisdor.app.party.Party
@@ -52,6 +54,8 @@ class ItemsScreen(
         val heroSlot: Int,
         val weaponSlot: HeroEquipment.WeaponSlot,
     )
+
+    private data class PendingArmorEquip(val heroSlot: Int)
 
     private val ctx: Context get() = root.context
 
@@ -95,6 +99,7 @@ class ItemsScreen(
     private val tabHeightInactivePx: Int =
         ctx.resources.getDimensionPixelSize(R.dimen.inventory_tab_height_inactive)
 
+    private val heroLowerHost: View = root.findViewById(R.id.itemsHeroLowerHost)
     private val heroSummaryPanel: View = root.findViewById(R.id.itemsHeroSummaryPanel)
 
     private val heroSummarySlots: List<InventoryHeroSummarySlot> by lazy {
@@ -110,11 +115,18 @@ class ItemsScreen(
         root = root.findViewById(R.id.itemsHeroEquipPanel),
     ).also {
         it.onClose = { showHeroSummary() }
+        it.onPrevHero = { cycleHeroEquipment(-1) }
+        it.onNextHero = { cycleHeroEquipment(1) }
         it.onSlotClick = { slot -> onEquipSlotClicked(slot) }
     }
 
     private var selectedHeroSlot: Int? = null
+    /** Cached height of the 2x2 hero summary so the equipment overlay matches. */
+    private var pinnedHeroLowerHeightPx: Int = 0
+    /** Opens equipment after the summary panel height has been measured. */
+    private var pendingEquipSlotAfterPin: Int? = null
     private var pendingWeaponEquip: PendingWeaponEquip? = null
+    private var pendingArmorEquip: PendingArmorEquip? = null
     private var party: Party? = null
     private var chestLootSource: TreasureChest? = null
 
@@ -138,7 +150,7 @@ class ItemsScreen(
         sideTabs.forEachIndexed { index, tab ->
             tab.setOnClickListener {
                 if (index != InventoryTab.EQUIPMENT.ordinal) {
-                    clearPendingWeaponEquip()
+                    clearPendingEquip()
                 }
                 selectTab(index)
             }
@@ -165,6 +177,8 @@ class ItemsScreen(
         val p = party ?: return
         p.inventory.onChanged = inventoryListener
         cbAutoPickup.isChecked = isAutoPickupEnabled()
+        pinnedHeroLowerHeightPx = 0
+        pendingEquipSlotAfterPin = null
         showHeroSummary()
         selectTab(InventoryTab.PICKUP.ordinal)
         refresh()
@@ -179,22 +193,94 @@ class ItemsScreen(
 
     private fun showHeroSummary() {
         selectedHeroSlot = null
-        clearPendingWeaponEquip()
+        clearPendingEquip()
         heroSummaryPanel.visibility = View.VISIBLE
         heroEquipPanel.hide()
+        schedulePinHeroLowerHostHeight()
+    }
+
+    /**
+     * Locks [itemsHeroLowerHost] to the measured height of the party summary
+     * grid so opening per-hero equipment does not resize the inventory panel.
+     */
+    private fun schedulePinHeroLowerHostHeight() {
+        if (pinnedHeroLowerHeightPx > 0) {
+            applyHeroLowerHostHeight(pinnedHeroLowerHeightPx)
+            return
+        }
+        if (heroSummaryPanel.visibility != View.VISIBLE) return
+        heroSummaryPanel.viewTreeObserver.addOnGlobalLayoutListener(
+            object : ViewTreeObserver.OnGlobalLayoutListener {
+                override fun onGlobalLayout() {
+                    heroSummaryPanel.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                    if (heroSummaryPanel.visibility != View.VISIBLE) return
+                    val measured = heroSummaryPanel.height
+                    if (measured <= 0) return
+                    pinnedHeroLowerHeightPx = measured
+                    applyHeroLowerHostHeight(measured)
+                    pendingEquipSlotAfterPin?.let { slot ->
+                        pendingEquipSlotAfterPin = null
+                        finishOpenHeroEquipment(slot)
+                    }
+                }
+            },
+        )
+    }
+
+    private fun applyHeroLowerHostHeight(heightPx: Int) {
+        val lp = heroLowerHost.layoutParams ?: return
+        if (lp.height == heightPx) return
+        lp.height = heightPx
+        heroLowerHost.layoutParams = lp
     }
 
     private fun clearPendingWeaponEquip() {
         pendingWeaponEquip = null
+        if (pendingArmorEquip == null) {
+            tvEquipHint.visibility = View.GONE
+        }
+    }
+
+    private fun clearPendingArmorEquip() {
+        pendingArmorEquip = null
+        if (pendingWeaponEquip == null) {
+            tvEquipHint.visibility = View.GONE
+        }
+    }
+
+    private fun clearPendingEquip() {
+        pendingWeaponEquip = null
+        pendingArmorEquip = null
         tvEquipHint.visibility = View.GONE
     }
 
     private fun openHeroEquipment(slotIndex: Int) {
+        if (party?.heroes?.getOrNull(slotIndex) == null) return
+        if (pinnedHeroLowerHeightPx <= 0) {
+            pendingEquipSlotAfterPin = slotIndex
+            heroSummaryPanel.visibility = View.VISIBLE
+            heroEquipPanel.hide()
+            schedulePinHeroLowerHostHeight()
+            return
+        }
+        finishOpenHeroEquipment(slotIndex)
+    }
+
+    private fun finishOpenHeroEquipment(slotIndex: Int) {
         val hero = party?.heroes?.getOrNull(slotIndex) ?: return
+        applyHeroLowerHostHeight(pinnedHeroLowerHeightPx)
         selectedHeroSlot = slotIndex
         heroEquipPanel.bind(hero)
         heroSummaryPanel.visibility = View.GONE
         heroEquipPanel.show()
+    }
+
+    private fun cycleHeroEquipment(delta: Int) {
+        val heroes = party?.heroes ?: return
+        val current = selectedHeroSlot ?: return
+        if (heroes.isEmpty()) return
+        val next = (current + delta).mod(heroes.size)
+        openHeroEquipment(next)
     }
 
     private fun selectTab(index: Int) {
@@ -379,10 +465,17 @@ class ItemsScreen(
     }
 
     private fun renderEquipment() {
-        tvEquipHint.visibility = if (pendingWeaponEquip != null) View.VISIBLE else View.GONE
-        val picking = pendingWeaponEquip != null
+        val pickingWeapon = pendingWeaponEquip != null
+        val pickingArmor = pendingArmorEquip != null
+        val picking = pickingWeapon || pickingArmor
+        tvEquipHint.visibility = if (picking) View.VISIBLE else View.GONE
+        tvEquipHint.text = when {
+            pickingWeapon -> ctx.getString(R.string.inventory_equip_pick_weapon)
+            pickingArmor -> ctx.getString(R.string.inventory_equip_pick_armor)
+            else -> ctx.getString(R.string.inventory_equip_pick_weapon)
+        }
         equipmentGrid.setOnSlotClick(if (picking) ::onEquipmentSlotTapped else null)
-        equipmentGrid.bind(party?.inventory?.weaponGridSlots().orEmpty())
+        equipmentGrid.bind(party?.inventory?.equipmentGridSlots().orEmpty())
     }
 
     private fun renderMaterials() {
@@ -426,11 +519,22 @@ class ItemsScreen(
                 onWeaponSlotClicked(heroSlot, HeroEquipment.WeaponSlot.PRIMARY, hero.weapon1)
             InventoryHeroEquipPanel.EquipSlot.OFF_HAND_WEAPON ->
                 onWeaponSlotClicked(heroSlot, HeroEquipment.WeaponSlot.OFF_HAND, hero.weapon2)
+            InventoryHeroEquipPanel.EquipSlot.ARMOR ->
+                onArmorSlotClicked(heroSlot, hero.armor)
             InventoryHeroEquipPanel.EquipSlot.HELMET,
-            InventoryHeroEquipPanel.EquipSlot.ARMOR,
             InventoryHeroEquipPanel.EquipSlot.BOOTS,
-            -> AppToast.show(ctx, R.string.inventory_toast_armor_not_in_gear)
+            -> AppToast.show(ctx, R.string.inventory_toast_armor_slot_not_stash)
         }
+    }
+
+    private fun onArmorSlotClicked(heroSlot: Int, equipped: ArmorItem?) {
+        if (equipped != null) {
+            unequipArmor(heroSlot, equipped.displayName)
+            return
+        }
+        clearPendingWeaponEquip()
+        pendingArmorEquip = PendingArmorEquip(heroSlot)
+        selectTab(InventoryTab.EQUIPMENT.ordinal)
     }
 
     private fun onWeaponSlotClicked(
@@ -442,15 +546,22 @@ class ItemsScreen(
             unequipWeapon(heroSlot, weaponSlot, equipped.displayName)
             return
         }
+        clearPendingArmorEquip()
         pendingWeaponEquip = PendingWeaponEquip(heroSlot, weaponSlot)
         selectTab(InventoryTab.EQUIPMENT.ordinal)
     }
 
     private fun onEquipmentSlotTapped(index: Int) {
-        if (pendingWeaponEquip == null) return
         val p = party ?: return
-        val weapon = p.inventory.weaponAtStackIndex(index) ?: return
-        equipWeapon(pendingWeaponEquip!!.heroSlot, pendingWeaponEquip!!.weaponSlot, weapon)
+        pendingWeaponEquip?.let { pending ->
+            val weapon = p.inventory.weaponAtStackIndex(index) ?: return
+            equipWeapon(pending.heroSlot, pending.weaponSlot, weapon)
+            return
+        }
+        pendingArmorEquip?.let { pending ->
+            val armor = p.inventory.armorAtStackIndex(index) ?: return
+            equipArmor(pending.heroSlot, armor)
+        }
     }
 
     private fun equipWeapon(heroSlot: Int, weaponSlot: HeroEquipment.WeaponSlot, weapon: Weapon) {
@@ -467,6 +578,38 @@ class ItemsScreen(
             }
             HeroEquipment.EquipResult.NOT_IN_INVENTORY -> refresh()
         }
+        refresh()
+    }
+
+    private fun equipArmor(heroSlot: Int, armor: ArmorItem) {
+        val p = party ?: return
+        when (HeroEquipment.equipArmor(p, heroSlot, armor)) {
+            HeroEquipment.EquipResult.SUCCESS -> {
+                clearPendingArmorEquip()
+                AppToast.show(ctx, ctx.getString(R.string.inventory_toast_equipped, armor.displayName))
+                onPartyEquipmentChanged?.invoke()
+            }
+            HeroEquipment.EquipResult.NOT_IN_INVENTORY -> refresh()
+            HeroEquipment.EquipResult.NOT_USABLE_BY_HERO -> Unit
+        }
+        refresh()
+    }
+
+    private fun unequipArmor(heroSlot: Int, displayName: String) {
+        val p = party ?: return
+        if (!HeroEquipment.unequipArmor(p, heroSlot)) {
+            AppToast.show(
+                ctx,
+                ctx.getString(
+                    R.string.items_panel_inventory_full,
+                    InventoryCapacity.SLOTS_PER_TAB,
+                ),
+            )
+            return
+        }
+        clearPendingArmorEquip()
+        AppToast.show(ctx, ctx.getString(R.string.inventory_toast_unequipped, displayName))
+        onPartyEquipmentChanged?.invoke()
         refresh()
     }
 
@@ -597,7 +740,7 @@ class ItemsScreen(
 
     private fun displayName(drop: LootDrop): String = when (drop) {
         is LootDrop.IngredientDrop -> drop.ingredient.displayName
-        is LootDrop.MeleeWeaponDrop -> drop.tier.displayMeleeName(drop.weapon)
+        is LootDrop.MeleeWeaponDrop -> drop.displayName()
         is LootDrop.FloorKeyDrop -> drop.key.displayName()
         is LootDrop.ArmorDrop -> drop.armorName
     }

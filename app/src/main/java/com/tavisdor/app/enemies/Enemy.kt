@@ -49,6 +49,7 @@ data class Enemy(
     val level: Int get() = template.level
     val element: Element get() = template.element
     val movementSquares: Int get() = template.movementSquares
+    val attackRange: Int get() = template.attackRange
     val weaponType get() = template.weaponType
     val strength: Int get() = template.strength
     val dexterity: Int get() = template.dexterity

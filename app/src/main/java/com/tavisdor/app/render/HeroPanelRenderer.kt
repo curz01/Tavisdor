@@ -721,6 +721,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         val g = game ?: return
         val icons = ArrayList<String>(4)
         if (g.isPartyHidden) icons += HIDDEN_ICON_ASSET
+        if (g.isEvasiveManeuverActive(heroSlot)) icons += EVASION_ICON_ASSET
         if (g.isHeroWaiting(heroSlot)) icons += WAIT_ICON_ASSET
         for (skill in g.stagedSkillsForPanel(heroSlot)) {
             actionIconAssetFor(skill)?.let { icons += it }
@@ -840,6 +841,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         private const val WAIT_ICON_ASSET = "wait"
         private const val ACTION_GUARD_ASSET = "action_guard"
         private const val HIDDEN_ICON_ASSET = "hidden"
+        private const val EVASION_ICON_ASSET = "Evasion"
 
         /** Always 4 hero slots; cached so the per-slot state arrays stay sized correctly. */
         private const val MAX_SLOTS: Int = 4

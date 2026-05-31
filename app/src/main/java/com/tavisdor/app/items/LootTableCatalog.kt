@@ -22,15 +22,41 @@ object LootTableCatalog {
         // From the design chart:
         //   50% chance to drop a Level 1 random ingredient.
         //   50% chance to drop a Stone Shard (Poison Arrow reagent).
-        //   10% chance to drop a (random) melee weapon at the
+        //   40% chance to drop a (random) melee weapon at the
         //   floor's current material tier.
+        //   10% chance to drop a +1 melee weapon (+1 attack over tier base).
         // Rolls are independent.
         LootTable(
             id = "spear_goblin",
             entries = listOf(
                 LootEntry.RandomIngredient(chance = 0.50f, potency = 1),
                 LootEntry.FixedIngredient(chance = 0.50f, ingredient = Ingredient.STONE_SHARD),
-                LootEntry.RandomMeleeWeapon(chance = 0.10f),
+                LootEntry.RandomMeleeWeapon(chance = 0.40f),
+                LootEntry.RandomMeleeWeapon(chance = 0.10f, plusLevel = 1),
+            ),
+        ),
+        // ----- Bow Goblin -----
+        LootTable(
+            id = "bow_goblin",
+            entries = listOf(
+                LootEntry.RandomIngredient(chance = 0.50f, potency = 1),
+                LootEntry.RandomBowOrStaff(chance = 0.35f),
+                LootEntry.FixedIngredient(chance = 0.50f, ingredient = Ingredient.WIND_SHARD),
+                LootEntry.RandomBowOrStaff(chance = 0.10f, plusLevel = 1),
+            ),
+        ),
+        // ----- Bat -----
+        LootTable(
+            id = "bat",
+            entries = listOf(
+                LootEntry.RandomIngredientStack(
+                    chance = 0.80f,
+                    ingredient = Ingredient.WIND_SHARD,
+                    minCount = 1,
+                    maxCount = 2,
+                ),
+                LootEntry.RandomArmor(chance = 0.25f),
+                LootEntry.RandomArmor(chance = 0.05f, plusLevel = 1),
             ),
         ),
     )

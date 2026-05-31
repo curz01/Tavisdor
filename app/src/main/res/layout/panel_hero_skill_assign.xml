@@ -68,7 +68,7 @@
         android:baselineAligned="false"
         android:orientation="horizontal">
 
-        <!-- Offensive (left half) -->
+        <!-- Active (left half) -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -112,7 +112,7 @@
             android:layout_height="match_parent"
             android:background="@color/hero_skill_assign_divider" />
 
-        <!-- Defensive + Passive (right half) -->
+        <!-- Reactive + Passive (right half) -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"

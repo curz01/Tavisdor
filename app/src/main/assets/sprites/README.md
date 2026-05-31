@@ -67,10 +67,15 @@ dungeon background.
 | `doubls1.png`, `doubls2.png` | varies | Double Strike weapon FX (Thief). | Spear-style thrust (sprite top → defender); first half / second half. Used by [WeaponAttackFxPlayer]. |
 | `trickattack.png` | varies | Trick Attack cast FX (Thief). | Rises from party icon (same timing as Make Potion / Rest). Used by [CombatPartyRiseFxCatalog]. |
 | `hide.png` | varies | Hide cast FX (Thief). | Same rise-from-party motion as Trick Attack. Used by [CombatPartyRiseFxCatalog]. |
+| `scythe.png` | varies | Feint Death cast FX (Archer). | Same rise path as [staff.png] spell cast; at the peak, rotates 90° CCW. Used by [WeaponAttackFxPlayer] / [FeintDeathFxCatalog]. |
 | `hidden.png` | 32 x 32 (suggested) | Party-wide Hide active on every hero panel status strip. | Shown on all four slots while [Game.isPartyHidden]; cleared when any hero spends an action or enemies spot the party. |
+| `Evasion.png` | 32 x 32 (suggested) | Evasive Maneuver buff on the thief's hero panel status strip. | Shown on that hero's slot while [Game.isEvasiveManeuverActive]; cleared after the buff's turn counter expires. |
 | `lock.png` | 64 x 64 (suggested) | Locked door / chest unlock attempt. | Rises from the tile, shakes, then descends (failure). Used by [LockUnlockFxPlayer]. |
 | `unlock.png` | 64 x 64 (suggested) | Successful unlock on door / chest. | Shown for 0.5s after the shake, then lowers with fade. Used by [LockUnlockFxPlayer]. |
 | `steal1.png`, `steal2.png` | 64 x 64 (suggested) | Steal on connecting Thief hit. | [steal1] rises from defender, holds; [steal2] overlays then swipes up/right ½ tile. Used by [StealFxPlayer]. |
+| `bat_port.png` | 96 x 96 (suggested) | Bat turn-order portrait. | Same layout as goblin portraits. |
+| `batrest.png`, `batrest2.png` | 64 x 64 (suggested) | Bat exploration idle (`batrest` ↔ `batrest2`). | Used when not in combat. |
+| `bat1.png`, `bat2.png` | 64 x 64 (suggested) | Bat combat idle + dive bite. | `bat2` during wind-up; `bat1` on the dive. Attack motion: [BatStrikeFxPlayer]. |
 
 ---
 

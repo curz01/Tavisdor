@@ -30,17 +30,23 @@ data class Weapon(
     val displayName: String,
     val attackBonus: Int,
     val range: Int,
+    /**
+     * Extra attack stacked on the tier prefix damage (e.g. Wood +1 Spear).
+     * Distinct from suffixes, which add stats / effects via [suffixes].
+     */
+    val plusLevel: Int = 0,
+    /** Randomized affixes rolled at drop depth ([SuffixRoller]). */
+    val suffixes: List<ItemSuffix> = emptyList(),
 ) {
     /** Convenience flag for combat code: bows / future ranged-types. */
     val isRanged: Boolean get() = type.reach == WeaponType.Reach.RANGED
 
     companion object {
         /**
-         * Range a crude starter bow grants. Set to 3 so the archer
-         * can engage from a distance while leaving headroom for
-         * later bow tiers to scale higher.
+         * Range a crude starter bow grants. Matches Archer basic
+         * attack reach (2 cells).
          */
-        const val CRUDE_BOW_RANGE: Int = 3
+        const val CRUDE_BOW_RANGE: Int = 2
 
         /**
          * Range for crude melee weapons (sword / dagger / staff).

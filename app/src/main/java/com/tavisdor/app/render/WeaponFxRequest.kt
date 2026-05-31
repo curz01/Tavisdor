@@ -17,7 +17,7 @@ import com.tavisdor.app.skills.Skill
  */
 data class BowVolleyPlan(
     val volleys: List<BowVolley>,
-    /** Projectile sprite: `arrow` or `fire_arrow`. */
+    /** Projectile sprite: `arrow`, `fire_arrow`, `poison_arrow`, or `ice_arrow`. */
     val arrowAsset: String,
 )
 
@@ -111,6 +111,11 @@ enum class WeaponFxKind {
     FIRE_PROJECTILE,
     /** Fighter Charge: hold sword pointed at defender (no swing arc). */
     CHARGE_SWORD_HOLD,
+    /**
+     * Archer Feint Death: [scythe.png] rises on the staff spell path,
+     * holds at the peak, then rotates 90° counter-clockwise.
+     */
+    FEINT_DEATH_RISE,
 }
 
 object WeaponFxCatalog {
@@ -121,6 +126,7 @@ object WeaponFxCatalog {
      */
     fun kindForWeaponAttack(weaponType: WeaponType?): WeaponFxKind? = when (weaponType) {
         null -> null
+        WeaponType.BITE -> null
         WeaponType.SPEAR -> WeaponFxKind.SPEAR_THRUST
         WeaponType.STAFF -> WeaponFxKind.STAFF_MELEE_ARC
         WeaponType.DAGGER -> WeaponFxKind.DAGGER_COMBO
@@ -129,14 +135,8 @@ object WeaponFxCatalog {
             WeaponFxKind.MELEE_ARC
     }
 
-    /**
-     * Spell visuals: archer Fire Arrow uses [fire_arrow]; mage heals
-     * and elemental spells use [STAFF_SPELL_RISE].
-     */
-    fun kindForSpell(weaponType: WeaponType?, isFireArrowSkill: Boolean): WeaponFxKind {
-        if (isFireArrowSkill) return WeaponFxKind.FIRE_PROJECTILE
-        return WeaponFxKind.STAFF_SPELL_RISE
-    }
+    /** Spell visuals: mage heals and elemental spells use [STAFF_SPELL_RISE]. */
+    fun kindForSpell(weaponType: WeaponType?): WeaponFxKind = WeaponFxKind.STAFF_SPELL_RISE
 
     /** Tip overlay cycle for [WeaponFxKind.STAFF_SPELL_RISE], keyed by spell. */
     fun spellFlowFrames(skill: Skill): List<String> {
@@ -160,6 +160,7 @@ object WeaponFxCatalog {
         WeaponFxKind.BOW_SHOT -> phase ?: "bow1"
         WeaponFxKind.FIRE_PROJECTILE -> "fire_arrow"
         WeaponFxKind.CHARGE_SWORD_HOLD -> "sword"
+        WeaponFxKind.FEINT_DEATH_RISE -> "scythe"
     }
 
     /** Sprite file for the 180° arc swing (weapon points up in art). */

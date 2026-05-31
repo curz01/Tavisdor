@@ -1,5 +1,7 @@
 package com.tavisdor.app.party
 
+import com.tavisdor.app.items.ArmorItem
+import com.tavisdor.app.items.ArmorPieceSlot
 import com.tavisdor.app.items.Inventory
 import com.tavisdor.app.items.Weapon
 
@@ -47,6 +49,32 @@ object HeroEquipment {
         }
         party.replaceHero(heroIndex, updated)
         return EquipResult.SUCCESS
+    }
+
+    fun equipArmor(party: Party, heroIndex: Int, armor: ArmorItem): EquipResult {
+        val hero = party.heroes.getOrNull(heroIndex) ?: return EquipResult.NOT_IN_INVENTORY
+        if (!armor.canBeEquippedBy(hero.heroClass)) return EquipResult.NOT_USABLE_BY_HERO
+        if (armor.slot != ArmorPieceSlot.ARMOR) return EquipResult.NOT_USABLE_BY_HERO
+        val inv = party.inventory
+        val fromBag = inv.removeFirstArmor(armor) ?: return EquipResult.NOT_IN_INVENTORY
+        val previous = hero.armor
+        if (previous != null && !inv.addArmor(previous)) {
+            inv.addArmor(fromBag)
+            return EquipResult.NOT_IN_INVENTORY
+        }
+        hero.armor = fromBag
+        party.replaceHero(heroIndex, hero)
+        return EquipResult.SUCCESS
+    }
+
+    /** Moves worn armor into [Inventory.armor]. Returns false if the slot was empty or the tab is full. */
+    fun unequipArmor(party: Party, heroIndex: Int): Boolean {
+        val hero = party.heroes.getOrNull(heroIndex) ?: return false
+        val armor = hero.armor ?: return false
+        if (!party.inventory.addArmor(armor)) return false
+        hero.armor = null
+        party.replaceHero(heroIndex, hero)
+        return true
     }
 
     /** Moves the equipped weapon into [Inventory.weapons]. Returns false if the slot was empty. */

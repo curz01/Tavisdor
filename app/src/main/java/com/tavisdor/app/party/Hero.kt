@@ -1,19 +1,22 @@
 package com.tavisdor.app.party
 
 import com.tavisdor.app.debug.DebugConfig
+import com.tavisdor.app.items.ArmorItem
+import com.tavisdor.app.items.EquippedSuffixBonuses
 import com.tavisdor.app.items.Weapon
+import com.tavisdor.app.items.WeaponClassRules
 import com.tavisdor.app.skills.Skill
 import com.tavisdor.app.skills.SkillButton
 import com.tavisdor.app.skills.SkillCatalog
 
-/** Offensive column in the skill-assignment panel (ACTION bucket). */
+/** Active column in the skill-assignment panel (ACTION bucket). */
 fun Hero.offensiveSkillsForAssign(): List<Skill> =
     knownSkills.filter {
         it.button == SkillButton.ACTION &&
             it.id !in SkillCatalog.ASSIGN_PASSIVE_COLUMN_SKILL_IDS
     }
 
-/** Defensive column: GUARD bucket excluding passives and utility skills. */
+/** Reactive column: GUARD bucket excluding passives and utility skills. */
 fun Hero.defensiveSkillsForAssign(): List<Skill> =
     knownSkills.filter {
         it.button == SkillButton.GUARD &&
@@ -66,38 +69,40 @@ data class Hero(
     var hp: Int = BASE_MAX_HP,
     /** Current MP. Spells / abilities spend against this. Must be <= [maxMp]. */
     var mp: Int = BASE_MAX_MP,
-    val armorClass: Int = 10,
-    /** Equipment slots; armor pieces remain string placeholders
-     *  until the armor-loot system lands. Weapon slots are typed
-     *  via [Weapon] so combat can read range / damage off the
-     *  equipped item; [weapon1] is the primary swing / shot and
-     *  [weapon2] is reserved for off-hand / dual-wield. Crude
-     *  starters are issued by [Hero.spawn] / [Party.fromSaveData]
-     *  - heroes are never barehanded once they leave class-select. */
+    /**
+     * Stored base AC from class (no gear). Use [armorClass] in combat/UI
+     * for the total including equipped pieces.
+     */
+    val baseArmorClass: Int = 10,
+    /** Equipment slots. Weapon slots are typed via [Weapon]; [weapon1]
+     *  is the primary swing / shot and [weapon2] is off-hand. */
     val helmet: String? = null,
-    var armor: String? = null,
+    var armor: ArmorItem? = null,
     val weapon1: Weapon? = null,
     val weapon2: Weapon? = null,
     val boots: String? = null,
 ) {
     // ----- Core stats (chart-driven, never drift) -----
 
-    /** STR derived from the (class, level) chart. */
-    val strength: Int get() = ClassStats.statsFor(heroClass, level).strength
+    private val suffixBonuses: EquippedSuffixBonuses
+        get() = EquippedSuffixBonuses.forHero(this)
 
-    /** DEX derived from the (class, level) chart. */
-    val dexterity: Int get() = ClassStats.statsFor(heroClass, level).dexterity
+    /** STR from class chart plus weapon / armor suffixes. */
+    val strength: Int get() = ClassStats.statsFor(heroClass, level).strength + suffixBonuses.strength
 
-    /** INT derived from the (class, level) chart. */
-    val intelligence: Int get() = ClassStats.statsFor(heroClass, level).intelligence
+    /** DEX from class chart plus weapon / armor suffixes. */
+    val dexterity: Int get() = ClassStats.statsFor(heroClass, level).dexterity + suffixBonuses.dexterity
+
+    /** INT from class chart plus weapon / armor suffixes. */
+    val intelligence: Int get() = ClassStats.statsFor(heroClass, level).intelligence + suffixBonuses.intelligence
 
     // ----- Derived pools (from the Stat-Attributes design chart) -----
 
-    /** Max HP = [BASE_MAX_HP] + 2 per point of [strength]. */
-    val maxHp: Int get() = BASE_MAX_HP + strength * STR_HP_PER_POINT
+    /** Max HP = base formula on [strength] plus Vital / Blessed suffix HP. */
+    val maxHp: Int get() = BASE_MAX_HP + strength * STR_HP_PER_POINT + suffixBonuses.bonusMaxHp
 
-    /** Max MP = [BASE_MAX_MP] + 3 per point of [intelligence]. */
-    val maxMp: Int get() = BASE_MAX_MP + intelligence * INT_MP_PER_POINT
+    /** Max MP = base formula on [intelligence] plus magical / Blessed suffix MP. */
+    val maxMp: Int get() = BASE_MAX_MP + intelligence * INT_MP_PER_POINT + suffixBonuses.bonusMaxMp
 
     /**
      * Flat dodge chance as a percentage (1% per point of [dexterity]).
@@ -106,6 +111,15 @@ data class Hero(
      * a small chance to be hit.
      */
     val dodgeChancePct: Int get() = (dexterity * DEX_DODGE_PCT_PER_POINT).coerceAtMost(90)
+
+    /** Class baseline plus AC from equipped armor (and future helm / boots / shield). */
+    val armorClass: Int get() = baseArmorClass + equippedArmorAcBonus()
+
+    private fun equippedArmorAcBonus(): Int {
+        var bonus = 0
+        armor?.let { bonus += it.acBonus }
+        return bonus
+    }
 
     /**
      * Maximum equipment weight class this hero can wear without penalty.
@@ -135,7 +149,7 @@ data class Hero(
      * and [Skill.range] rewritten from equipped [weapon1]. Shows
      * `Attack (Sword)` etc. using [WeaponType.displayName] only
      * (no tier prefix like "Crude"). A crude bow bumps range to
-     * [Weapon.CRUDE_BOW_RANGE] (3); melee weapons stay at 1.
+     * [Weapon.CRUDE_BOW_RANGE] (2); melee weapons stay at 1.
      */
     val basicAttackSkill: Skill
         get() {
@@ -143,7 +157,7 @@ data class Hero(
             val w = weapon1 ?: return base
             return base.copy(
                 displayName = SkillCatalog.basicAttackDisplayName(w.type),
-                range = w.range,
+                range = WeaponClassRules.effectiveRange(this, w),
             )
         }
 
@@ -154,7 +168,7 @@ data class Hero(
      * picker and the hero detail panel both show bow range for an
      * Archer with a bow equipped.
      */
-    val knownSkills: List<Skill> get() = applyBasicAttackRange(
+    val knownSkills: List<Skill> get() = applyWeaponAwareSkillRanges(
         SkillCatalog.knownSkillsFor(heroClass, level),
     )
 
@@ -162,22 +176,26 @@ data class Hero(
      * Subset of [knownSkills] surfaced under a particular action button
      * (ACT / GRD / SPL). Bucketing is derived from [Skill.button].
      */
-    fun knownSkillsFor(button: SkillButton): List<Skill> = applyBasicAttackRange(
+    fun knownSkillsFor(button: SkillButton): List<Skill> = applyWeaponAwareSkillRanges(
         SkillCatalog.knownSkillsFor(heroClass, level, button),
     )
 
     /**
-     * Rewrites the [SkillCatalog.BASIC_ATTACK_ID] entry in [list]
-     * with the weapon-aware range from [basicAttackSkill]. Every
-     * other entry passes through unchanged. Returning the same
-     * list instance when no substitution happens keeps the hot
-     * path allocation-free for heroes whose weapon already
-     * matches the default range.
+     * Rewrites [SkillCatalog.BASIC_ATTACK_ID] with [basicAttackSkill] and
+     * applies bow range to elemental arrows for Archers.
      */
-    private fun applyBasicAttackRange(list: List<Skill>): List<Skill> {
+    private fun applyWeaponAwareSkillRanges(list: List<Skill>): List<Skill> {
         if (weapon1 == null) return list
-        val ba = basicAttackSkill
-        return list.map { if (it.id == SkillCatalog.BASIC_ATTACK_ID) ba else it }
+        val patchedBasic = basicAttackSkill
+        return list.map { skill ->
+            when (skill.id) {
+                SkillCatalog.BASIC_ATTACK_ID -> patchedBasic
+                else -> {
+                    val range = WeaponClassRules.effectiveSkillRange(this, skill)
+                    if (range == skill.range) skill else skill.copy(range = range)
+                }
+            }
+        }
     }
 
     /**
@@ -364,7 +382,7 @@ data class Hero(
                 heroClass = cls,
                 gender = gender,
                 level = lvl,
-                armorClass = defaultArmorClassFor(cls),
+                baseArmorClass = defaultArmorClassFor(cls),
                 // Crude starter so the archer has range from
                 // turn one and the other classes have a flavor
                 // weapon to swing. Issuing it here keeps both

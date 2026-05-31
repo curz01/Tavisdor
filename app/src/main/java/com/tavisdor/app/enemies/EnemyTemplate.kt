@@ -45,6 +45,12 @@ data class EnemyTemplate(
     val level: Int,
 
     /**
+     * Relative spawn weight among templates at the same [level].
+     * Weight 2 is picked roughly twice as often as weight 1 (RNG).
+     */
+    val spawnWeight: Int = 1,
+
+    /**
      * Elemental affinity. Used by the future weakness / resistance
      * chart; [Element.NEUTRAL] participates in no interactions.
      */
@@ -56,10 +62,28 @@ data class EnemyTemplate(
      */
     val movementSquares: Int,
     /**
+     * When true, the enemy always spends its movement budget first,
+     * then strikes on the same turn (one action). Ignores the usual
+     * DEX-vs-party move-first / strike-first split. If it moved at
+     * least one cell this turn, its strike suffers −20% hit chance.
+     */
+    val moveThenStrikeSameTurn: Boolean = false,
+    /**
+     * Manhattan cells this enemy can strike from (basic attack).
+     * Melee defaults to 1; bow users typically 2+.
+     */
+    val attackRange: Int = 1,
+    /**
      * Optional authored weapon for attack FX (and future enemy
      * combat math tuning). Null means unarmed / no dedicated art.
      */
     val weaponType: WeaponType? = null,
+
+    /**
+     * Boss-tier enemies (e.g. from `boss*.png` rooms). Used for
+     * reduced-on-boss effects such as Mace stun (5% vs 10%).
+     */
+    val isBoss: Boolean = false,
 
     /**
      * Authored STR / DEX / INT. Drive damage rolls, dodge, and the
@@ -140,6 +164,12 @@ data class EnemyTemplate(
     val walkSpriteAssets: List<String> = emptyList(),
 
     /**
+     * Exploration idle cycle when the enemy is not in combat. When
+     * empty, [walkSpriteAssets] is used everywhere.
+     */
+    val restWalkSpriteAssets: List<String> = emptyList(),
+
+    /**
      * Milliseconds each [walkSpriteAssets] frame stays on screen
      * before the renderer advances to the next one. 500ms reads
      * as a calm, deliberate idle. Drop to ~250ms for jittery
@@ -154,11 +184,20 @@ data class EnemyTemplate(
      * the HP bar above the sprite scales with the larger silhouette.
      */
     val spriteDisplayScale: Float = 1f,
+
+    /**
+     * Raises the sprite anchor above the tile bottom, as a fraction
+     * of one cell (0.2f = 20% higher). Applies to rest and combat
+     * walk-cycle frames alike.
+     */
+    val spriteLiftFraction: Float = 0f,
 ) {
 
     init {
         require(level >= 1) { "$id: level must be >= 1, got $level." }
+        require(spawnWeight >= 1) { "$id: spawnWeight must be >= 1, got $spawnWeight." }
         require(movementSquares >= 0) { "$id: movementSquares must be >= 0." }
+        require(attackRange >= 1) { "$id: attackRange must be >= 1, got $attackRange." }
         require(strength >= 0 && dexterity >= 0 && intelligence >= 0) {
             "$id: stats must be >= 0 (got STR=$strength DEX=$dexterity INT=$intelligence)."
         }
@@ -175,6 +214,9 @@ data class EnemyTemplate(
         }
         require(spriteDisplayScale > 0f) {
             "$id: spriteDisplayScale must be > 0, got $spriteDisplayScale."
+        }
+        require(spriteLiftFraction >= 0f) {
+            "$id: spriteLiftFraction must be >= 0, got $spriteLiftFraction."
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.tavisdor.app.enemies
 
 import com.tavisdor.app.items.WeaponType
+import kotlin.random.Random
 
 /**
  * Central registry of every authored [EnemyTemplate], keyed by
@@ -29,6 +30,7 @@ object EnemyCatalog {
             id = "spear_goblin",
             name = "Spear Goblin",
             level = 1,
+            spawnWeight = 2,
             element = Element.NEUTRAL,
             movementSquares = 1,
             weaponType = WeaponType.SPEAR,
@@ -46,9 +48,8 @@ object EnemyCatalog {
             baseMaxHp = 4,
             baseMaxMp = 0,
             awardedExperience = 50,
-            // Loot table description (from chart, parsed when loot system lands):
-            //   50% chance to drop a Level 1 random ingredient,
-            //   10% to drop a melee weapon.
+            // Loot: see LootTableCatalog "spear_goblin" (ingredients, shards,
+            // 40% melee weapon, 10% +1 melee weapon).
             lootTableId = "spear_goblin",
             goldMin = 5,
             goldMax = 15,
@@ -59,6 +60,63 @@ object EnemyCatalog {
             walkSpriteAssets = listOf(
                 "sprites/spear_gob1.png",
                 "sprites/spear_gob2.png",
+            ),
+        ),
+        EnemyTemplate(
+            id = "bow_goblin",
+            name = "Bow Goblin",
+            level = 1,
+            spawnWeight = 1,
+            element = Element.NEUTRAL,
+            movementSquares = 1,
+            attackRange = 2,
+            weaponType = WeaponType.BOW,
+            strength = 1,
+            dexterity = 3,
+            intelligence = 2,
+            armorClass = 1,
+            // Max HP = 12 -> baseMaxHp + STR * 2
+            baseMaxHp = 10,
+            baseMaxMp = 0,
+            awardedExperience = 60,
+            lootTableId = "bow_goblin",
+            goldMin = 10,
+            goldMax = 20,
+            portraitAsset = "sprites/archergob_port.png",
+            walkSpriteAssets = listOf(
+                "sprites/arch_gob1.png",
+                "sprites/arch_gob2.png",
+            ),
+        ),
+        EnemyTemplate(
+            id = "bat",
+            name = "Bat",
+            level = 1,
+            // Same pool weight as bow_goblin (spear_goblin remains 2).
+            spawnWeight = 1,
+            element = Element.AIR,
+            movementSquares = 3,
+            moveThenStrikeSameTurn = true,
+            weaponType = WeaponType.BITE,
+            strength = 2,
+            dexterity = 2,
+            intelligence = 0,
+            armorClass = 1,
+            // Max HP = 8 (4 + 2*STR), Max MP = 2
+            baseMaxHp = 4,
+            baseMaxMp = 2,
+            awardedExperience = 50,
+            lootTableId = "bat",
+            goldMin = 0,
+            goldMax = 0,
+            portraitAsset = "sprites/bat_port.png",
+            restWalkSpriteAssets = listOf(
+                "sprites/batrest.png",
+                "sprites/batrest2.png",
+            ),
+            walkSpriteAssets = listOf(
+                "sprites/bat1.png",
+                "sprites/bat2.png",
             ),
         ),
     )
@@ -91,4 +149,19 @@ object EnemyCatalog {
      * doesn't exist yet.
      */
     fun atLevel(level: Int): List<EnemyTemplate> = AUTHORED.filter { it.level == level }
+
+    /**
+     * Picks one template from [candidates] using each entry's
+     * [EnemyTemplate.spawnWeight] (higher = more common).
+     */
+    fun pickWeighted(candidates: List<EnemyTemplate>, rng: Random): EnemyTemplate {
+        require(candidates.isNotEmpty())
+        val total = candidates.sumOf { it.spawnWeight }
+        var roll = rng.nextInt(total)
+        for (template in candidates) {
+            roll -= template.spawnWeight
+            if (roll < 0) return template
+        }
+        return candidates.last()
+    }
 }

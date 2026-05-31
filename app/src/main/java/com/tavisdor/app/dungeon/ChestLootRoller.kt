@@ -3,6 +3,7 @@ package com.tavisdor.app.dungeon
 import com.tavisdor.app.items.Ingredient
 import com.tavisdor.app.items.IngredientCategory
 import com.tavisdor.app.items.LootDrop
+import com.tavisdor.app.items.LootGearFactory
 import com.tavisdor.app.items.LootTier
 import com.tavisdor.app.items.WeaponType
 import kotlin.random.Random
@@ -21,7 +22,7 @@ object ChestLootRoller {
             branch < 0.60f -> ChestLoot(
                 gold = rng.nextInt(10, 16),
                 items = mutableListOf(
-                    randomArmor(effectiveDepth),
+                    randomArmor(effectiveDepth, rng),
                     randomIngredient(effectiveDepth, rng),
                     randomShard(rng),
                     randomShard(rng),
@@ -38,15 +39,15 @@ object ChestLootRoller {
         }
     }
 
-    private fun randomArmor(depth: Int): LootDrop.ArmorDrop {
+    private fun randomArmor(depth: Int, rng: kotlin.random.Random): LootDrop.ArmorDrop {
         val tier = LootTier.forDepth(depth)
-        return LootDrop.ArmorDrop(tier.armorName)
+        return LootGearFactory.rollArmorDrop(tier, plusLevel = 0, depth, rng)
     }
 
     private fun randomWeapon(depth: Int, rng: Random): LootDrop.MeleeWeaponDrop {
         val weapon = WeaponType.MELEE_TYPES.random(rng)
         val tier = LootTier.forDepth(depth)
-        return LootDrop.MeleeWeaponDrop(weapon, tier)
+        return LootGearFactory.rollMeleeWeaponDrop(weapon, tier, plusLevel = 0, depth, rng)
     }
 
     private fun randomIngredient(depth: Int, rng: Random): LootDrop.IngredientDrop {

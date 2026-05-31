@@ -41,10 +41,30 @@ class Floor(
 
     /**
      * Cells the party has actually stepped on. Seeded with the spawn cell
-     * and grown by [recordVisited] on every move step. Drives the
-     * staircase-spawn gate (see [staircaseTemplateAllowed]).
+     * and grown by [recordVisited] on every move step.
      */
     private val _visitedCells: HashSet<Cell> = hashSetOf(initialPartyCell)
+
+    /**
+     * When true, [tryPlacePendingStairsDown] may attach the floor's
+     * `end_*` template once [revealedRoomPlacementCount] crosses the
+     * depth threshold. Set by [FloorGenerator]; cleared on success.
+     */
+    private var _stairPlacementPending: Boolean = false
+
+    /** Open connector reserved for the stairs-down room until reveal gate passes. */
+    private var _reservedStairConnector: Cell? = null
+
+    /**
+     * Non-hall rooms that must be revealed before [tryPlacePendingStairsDown]
+     * runs. Rolled once per floor from [staircaseRoomThresholdForFloor].
+     */
+    private var _staircaseRoomsRequired: Int = STAIRCASE_MIN_REVEALED_ROOMS_BASE
+
+    val stairPlacementPending: Boolean get() = _stairPlacementPending
+
+    /** Revealed non-hall rooms required before stairs-down spawns this floor. */
+    val staircaseRoomsRequired: Int get() = _staircaseRoomsRequired
 
     /**
      * True once a boss-tagged template has been committed to this floor.
@@ -176,6 +196,20 @@ class Floor(
     val chests: Map<Cell, TreasureChest> get() = _chests
 
     val placementCount: Int get() = _placements.size
+
+    /**
+     * Non-hall, non-entrance placements the party has entered (fog
+     * revealed). Drives when the stairs-down room may spawn.
+     */
+    fun revealedRoomPlacementCount(): Int {
+        var n = 0
+        for (i in _placements.indices) {
+            if (!_placementRevealed[i]) continue
+            if (_placementIsHall[i] || _placementIsStart[i]) continue
+            n++
+        }
+        return n
+    }
 
     fun cellsInPlacement(placementIndex: Int): Set<Cell> =
         _placements.getOrNull(placementIndex) ?: emptySet()
@@ -761,14 +795,104 @@ class Floor(
     }
 
     /**
-     * Whether a staircase-bearing template (one with any blue pixels) is
-     * currently eligible to be placed on this floor:
-     *  - There must not already be a staircase on the floor (one per level).
-     *  - The party must have explored at least [staircaseThresholdForDepth].
+     * Whether the stairs-down room may be placed on this floor:
+     *  - No staircase yet (one per level).
+     *  - At least [_staircaseRoomsRequired] non-hall rooms revealed.
      */
     fun staircaseTemplateAllowed(): Boolean {
         if (_staircases.isNotEmpty()) return false
-        return _visitedCells.size >= staircaseThresholdForDepth(depth)
+        return revealedRoomPlacementCount() >= _staircaseRoomsRequired
+    }
+
+    /** Locks in the per-floor reveal count (see [staircaseRoomThresholdForFloor]). */
+    fun setStaircaseRoomsRequired(required: Int) {
+        _staircaseRoomsRequired = required.coerceAtLeast(1)
+    }
+
+    /**
+     * Reserves [host] so [FloorGenerator] will not cap it; the `end_*`
+     * stairs-down template lands here once [staircaseTemplateAllowed].
+     */
+    fun reserveConnectorForPendingStairs(host: Cell) {
+        _stairPlacementPending = true
+        _reservedStairConnector = host
+    }
+
+    fun isReservedStairConnector(host: Cell): Boolean =
+        _stairPlacementPending && _reservedStairConnector == host
+
+    /**
+     * Places the authored stairs-down room at the deepest open connector
+     * once enough rooms have been revealed. Returns true when the `end_*`
+     * template committed.
+     */
+    fun tryPlacePendingStairsDown(
+        endTiles: List<RoomTemplate>,
+        hallTiles: List<RoomTemplate>,
+        rng: Random,
+    ): Boolean {
+        if (!_stairPlacementPending || _staircases.isNotEmpty()) return false
+        if (!staircaseTemplateAllowed()) return false
+        if (endTiles.isEmpty() || _openConnectors.isEmpty()) return false
+
+        for (host in stairHostCandidates()) {
+            val target = if (hallDepthAt(host) <= 0 && hallTiles.isNotEmpty()) {
+                val before = _openConnectors.size
+                val placed = tryPlaceAtConnector(host, hallTiles, rng)
+                if (placed != null) {
+                    val candidates = _openConnectors - host
+                    if (candidates.isNotEmpty()) candidates.random(rng) else host
+                } else {
+                    Log.d(
+                        TAG,
+                        "Stairs lead-in hall failed at $host (openConnectors=$before); " +
+                            "placing end_* directly.",
+                    )
+                    host
+                }
+            } else {
+                host
+            }
+            if (target !in _openConnectors) continue
+            if (tryPlaceAtConnector(target, endTiles, rng) != null) {
+                _stairPlacementPending = false
+                _reservedStairConnector = null
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun stairHostCandidates(): List<Cell> {
+        val ranked = _openConnectors
+            .map { it to bfsDistanceFromParty(it) }
+            .sortedByDescending { it.second }
+            .map { it.first }
+        val reserved = _reservedStairConnector
+        if (reserved != null && reserved in _openConnectors) {
+            return listOf(reserved) + ranked.filter { it != reserved }
+        }
+        return ranked
+    }
+
+    private fun bfsDistanceFromParty(to: Cell): Int {
+        val from = partyCell
+        if (from == to) return 0
+        val visited = HashSet<Cell>()
+        val queue = ArrayDeque<Pair<Cell, Int>>()
+        queue.addLast(from to 0)
+        visited += from
+        while (queue.isNotEmpty()) {
+            val (cur, dist) = queue.removeFirst()
+            if (cur == to) return dist
+            for (delta in CARDINAL_NEIGHBORS) {
+                val n = Cell(cur.x + delta.x, cur.y + delta.y)
+                if (n in visited || n !in _floorCells) continue
+                visited += n
+                queue.addLast(n to dist + 1)
+            }
+        }
+        return Int.MAX_VALUE
     }
 
     /** True iff a boss template has already been placed on this floor. */
@@ -1011,9 +1135,9 @@ class Floor(
      * was placed.
      *
      * Strategy: the candidate pool is first filtered by three gates:
-     *  - **Staircase gate** ([staircaseTemplateAllowed]): templates with
-     *    blue pixels are kept out until the player has explored enough
-     *    cells AND no staircase exists yet.
+     *  - **Staircase gate** ([staircaseTemplateAllowed]): `end_*`
+     *    templates are kept out until enough rooms are revealed AND
+     *    no staircase exists yet.
      *  - **Boss gate** ([bossTemplateAllowed]): boss templates are kept
      *    out unless the floor's depth is even AND no boss has spawned yet.
      *  - **Trap-prevention (cap) gate**: a template with fewer than 2
@@ -1131,20 +1255,87 @@ class Floor(
         const val DOOR_LOCK_CHANCE: Float = 0.30f
 
         /**
-         * Number of cells the party must have stepped on before any
-         * staircase-bearing template can spawn on floor 1.
+         * Non-hall rooms required before stairs-down on floor 1, before
+         * the per-floor random tweak and the depth-6+ multiplier.
          */
-        const val STAIRCASE_BASE_THRESHOLD: Int = 15
+        const val STAIRCASE_MIN_REVEALED_ROOMS_BASE: Int = 4
+
+        /** Extra revealed rooms added per depth (floor 2 = base+1, etc.). */
+        const val STAIRCASE_MIN_REVEALED_ROOMS_PER_DEPTH: Int = 1
+
+        /** Depths 1..19: uniform random tweak -1 .. +2 rooms. */
+        const val STAIRCASE_RANDOM_OFFSET_MIN: Int = -1
+        const val STAIRCASE_RANDOM_OFFSET_MAX: Int = 2
 
         /**
-         * Extra cells required per additional depth level. Floor 2 needs
-         * 25, floor 3 needs 35, etc.
+         * Depth 20+: still +1 or +2, or a much larger penalty of 5..10
+         * fewer rooms (50/50 between those branches).
          */
-        const val STAIRCASE_THRESHOLD_PER_DEPTH: Int = 10
+        const val STAIRCASE_WIDE_DEPTH_START: Int = 20
+        const val STAIRCASE_WIDE_NEGATIVE_MIN: Int = 5
+        const val STAIRCASE_WIDE_NEGATIVE_MAX: Int = 10
 
-        /** Minimum visited-cell count before a staircase may spawn on [depth]. */
-        fun staircaseThresholdForDepth(depth: Int): Int =
-            STAIRCASE_BASE_THRESHOLD + STAIRCASE_THRESHOLD_PER_DEPTH * (depth - 1)
+        /** Depths greater than this multiply the requirement by [STAIRCASE_DEPTH_MULT]. */
+        const val STAIRCASE_DEPTH_MULT_START: Int = 5
+
+        const val STAIRCASE_DEPTH_MULT: Double = 1.25
+
+        private const val STAIRCASE_THRESHOLD_SALT: Long = 0x5354414952535F54L // "STAIRS"
+
+        /**
+         * Revealed non-hall rooms needed before stairs-down spawns.
+         * 1. Linear base from depth.
+         * 2. Per-floor random offset from [floorSeed] (see [rollStaircaseOffset]).
+         * 3. If depth > 5, multiply by 1.25 (rounded up).
+         */
+        fun staircaseRoomThresholdForFloor(depth: Int, floorSeed: Long): Int {
+            val core = staircaseCoreRoomsForDepth(depth)
+            val offsetRng = Random(floorSeed xor STAIRCASE_THRESHOLD_SALT)
+            val offset = rollStaircaseOffset(depth, offsetRng)
+            return applyStaircaseDepthMultiplier(core + offset, depth)
+        }
+
+        /** Min/max if the random offset hits its extremes (for UI copy). */
+        fun staircaseRoomThresholdRangeForFloor(depth: Int): IntRange {
+            val core = staircaseCoreRoomsForDepth(depth)
+            val (lowOffset, highOffset) = if (depth >= STAIRCASE_WIDE_DEPTH_START) {
+                -STAIRCASE_WIDE_NEGATIVE_MAX to STAIRCASE_RANDOM_OFFSET_MAX
+            } else {
+                STAIRCASE_RANDOM_OFFSET_MIN to STAIRCASE_RANDOM_OFFSET_MAX
+            }
+            val low = applyStaircaseDepthMultiplier(core + lowOffset, depth)
+            val high = applyStaircaseDepthMultiplier(core + highOffset, depth)
+            return low..high
+        }
+
+        private fun staircaseCoreRoomsForDepth(depth: Int): Int =
+            STAIRCASE_MIN_REVEALED_ROOMS_BASE +
+                STAIRCASE_MIN_REVEALED_ROOMS_PER_DEPTH * (depth - 1).coerceAtLeast(0)
+
+        private fun rollStaircaseOffset(depth: Int, rng: Random): Int {
+            if (depth < STAIRCASE_WIDE_DEPTH_START) {
+                return rng.nextInt(
+                    STAIRCASE_RANDOM_OFFSET_MIN,
+                    STAIRCASE_RANDOM_OFFSET_MAX + 1,
+                )
+            }
+            return if (rng.nextBoolean()) {
+                rng.nextInt(1, STAIRCASE_RANDOM_OFFSET_MAX + 1) // +1 or +2
+            } else {
+                -rng.nextInt(
+                    STAIRCASE_WIDE_NEGATIVE_MIN,
+                    STAIRCASE_WIDE_NEGATIVE_MAX + 1,
+                ) // -5 .. -10
+            }
+        }
+
+        private fun applyStaircaseDepthMultiplier(rooms: Int, depth: Int): Int {
+            var required = rooms.coerceAtLeast(1)
+            if (depth > STAIRCASE_DEPTH_MULT_START) {
+                required = kotlin.math.ceil(required * STAIRCASE_DEPTH_MULT).toInt()
+            }
+            return required.coerceAtLeast(1)
+        }
 
         private const val TAG = "Floor"
 

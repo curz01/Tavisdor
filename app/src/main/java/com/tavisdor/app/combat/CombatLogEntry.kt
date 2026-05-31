@@ -22,6 +22,8 @@ sealed class CombatLogEntry {
         val damage: Int,
         /** Natural d10 of 10 - mark for slightly different phrasing. */
         val crit: Boolean = false,
+        /** When set, names the skill (e.g. Poison Arrow) instead of a plain attack. */
+        val skillName: String? = null,
     ) : CombatLogEntry()
 
     /**
@@ -31,6 +33,7 @@ sealed class CombatLogEntry {
     data class MeleeNoDamage(
         val attacker: String,
         val target: String,
+        val skillName: String? = null,
     ) : CombatLogEntry()
 
     /** Defender dodged the swing (DEX check beat the attacker). */
@@ -39,6 +42,7 @@ sealed class CombatLogEntry {
         val target: String,
         /** e.g. "arrow 2" for Rapid Fire / Double Shot volleys. */
         val shotLabel: String? = null,
+        val skillName: String? = null,
     ) : CombatLogEntry()
 
     /** Spell landed; [advantage]/[disadvantage] surface elemental tags. */
@@ -51,6 +55,19 @@ sealed class CombatLogEntry {
         val disadvantage: Boolean = false,
         /** Natural d10 of 10 on the resist check. */
         val crit: Boolean = false,
+    ) : CombatLogEntry()
+
+    /**
+     * Extra elemental damage from an archer Fire / Ice Arrow after the
+     * physical shot connects. Uses the same matchup tags as [SpellHit].
+     */
+    data class ElementalBonusHit(
+        val attacker: String,
+        val skillName: String,
+        val target: String,
+        val damage: Int,
+        val advantage: Boolean = false,
+        val disadvantage: Boolean = false,
     ) : CombatLogEntry()
 
     /** Spell was resisted (target's INT check beat the caster). */

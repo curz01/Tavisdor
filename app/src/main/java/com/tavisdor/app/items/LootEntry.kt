@@ -24,6 +24,15 @@ sealed class LootEntry {
     abstract fun roll(rng: Random, dungeonDepth: Int): LootDrop?
 
     /**
+     * Resolves this entry, returning zero or more drops. The default
+     * wraps [roll]; multi-drop entries override.
+     */
+    open fun rollDrops(rng: Random, dungeonDepth: Int): List<LootDrop> {
+        val single = roll(rng, dungeonDepth)
+        return if (single != null) listOf(single) else emptyList()
+    }
+
+    /**
      * "Drop a random Level [potency] ingredient with probability
      * [chance]." Resolution per the design choice
      * `category_then_item`:
@@ -56,15 +65,33 @@ sealed class LootEntry {
      *   2. Pick uniformly from [WeaponType.MELEE_TYPES].
      *   3. Tier = [LootTier.forDepth] of the floor the kill
      *      happened on, so deeper floors drop better materials.
+     *   4. [plusLevel] is added to the tier's base attack (0 = normal).
      */
     data class RandomMeleeWeapon(
         override val chance: Float,
+        val plusLevel: Int = 0,
     ) : LootEntry() {
         override fun roll(rng: Random, dungeonDepth: Int): LootDrop? {
             if (rng.nextFloat() >= chance) return null
             val weapon = WeaponType.MELEE_TYPES.random(rng)
             val tier = LootTier.forDepth(dungeonDepth)
-            return LootDrop.MeleeWeaponDrop(weapon, tier)
+            return LootGearFactory.rollMeleeWeaponDrop(weapon, tier, plusLevel, dungeonDepth, rng)
+        }
+    }
+
+    /**
+     * Drops a random [WeaponType.BOW] or [WeaponType.STAFF] at the
+     * floor's material tier, with optional [plusLevel] attack enchant.
+     */
+    data class RandomBowOrStaff(
+        override val chance: Float,
+        val plusLevel: Int = 0,
+    ) : LootEntry() {
+        override fun roll(rng: Random, dungeonDepth: Int): LootDrop? {
+            if (rng.nextFloat() >= chance) return null
+            val weapon = WeaponType.BOW_OR_STAFF_TYPES.random(rng)
+            val tier = LootTier.forDepth(dungeonDepth)
+            return LootGearFactory.rollMeleeWeaponDrop(weapon, tier, plusLevel, dungeonDepth, rng)
         }
     }
 
@@ -93,6 +120,38 @@ sealed class LootEntry {
             val candidates = Ingredient.elementalAtPotency(potency)
             if (candidates.isEmpty()) return null
             return LootDrop.IngredientDrop(candidates.random(rng))
+        }
+    }
+
+    /**
+     * Drops [minCount]..[maxCount] of [ingredient] when the roll succeeds.
+     */
+    data class RandomIngredientStack(
+        override val chance: Float,
+        val ingredient: Ingredient,
+        val minCount: Int = 1,
+        val maxCount: Int = 1,
+    ) : LootEntry() {
+        override fun roll(rng: Random, dungeonDepth: Int): LootDrop? = null
+
+        override fun rollDrops(rng: Random, dungeonDepth: Int): List<LootDrop> {
+            if (rng.nextFloat() >= chance) return emptyList()
+            val lo = minCount.coerceAtLeast(1)
+            val hi = maxCount.coerceAtLeast(lo)
+            val n = rng.nextInt(lo, hi + 1)
+            return List(n) { LootDrop.IngredientDrop(ingredient) }
+        }
+    }
+
+    /** Random armor at the floor tier, with optional +N suffix on the name. */
+    data class RandomArmor(
+        override val chance: Float,
+        val plusLevel: Int = 0,
+    ) : LootEntry() {
+        override fun roll(rng: Random, dungeonDepth: Int): LootDrop? {
+            if (rng.nextFloat() >= chance) return null
+            val tier = LootTier.forDepth(dungeonDepth)
+            return LootGearFactory.rollArmorDrop(tier, plusLevel, dungeonDepth, rng)
         }
     }
 }

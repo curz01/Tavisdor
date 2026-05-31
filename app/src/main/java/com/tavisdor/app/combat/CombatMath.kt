@@ -237,6 +237,21 @@ object CombatMath {
      * one of those four directed edges - including all NEUTRAL
      * combatants and mirror-matchups (Fire vs Fire).
      */
+    /**
+     * Rolls 1d6 and applies the elemental triangle multiplier for archer
+     * Fire / Ice Arrow bonus damage (and similar effects).
+     */
+    fun rollElementalBonus1d6(
+        element: Element,
+        defenderElement: Element,
+        rng: Random = Random.Default,
+    ): Pair<Int, ElementalMatchup> {
+        val roll = rng.nextInt(1, 7)
+        val matchup = elementalMatchup(element, defenderElement)
+        val damage = (roll * matchup.multiplierPct) / 100
+        return damage to matchup
+    }
+
     fun elementalMatchup(attacker: Element, defender: Element): ElementalMatchup {
         if (attacker == Element.NEUTRAL || defender == Element.NEUTRAL) {
             return ElementalMatchup.NEUTRAL

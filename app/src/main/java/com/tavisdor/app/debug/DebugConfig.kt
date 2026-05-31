@@ -28,6 +28,9 @@ object DebugConfig {
      */
     const val GRANT_UTILITY_TEST_INGREDIENTS: Boolean = true
 
+    /** Copies of each elemental shard (Flame / Stone / Wind / Hydro) for arrow testing. */
+    const val TEST_ELEMENTAL_SHARDS_EACH: Int = 6
+
     /** True when [STARTING_HERO_LEVEL] is anything other than 1. */
     val isLevelOverrideActive: Boolean
         get() = STARTING_HERO_LEVEL != 1

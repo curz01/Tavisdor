@@ -14,15 +14,32 @@ sealed class LootDrop {
     data class IngredientDrop(val ingredient: Ingredient) : LootDrop()
 
     /**
-     * A melee weapon of [weapon] type at the dungeon's current
-     * [tier]. The combined display name is
-     * `tier.displayMeleeName(weapon)` (e.g. "Wood Spear").
+     * A weapon of [weapon] type at the dungeon's current [tier]
+     * (melee, [WeaponType.BOW], or [WeaponType.STAFF]).
+     * [plusLevel] adds that much to the tier base attack
+     * (e.g. Wood +1 Spear = 2 attack; Simple Bow +1 = 2 attack).
      */
-    data class MeleeWeaponDrop(val weapon: WeaponType, val tier: LootTier) : LootDrop()
+    data class MeleeWeaponDrop(
+        val weapon: WeaponType,
+        val tier: LootTier,
+        val plusLevel: Int = 0,
+        val suffixes: List<ItemSuffix> = emptyList(),
+    ) : LootDrop() {
+        fun displayName(): String =
+            ItemDisplayNames.composeWeapon(tier, weapon, suffixes, plusLevel)
+    }
 
     /** Dropped by an enemy assigned to guard a specific floor lock. */
     data class FloorKeyDrop(val key: FloorKey) : LootDrop()
 
-    /** Random armor piece from a treasure chest (display name only until armor bags land). */
-    data class ArmorDrop(val armorName: String) : LootDrop()
+    /** Random armor piece — deposited into the Equipment tab stash. */
+    data class ArmorDrop(
+        val type: ArmorType,
+        val slot: ArmorPieceSlot,
+        val plusLevel: Int = 0,
+        val suffixes: List<ItemSuffix> = emptyList(),
+    ) : LootDrop() {
+        val armorName: String
+            get() = ItemDisplayNames.composeArmor(type, slot, suffixes, plusLevel)
+    }
 }

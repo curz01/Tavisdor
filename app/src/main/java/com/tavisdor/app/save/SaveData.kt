@@ -25,6 +25,7 @@ data class SaveData(
     val inventoryWeapons: List<WeaponSaveData> = emptyList(),
     val inventoryIngredients: List<Ingredient> = emptyList(),
     val inventoryPotions: List<Potion> = emptyList(),
+    val inventoryArmor: List<ArmorSaveData> = emptyList(),
 ) {
     companion object {
         /**
@@ -37,10 +38,20 @@ data class SaveData(
          *       and [SaveData.inventoryIngredients]. Older saves default
          *       to 0 gold and an empty inventory.
          *  v5 - adds [SaveData.inventoryPotions].
+         *  v6 - adds inventory armor as plain display names.
+         *  v7 - structured [ArmorSaveData] and weapon [WeaponSaveData.suffixes].
+         *  v8 - [ArmorSaveData] uses [ArmorType] + [ArmorPieceSlot] (not [LootTier]).
          */
-        const val CURRENT_SCHEMA = 5
+        const val CURRENT_SCHEMA = 8
     }
 }
+
+data class ArmorSaveData(
+    val type: com.tavisdor.app.items.ArmorType,
+    val slot: com.tavisdor.app.items.ArmorPieceSlot,
+    val plusLevel: Int = 0,
+    val suffixes: List<com.tavisdor.app.items.ItemSuffix> = emptyList(),
+)
 
 data class HeroSaveData(
     val name: String,
@@ -56,9 +67,9 @@ data class HeroSaveData(
 /**
  * Serializable record of one inventory weapon. The runtime
  * [com.tavisdor.app.items.Weapon] is reconstructed from
- * (type, tier, attackBonus, range) - the display name is recomposed
- * from the tier so a future rename of [LootTier.meleePrefix] doesn't
- * pin saved weapons to the old wording.
+ * (type, tier, attackBonus, range, plusLevel) - the display name is
+ * recomposed from the tier so a future rename of [LootTier.meleePrefix]
+ * doesn't pin saved weapons to the old wording.
  *
  * [tier] is nullable to preserve the "crude starter" sentinel even
  * though crude weapons live on heroes today, not the bag - keeps
@@ -69,4 +80,6 @@ data class WeaponSaveData(
     val tier: LootTier?,
     val attackBonus: Int,
     val range: Int,
+    val plusLevel: Int = 0,
+    val suffixes: List<com.tavisdor.app.items.ItemSuffix> = emptyList(),
 )

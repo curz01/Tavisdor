@@ -29,7 +29,7 @@ data class LootTable(
         if (entries.isEmpty()) return emptyList()
         val out = ArrayList<LootDrop>(entries.size)
         for (entry in entries) {
-            entry.roll(rng, dungeonDepth)?.let { out += it }
+            out += entry.rollDrops(rng, dungeonDepth)
         }
         return out
     }

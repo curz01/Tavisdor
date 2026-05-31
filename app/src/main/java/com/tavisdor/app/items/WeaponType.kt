@@ -24,8 +24,8 @@ import com.tavisdor.app.party.HeroClass
  *                    Orb mounted on it is what enables ranged
  *                    spell casts (see [hasOrbSlot]).
  *
- * Class restrictions come straight from the design chart - keep
- * them in sync when the chart changes.
+ * Class restrictions and per-class specials live in [WeaponClassRules];
+ * keep [usableBy] in sync with the design chart when it changes.
  */
 enum class WeaponType(
     val displayName: String,
@@ -40,6 +40,8 @@ enum class WeaponType(
     MACE(   "Mace",   setOf(HeroClass.FIGHTER), Reach.MELEE),
     BOW(    "Bow",    setOf(HeroClass.ARCHER, HeroClass.THIEF), Reach.RANGED),
     STAFF(  "Staff",  setOf(HeroClass.MAGE, HeroClass.FIGHTER), Reach.MELEE),
+    /** Enemy-only bite; uses [BatStrikeFxPlayer] instead of weapon arc art. */
+    BITE(   "Bite",   emptySet(), Reach.MELEE),
     ;
 
     /** Whether [cls] is permitted to equip this weapon type. */
@@ -63,5 +65,8 @@ enum class WeaponType(
 
         /** Every ranged-reach weapon type. */
         val RANGED_TYPES: List<WeaponType> = entries.filter { it.reach == Reach.RANGED }
+
+        /** Bow or staff — used by archer enemy loot tables. */
+        val BOW_OR_STAFF_TYPES: List<WeaponType> = listOf(BOW, STAFF)
     }
 }

@@ -49,6 +49,7 @@ class HeroPanelView @JvmOverloads constructor(
         g.onSelectedEnemyChanged = { invalidate() }
         g.onSkillStagingChanged = { invalidate() }
         g.onPartyHideChanged = { invalidate() }
+        g.onEvasiveManeuverChanged = { invalidate() }
         invalidate()
     }
 

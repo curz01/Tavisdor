@@ -98,15 +98,15 @@
          title for the standalone Skills & Spells viewer. -->
     <string name="hero_detail_skills_button">Skills &amp; Spells</string>
     <string name="hero_detail_skills_dialog_title">%1$s - Skills &amp; Spells</string>
-    <string name="hero_detail_skills_section_action">Actions</string>
-    <string name="hero_detail_skills_section_guard">Guard</string>
+    <string name="hero_detail_skills_section_action">Active</string>
+    <string name="hero_detail_skills_section_guard">Reactive</string>
     <string name="hero_detail_skills_none">(no skills unlocked)</string>
     <string name="hero_skill_row_format">%1$s\u00A0\u00A0Range: %2$d</string>
     <string name="hero_skill_row_mp_suffix">\u00A0\u00A0%1$d MP</string>
     <string name="hero_skill_passive_tag">passive</string>
     <string name="hero_skill_range_suffix">\u00A0\u00A0Range: %1$d</string>
-    <string name="hero_skill_popup_title_action">%1$s - Actions</string>
-    <string name="hero_skill_popup_title_guard">%1$s - Guard</string>
+    <string name="hero_skill_popup_title_action">%1$s - Active</string>
+    <string name="hero_skill_popup_title_guard">%1$s - Reactive</string>
     <string name="hero_skill_popup_empty">No skills here yet.</string>
     <string name="hero_skill_popup_close">Close</string>
 
@@ -121,8 +121,8 @@
 
     <!-- Hero skill assignment panel (tap hero cell on bottom panel). -->
     <string name="hero_skill_assign_mana_format">Mana: %1$d/%2$d</string>
-    <string name="hero_skill_assign_offensive">OFFENSIVE</string>
-    <string name="hero_skill_assign_defensive">DEFENSIVE</string>
+    <string name="hero_skill_assign_offensive">ACTIVE</string>
+    <string name="hero_skill_assign_defensive">REACTIVE</string>
     <string name="hero_skill_assign_passive">PASSIVE</string>
     <string name="hero_skill_assign_section_empty">(none)</string>
     <string name="hero_skill_assign_confirm_title">%1$s</string>
@@ -145,6 +145,7 @@
     <string name="hero_skill_assign_need_main_action">Select a main action skill as well (green).</string>
     <string name="hero_skill_assign_insufficient_mp">Not enough mana to use both staged skills.</string>
     <string name="combat_target_pick_enemy">Tap a highlighted enemy to attack or cast.</string>
+    <string name="hidden_attack_no_target">No enemy in range while hidden.</string>
 
     <!-- Heal target picker (Action button in combat with a Heal skill
          staged). %1$s is the skill display name (e.g. "Heal II"). -->
@@ -227,9 +228,12 @@
     <string name="inventory_summary_int">INT: %1$d</string>
     <string name="inventory_summary_exp">EXP %1$d/%2$d</string>
     <string name="inventory_hero_equip_close">X</string>
+    <string name="inventory_hero_equip_prev">Previous hero</string>
+    <string name="inventory_hero_equip_next">Next hero</string>
     <string name="inventory_equip_pick_weapon">Tap a weapon in the Equipment tab above.</string>
+    <string name="inventory_equip_pick_armor">Tap armor in the Equipment tab above.</string>
     <string name="inventory_toast_equipped">Equipped %1$s.</string>
     <string name="inventory_toast_unequipped">Unequipped %1$s.</string>
     <string name="inventory_toast_cannot_equip">%1$s cannot use that weapon.</string>
-    <string name="inventory_toast_armor_not_in_gear">Armor is not in the Equipment stash yet.</string>
+    <string name="inventory_toast_armor_slot_not_stash">That slot is not in the Equipment stash yet.</string>
 </resources>

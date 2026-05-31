@@ -176,9 +176,11 @@ class MainActivity : AppCompatActivity() {
             it.onSelectionChanged = {
                 heroPanel.invalidate()
                 gameView.invalidate()
+                heroSkillAssignScreen.updateWaitButton()
             }
             it.onWaitTapped = { onCombatWaitTapped() }
         }
+        game.onCombatHeroInputChanged = { refreshCombatWaitButtons() }
         game.onCombatTargetSelectionChanged = {
             gameView.invalidate()
             if (game.isCombatTargetSelectionActive()) {
@@ -340,12 +342,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (stagedMain == null && freeAction == null &&
-            !controller.anyEnemyReachable(main)
+            !controller.anyEnemyReachable(caster, main)
         ) {
-            if (!controller.commitHeroDefend(slot, auto = true)) return
-            game.clearHeroWaiting(slot)
-            game.clearSkillStaging(slot)
-            refreshCombatViews()
+            if (!game.isPartyHidden) {
+                if (!controller.commitHeroDefend(slot, auto = true)) return
+                game.clearHeroWaiting(slot)
+                game.clearSkillStaging(slot)
+                refreshCombatViews()
+            }
             return
         }
 
@@ -360,6 +364,7 @@ class MainActivity : AppCompatActivity() {
                         floor.partyCell,
                         main,
                         selected.cell,
+                        caster,
                     )
                 ) {
                     commitStagedCombatAction(slot, selected)
@@ -449,16 +454,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun onCombatWaitTapped() {
         val controller = game.combatController ?: return
-        if (!controller.awaitingHeroInput) return
-        val slot = controller.currentHeroSlot ?: return
-        if (!controller.canHeroWait(slot)) {
+        val slot = heroSkillAssignScreen.displayedSlot
+        if (slot < 0) return
+        val hero = game.party?.heroes?.getOrNull(slot) ?: return
+        val main = game.selectedSkillFor(slot) ?: hero.basicAttackSkill
+        if (!controller.canHeroWait(slot, main)) {
             AppToast.show(this, R.string.combat_wait_unavailable)
             return
         }
-        if (!controller.commitHeroWait(slot)) return
+        val endsActingTurn = controller.currentHeroSlot == slot
+        if (!controller.commitHeroWait(slot, main)) {
+            AppToast.show(this, R.string.combat_wait_unavailable)
+            return
+        }
         game.setHeroWaiting(slot)
         game.endCombatTargetSelection()
-        heroSkillAssignScreen.hide()
+        if (endsActingTurn) {
+            heroSkillAssignScreen.hide()
+        }
         refreshCombatViews()
     }
 
@@ -533,10 +546,16 @@ class MainActivity : AppCompatActivity() {
 
         val party = game.party ?: return
         val caster = party.heroes.getOrNull(slot) ?: return
+        val floor = game.floor ?: return
+
+        if (game.isPartyHidden) {
+            onActionBarHiddenExplorationAttack(slot, caster, floor)
+            return
+        }
+
         val freeAction = game.selectedFreeActionSkillFor(slot)
         val stagedMain = game.stagedMainSkillOrNull(slot)
         val main = game.selectedSkillFor(slot) ?: caster.basicAttackSkill
-        val floor = game.floor ?: return
 
         if (UtilitySkillResolver.isUtility(main)) {
             if (game.isUtilityCastPlaying) {
@@ -573,6 +592,7 @@ class MainActivity : AppCompatActivity() {
                         floor.partyCell,
                         main,
                         selected.cell,
+                        caster,
                     )
                 ) {
                     if (game.commitExplorationAttack(slot, selected)) {
@@ -581,7 +601,7 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
             }
-            if (!CombatTargeting.anyLivingEnemyReachable(floor, floor.partyCell, main)) {
+            if (!CombatTargeting.anyLivingEnemyReachable(floor, floor.partyCell, main, caster)) {
                 return
             }
             game.beginCombatTargetSelection(slot, main)
@@ -596,11 +616,66 @@ class MainActivity : AppCompatActivity() {
                     floor.partyCell,
                     main,
                     selected.cell,
+                    caster,
                 )
             ) {
                 if (game.commitExplorationAttack(slot, selected)) {
                     refreshCombatViews()
                 }
+            }
+        }
+    }
+
+    /**
+     * While the party is hidden, Action commits only the active hero's
+     * basic attack (weapon range + LOS). Shows the same target overlay
+     * as combat; Hide stays active through the ambush.
+     */
+    private fun onActionBarHiddenExplorationAttack(
+        slot: Int,
+        caster: com.tavisdor.app.party.Hero,
+        floor: com.tavisdor.app.dungeon.Floor,
+    ) {
+        val main = caster.basicAttackSkill
+        if (CombatTargeting.requiresEnemyTargetSelection(main)) {
+            val selection = game.combatTargetSelection
+            if (selection != null && selection.heroSlot == slot && selection.skill.id == main.id) {
+                val selected = game.selectedEnemy
+                if (selected != null &&
+                    CombatTargeting.isTargetableEnemyCell(
+                        floor,
+                        floor.partyCell,
+                        main,
+                        selected.cell,
+                        caster,
+                    )
+                ) {
+                    if (game.commitExplorationAttack(slot, selected)) {
+                        refreshCombatViews()
+                    }
+                }
+                return
+            }
+            if (!CombatTargeting.anyLivingEnemyReachable(floor, floor.partyCell, main, caster)) {
+                AppToast.show(this, R.string.hidden_attack_no_target)
+                return
+            }
+            game.beginCombatTargetSelection(slot, main)
+            return
+        }
+
+        val selected = game.selectedEnemy
+        if (selected != null &&
+            CombatTargeting.isTargetableEnemyCell(
+                floor,
+                floor.partyCell,
+                main,
+                selected.cell,
+                caster,
+            )
+        ) {
+            if (game.commitExplorationAttack(slot, selected)) {
+                refreshCombatViews()
             }
         }
     }

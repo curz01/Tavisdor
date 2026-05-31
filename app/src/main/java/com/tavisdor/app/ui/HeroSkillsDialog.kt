@@ -21,8 +21,8 @@ import com.tavisdor.app.skills.SkillButton
  * Opened from the "Skills & Spells" button on the hero detail panel.
  * Lists all known skills (everything with unlockLevel <= hero level)
  * grouped into two sections in deterministic order:
- *   - Actions  (SkillButton.ACTION) - damage skills and spells
- *   - Guard    (SkillButton.GUARD)  - prepared / passive / defensive
+ *   - Active   (SkillButton.ACTION) - damage skills and spells
+ *   - Reactive (SkillButton.GUARD)  - prepared / passive / setup skills
  *
  * The standalone Spells section was retired when spells were folded
  * into Actions; the SPL bucket is gone from [SkillButton] entirely.

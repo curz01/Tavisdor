@@ -3,6 +3,8 @@ package com.tavisdor.app.combat
 import com.tavisdor.app.dungeon.Cell
 import com.tavisdor.app.dungeon.Floor
 import com.tavisdor.app.enemies.Enemy
+import com.tavisdor.app.items.WeaponClassRules
+import com.tavisdor.app.party.Hero
 import com.tavisdor.app.skills.Skill
 import com.tavisdor.app.skills.SkillCastType
 import com.tavisdor.app.skills.SkillCatalog
@@ -41,12 +43,13 @@ object CombatTargeting {
      * True when [skill] needs a living enemy in range before it can
      * fire (exploration ambush or combat commit).
      */
-    fun anyLivingEnemyReachable(floor: Floor, origin: Cell, skill: Skill): Boolean {
-        if (skill.range <= 0) return false
+    fun anyLivingEnemyReachable(floor: Floor, origin: Cell, skill: Skill, hero: Hero? = null): Boolean {
+        val range = effectiveRange(hero, skill)
+        if (range <= 0) return false
         return floor.enemies.any { enemy ->
             enemy.isAlive &&
                 floor.isVisibleToParty(enemy.cell) &&
-                isTargetableEnemyCell(floor, origin, skill, enemy.cell)
+                isTargetableEnemyCell(floor, origin, skill, enemy.cell, hero)
         }
     }
 
@@ -57,7 +60,8 @@ object CombatTargeting {
     fun needsEnemyTargetForCommit(skill: Skill): Boolean =
         requiresEnemyTargetSelection(skill) ||
             skill.id == SkillCatalog.FIGHTER_CHARGE_ID ||
-            skill.id == SkillCatalog.FIGHTER_TAUNT_ID
+            skill.id == SkillCatalog.FIGHTER_TAUNT_ID ||
+            skill.id == SkillCatalog.ARCHER_MARK_TARGET_ID
 
     fun requiresEnemyTargetSelection(skill: Skill): Boolean {
         if (HealResolver.isHeal(skill)) return false
@@ -72,9 +76,12 @@ object CombatTargeting {
             SkillCatalog.FIGHTER_TAUNT_ID,
             SkillCatalog.THIEF_DOUBLE_STRIKE_ID,
             SkillCatalog.THIEF_STEAL_ID,
+            SkillCatalog.FIGHTER_DISARM_ID,
+            SkillCatalog.FIGHTER_COUNTER_ATTACK_ID,
             -> return false
         }
         if (skill.id == SkillCatalog.THIEF_WEAK_POINT_ID) return true
+        if (skill.id == SkillCatalog.ARCHER_MARK_TARGET_ID) return true
         if (skill.castType == SkillCastType.PREPARE &&
             skill.damage == null &&
             !skill.isSpell
@@ -86,12 +93,20 @@ object CombatTargeting {
 
     fun effectiveRange(skill: Skill): Int = skill.range
 
-    fun canTargetCell(floor: Floor, origin: Cell, skill: Skill, cell: Cell): Boolean {
+    fun effectiveRange(hero: Hero?, skill: Skill): Int =
+        if (hero != null) WeaponClassRules.effectiveSkillRange(hero, skill) else skill.range
+
+    fun canTargetCell(
+        floor: Floor,
+        origin: Cell,
+        skill: Skill,
+        cell: Cell,
+        hero: Hero? = null,
+    ): Boolean {
+        val range = effectiveRange(hero, skill)
         if (cell !in floor.floorCells) return false
-        if (!LineOfSight.isInRange(origin, cell, effectiveRange(skill))) return false
-        if (effectiveRange(skill) > 1 &&
-            !LineOfSight.hasLineOfSight(floor, origin, cell)
-        ) {
+        if (!LineOfSight.isInRange(origin, cell, range)) return false
+        if (range > 1 && !LineOfSight.hasLineOfSight(floor, origin, cell)) {
             return false
         }
         return true
@@ -104,23 +119,29 @@ object CombatTargeting {
         return enemy
     }
 
-    fun isTargetableEnemyCell(floor: Floor, origin: Cell, skill: Skill, cell: Cell): Boolean {
+    fun isTargetableEnemyCell(
+        floor: Floor,
+        origin: Cell,
+        skill: Skill,
+        cell: Cell,
+        hero: Hero? = null,
+    ): Boolean {
         if (livingEnemyAt(floor, cell) == null) return false
-        return canTargetCell(floor, origin, skill, cell)
+        return canTargetCell(floor, origin, skill, cell, hero)
     }
 
     /**
      * Builds per-cell highlights for every walkable cell the party can
      * currently see ([Floor.isVisibleToParty]).
      */
-    fun buildOverlayMap(floor: Floor, origin: Cell, skill: Skill): OverlayMap {
+    fun buildOverlayMap(floor: Floor, origin: Cell, skill: Skill, hero: Hero? = null): OverlayMap {
         val highlights = HashMap<Cell, TileHighlight>()
         for (cell in floor.floorCells) {
             if (!floor.isVisibleToParty(cell)) continue
             highlights[cell] = when {
-                isTargetableEnemyCell(floor, origin, skill, cell) ->
+                isTargetableEnemyCell(floor, origin, skill, cell, hero) ->
                     TileHighlight.TARGETABLE_ENEMY
-                canTargetCell(floor, origin, skill, cell) ->
+                canTargetCell(floor, origin, skill, cell, hero) ->
                     TileHighlight.IN_RANGE
                 else ->
                     TileHighlight.DIMMED

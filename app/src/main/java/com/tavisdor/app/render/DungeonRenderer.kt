@@ -429,10 +429,8 @@ class DungeonRenderer(private val assets: AssetManager) {
         }
 
         // ----- Highlight the staircase cell(s) -----
-        // floor.staircases is the only source of truth now; per design,
-        // it is empty until the player has explored
-        // Floor.staircaseThresholdForDepth(depth) cells AND keeps tapping
-        // open connectors until a staircase-bearing template is placed.
+        // floor.staircases stays empty until enough non-hall rooms are
+        // revealed, then Floor.tryPlacePendingStairsDown attaches end_*.
         for (c in floor.staircases) {
             if (c.x < minCx || c.x > maxCx || c.y < minCy || c.y > maxCy) continue
             if (!floor.isVisibleToParty(c)) continue
@@ -476,6 +474,7 @@ class DungeonRenderer(private val assets: AssetManager) {
                 defenderFx.drawBehindEnemy(canvas, enemy, cx, cy, cellPx, viewCx, viewCy)
             }
             val shake = defenderFx.shakeOffsetPx(enemy, cellPx)
+            val batOffset = game.batStrikeEnemyScreenOffsetPx(enemy, cellPx)
             val spriteRect = drawEnemy(
                 canvas = canvas,
                 game = game,
@@ -485,8 +484,8 @@ class DungeonRenderer(private val assets: AssetManager) {
                 cellPx = cellPx,
                 viewCx = viewCx,
                 viewCy = viewCy,
-                screenOffsetX = shake.first,
-                screenOffsetY = shake.second,
+                screenOffsetX = shake.first + batOffset.first,
+                screenOffsetY = shake.second + batOffset.second,
             )
             drawEnemyHealthBar(canvas, spriteRect, enemy.hp, enemy.maxHp)
             if (defenderFx.targets(enemy)) {
@@ -562,10 +561,12 @@ class DungeonRenderer(private val assets: AssetManager) {
         maxCy: Int,
     ) {
         val selection = game.combatTargetSelection ?: return
+        val caster = game.party?.heroes?.getOrNull(selection.heroSlot)
         val overlay = CombatTargeting.buildOverlayMap(
             floor = floor,
             origin = floor.partyCell,
             skill = selection.skill,
+            hero = caster,
         )
         val inset = cellPx * 0.06f
         for (cell in floor.floorCells) {
@@ -601,8 +602,11 @@ class DungeonRenderer(private val assets: AssetManager) {
         viewCx: Float,
         viewCy: Float,
     ) {
-        val visualScreenX = (visualCellX - camCx) * cellPx + viewCx
-        val visualScreenY = (visualCellY - camCy) * cellPx + viewCy
+        var visualScreenX = (visualCellX - camCx) * cellPx + viewCx
+        var visualScreenY = (visualCellY - camCy) * cellPx + viewCy
+        val partyShake = game.batStrikePartyShakeOffsetPx(cellPx)
+        visualScreenX += partyShake.first
+        visualScreenY += partyShake.second
 
         val baseOffsetPx = cellPx * PARTY_ICON_BASE_OFFSET_FRACTION
         val restingBaseY = visualScreenY + cellPx - baseOffsetPx
@@ -846,9 +850,9 @@ class DungeonRenderer(private val assets: AssetManager) {
         val (vx, vy) = enemyVisualPosition(game, enemy)
         val cellTopLeftX = (vx - camCx) * cellPx + viewCx + screenOffsetX
         val cellTopLeftY = (vy - camCy) * cellPx + viewCy + screenOffsetY
-        val spriteRect = computeEnemySpriteRect(enemy, cellTopLeftX, cellTopLeftY, cellPx)
+        val spriteRect = computeEnemySpriteRect(game, enemy, cellTopLeftX, cellTopLeftY, cellPx)
 
-        val sprite = currentWalkSprite(enemy)
+        val sprite = currentWalkSprite(game, enemy)
         if (sprite != null) {
             tmpEnemySrc.set(0, 0, sprite.width, sprite.height)
             canvas.drawBitmap(sprite, tmpEnemySrc, spriteRect, drawBitmapPaint)
@@ -889,6 +893,7 @@ class DungeonRenderer(private val assets: AssetManager) {
      * Feet anchor to the bottom-center of the occupied footprint.
      */
     private fun computeEnemySpriteRect(
+        game: Game,
         enemy: Enemy,
         cellTopLeftX: Float,
         cellTopLeftY: Float,
@@ -897,8 +902,9 @@ class DungeonRenderer(private val assets: AssetManager) {
         val maxDim = cellPx * enemy.template.spriteDisplayScale
         val footprintCx = cellTopLeftX + cellPx / 2f
         val footprintBottom = cellTopLeftY + cellPx
+        val anchorBottom = footprintBottom - cellPx * enemy.template.spriteLiftFraction
 
-        val sprite = currentWalkSprite(enemy) ?: enemyPlaceholder
+        val sprite = currentWalkSprite(game, enemy) ?: enemyPlaceholder
         if (sprite != null && sprite.width > 0 && sprite.height > 0) {
             val bmpW = sprite.width.toFloat()
             val bmpH = sprite.height.toFloat()
@@ -906,16 +912,16 @@ class DungeonRenderer(private val assets: AssetManager) {
             val drawW = bmpW * scale
             val drawH = bmpH * scale
             val left = footprintCx - drawW / 2f
-            val top = footprintBottom - drawH
-            return RectF(left, top, left + drawW, footprintBottom)
+            val top = anchorBottom - drawH
+            return RectF(left, top, left + drawW, anchorBottom)
         }
 
         val half = maxDim / 2f
         return RectF(
             footprintCx - half,
-            footprintBottom - maxDim,
+            anchorBottom - maxDim,
             footprintCx + half,
-            footprintBottom,
+            anchorBottom,
         )
     }
 
@@ -956,8 +962,14 @@ class DungeonRenderer(private val assets: AssetManager) {
      * cell-based phase staggers adjacent enemies so a room full of
      * goblins doesn't bob in unison.
      */
-    private fun currentWalkSprite(enemy: Enemy): Bitmap? {
-        val frames = enemy.template.walkSpriteAssets
+    private fun currentWalkSprite(game: Game, enemy: Enemy): Bitmap? {
+        game.batStrikeSpriteAssetOverride(enemy)?.let { return loadEnemySprite(it) }
+        val frames = when {
+            game.mode == Game.Mode.EXPLORATION &&
+                enemy.template.restWalkSpriteAssets.isNotEmpty() ->
+                enemy.template.restWalkSpriteAssets
+            else -> enemy.template.walkSpriteAssets
+        }
         if (frames.isEmpty()) return null
         if (frames.size == 1) return loadEnemySprite(frames[0])
         val frameMs = enemy.template.walkFrameDurationMs.toLong().coerceAtLeast(1L)
@@ -1015,10 +1027,12 @@ class DungeonRenderer(private val assets: AssetManager) {
         val selection = game.combatTargetSelection ?: return
         if (currentCombatTargetMarkerFrame() == null) return
 
+        val caster = game.party?.heroes?.getOrNull(selection.heroSlot)
         val overlay = CombatTargeting.buildOverlayMap(
             floor = floor,
             origin = floor.partyCell,
             skill = selection.skill,
+            hero = caster,
         )
 
         for (cell in floor.floorCells) {
@@ -1051,7 +1065,7 @@ class DungeonRenderer(private val assets: AssetManager) {
         val (vx, vy) = enemyVisualPosition(game, enemy)
         val cellTopLeftX = (vx - camCx) * cellPx + viewCx
         val cellTopLeftY = (vy - camCy) * cellPx + viewCy
-        val spriteRect = computeEnemySpriteRect(enemy, cellTopLeftX, cellTopLeftY, cellPx)
+        val spriteRect = computeEnemySpriteRect(game, enemy, cellTopLeftX, cellTopLeftY, cellPx)
 
         val size = cellPx * COMBAT_TARGET_MARKER_CELL_FRACTION
         val centerX = (spriteRect.left + spriteRect.right) / 2f
@@ -1112,8 +1126,11 @@ class DungeonRenderer(private val assets: AssetManager) {
         val origin = fromCell ?: cell
         val visualCellX = origin.x + (cell.x - origin.x) * hopRaw
         val visualCellY = origin.y + (cell.y - origin.y) * hopRaw
-        val visualScreenX = (visualCellX - camCx) * cellPx + viewCx
-        val visualScreenY = (visualCellY - camCy) * cellPx + viewCy
+        var visualScreenX = (visualCellX - camCx) * cellPx + viewCx
+        var visualScreenY = (visualCellY - camCy) * cellPx + viewCy
+        val partyShake = game.batStrikePartyShakeOffsetPx(cellPx)
+        visualScreenX += partyShake.first
+        visualScreenY += partyShake.second
 
         // Resting baseline Y (where the icon's base sits when
         // not airborne). Cached up-front so the shadow and the

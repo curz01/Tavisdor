@@ -13,8 +13,11 @@ package com.tavisdor.app.combat
  * shift animates surviving portraits over to close the gap.
  *
  * A hero who **waits** is removed from their current queue slot,
- * survivors shift left, then the hero slides in from the left to
- * the last slot ([waitReinsert]).
+ * survivors shift left, then the hero joins the **deferred tail**
+ * at the end of [roundQueue]. Heroes in that tail stay sorted by
+ * encounter initiative (higher DEX still acts before lower DEX
+ * among everyone who waited). [waitReinsert] animates them into
+ * their slot on the strip.
  */
 class CombatRound(
     val initiative: List<InitiativeEntry>,
@@ -41,6 +44,13 @@ class CombatRound(
     )
 
     private val _roundQueue: MutableList<Int> = initiative.indices.toMutableList()
+
+    /**
+     * Initiative indices of heroes who declared Wait this round.
+     * Rebuilt at the tail of [_roundQueue] in ascending initiative
+     * order (same DEX ordering as the encounter list).
+     */
+    private val _deferredInitIndices: MutableSet<Int> = mutableSetOf()
 
     /** Initiative indices still pending this round, in turn order. */
     val roundQueue: List<Int> get() = _roundQueue
@@ -120,6 +130,10 @@ class CombatRound(
     fun queueIndexOf(initiativeIndex: Int): Int =
         _roundQueue.indexOf(initiativeIndex)
 
+    /** True while this hero has declared Wait and not yet taken their deferred turn. */
+    fun isDeferredInitiativeIndex(initiativeIndex: Int): Boolean =
+        initiativeIndex in _deferredInitIndices
+
     fun lockHeroActionsThisRound() {
         heroActionsLockedThisRound = true
     }
@@ -129,6 +143,7 @@ class CombatRound(
             "completeCurrentAction called with no actor (queuePos=$queuePos)."
         }
         val initIdx = _roundQueue[queuePos]
+        _deferredInitIndices.remove(initIdx)
         _leavers.add(
             Leaver(
                 entry = initiative[initIdx],
@@ -148,7 +163,7 @@ class CombatRound(
         val initIdx = _roundQueue[queuePos]
         val entry = initiative[initIdx]
         if (entry.kind != InitiativeEntry.Kind.HERO) return false
-        if (countPendingHeroTurnsAfterQueuePos() <= 0) return false
+        if (countPendingTurnsAfterQueuePos() <= 0) return false
 
         shiftFromSlots = buildDisplayedSlotMap()
         _leavers.add(
@@ -158,8 +173,7 @@ class CombatRound(
                 kind = Leaver.Kind.TURN_ENDED,
             ),
         )
-        _roundQueue.removeAt(queuePos)
-        _roundQueue.add(initIdx)
+        deferHeroToInitiativeOrderedTail(initIdx, queuePos)
         waitReinsert = WaitReinsert(
             entry = entry,
             progress = 0f,
@@ -168,6 +182,57 @@ class CombatRound(
         shiftProgress = 0f
         return true
     }
+
+    /**
+     * Moves a hero who has not acted yet this round (queue index
+     * strictly after [queuePos]) into the deferred tail without
+     * ending the current actor's turn. Used when the player declares
+     * Wait from another hero's skill panel.
+     */
+    fun deferUpcomingHeroAt(queueIndex: Int): Boolean {
+        if (queueIndex !in _roundQueue.indices || queueIndex <= queuePos) return false
+        val initIdx = _roundQueue[queueIndex]
+        val entry = initiative[initIdx]
+        if (entry.kind != InitiativeEntry.Kind.HERO) return false
+
+        // Re-base shifts so multiple heroes can defer during one acting turn.
+        shiftFromSlots = buildDisplayedSlotMap()
+        deferHeroToInitiativeOrderedTail(initIdx, queueIndex)
+        // Slide within the pending strip to the tail — not the
+        // turn-ended leaver / off-screen reinsert used when the
+        // acting hero waits on their own turn.
+        shiftProgress = 0f
+        return true
+    }
+
+    /**
+     * Pull [initIdx] out of the queue, mark it deferred, and rebuild
+     * so every deferred hero sits at the end in initiative order.
+     */
+    private fun deferHeroToInitiativeOrderedTail(initIdx: Int, removeAt: Int) {
+        _roundQueue.removeAt(removeAt)
+        if (removeAt < queuePos) queuePos--
+        _deferredInitIndices.add(initIdx)
+        rebuildQueueWithDeferredTail()
+    }
+
+    private fun rebuildQueueWithDeferredTail() {
+        val head = _roundQueue.filter { it !in _deferredInitIndices }
+        val tail = sortedDeferredInitIndices()
+        _roundQueue.clear()
+        _roundQueue.addAll(head)
+        _roundQueue.addAll(tail)
+    }
+
+    /**
+     * Deferred heroes form the tail block: higher DEX first within that
+     * block, lowest DEX at the absolute end of the round queue.
+     */
+    private fun sortedDeferredInitIndices(): List<Int> =
+        _deferredInitIndices.sortedWith(
+            compareByDescending<Int> { initiative[it].dexterity }
+                .thenBy { it },
+        )
 
     fun markDefeated(entry: InitiativeEntry) {
         if (entry in _removedEntries) return
@@ -242,12 +307,11 @@ class CombatRound(
         return shiftProgress >= 1f
     }
 
-    private fun countPendingHeroTurnsAfterQueuePos(): Int {
+    private fun countPendingTurnsAfterQueuePos(): Int {
         if (queuePos !in _roundQueue.indices) return 0
         var n = 0
         for (i in (queuePos + 1) until _roundQueue.size) {
             val entry = initiative[_roundQueue[i]]
-            if (entry.kind != InitiativeEntry.Kind.HERO) continue
             if (entry in _removedEntries) continue
             n++
         }
@@ -269,10 +333,23 @@ class CombatRound(
     private fun startNextRound() {
         _roundQueue.clear()
         _roundQueue.addAll(initiative.indices)
+        _deferredInitIndices.clear()
         queuePos = 0
         roundNumber += 1
         heroActionsLockedThisRound = false
         waitReinsert = null
+        shiftProgress = 1f
+        shiftFromSlots = emptyMap()
+    }
+
+    /**
+     * Called when [queuePos] has walked off the end of [roundQueue]
+     * but the encounter continues. Re-seeds the queue for a new
+     * round when no strip animation is in flight.
+     */
+    fun startNextRoundIfComplete() {
+        if (!isRoundComplete || isAnimating) return
+        startNextRound()
     }
 
     companion object {

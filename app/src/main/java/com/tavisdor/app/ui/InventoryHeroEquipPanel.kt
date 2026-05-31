@@ -15,6 +15,8 @@ import com.tavisdor.app.party.HeroClass
 class InventoryHeroEquipPanel(
     private val root: View,
     var onClose: (() -> Unit)? = null,
+    var onPrevHero: (() -> Unit)? = null,
+    var onNextHero: (() -> Unit)? = null,
 ) {
     enum class EquipSlot {
         HELMET,
@@ -30,6 +32,8 @@ class InventoryHeroEquipPanel(
 
     private val tvHeader: TextView = root.findViewById(R.id.tvInventoryHeroEquipHeader)
     private val btnClose: MaterialButton = root.findViewById(R.id.btnInventoryHeroEquipClose)
+    private val btnPrev: MaterialButton = root.findViewById(R.id.btnInventoryHeroEquipPrev)
+    private val btnNext: MaterialButton = root.findViewById(R.id.btnInventoryHeroEquipNext)
 
     private val slotHelmet: TextView = root.findViewById(R.id.inventoryEquipSlotHelmet)
     private val slotArmor: TextView = root.findViewById(R.id.inventoryEquipSlotArmor)
@@ -40,6 +44,8 @@ class InventoryHeroEquipPanel(
     init {
         root.setOnClickListener { /* consume so taps don't dismiss the overlay */ }
         btnClose.setOnClickListener { onClose?.invoke() }
+        btnPrev.setOnClickListener { onPrevHero?.invoke() }
+        btnNext.setOnClickListener { onNextHero?.invoke() }
 
         slotHelmet.setOnClickListener { onSlotClick?.invoke(EquipSlot.HELMET) }
         slotArmor.setOnClickListener { onSlotClick?.invoke(EquipSlot.ARMOR) }
@@ -60,7 +66,7 @@ class InventoryHeroEquipPanel(
             ctx.getString(classNameRes(hero.heroClass)),
         )
         bindSlot(slotHelmet, R.string.hero_detail_slot_helmet, hero.helmet)
-        bindSlot(slotArmor, R.string.hero_detail_slot_armor, hero.armor)
+        bindSlot(slotArmor, R.string.hero_detail_slot_armor, hero.armor?.displayName)
         bindSlot(slotWeapon1, R.string.hero_detail_slot_weapon1, hero.weapon1?.displayName)
         bindSlot(slotWeapon2, R.string.hero_detail_slot_weapon2, hero.weapon2?.displayName)
         bindSlot(slotBoots, R.string.hero_detail_slot_boots, hero.boots)

@@ -53,9 +53,9 @@ data class RoomTemplate(
     /**
      * True when this template is one of the stairs-down "exit" pieces
      * (filename starts with `end_`). Gated by
-     * [Floor.staircaseTemplateAllowed] - only spawnable after the
-     * exploration threshold opens, and intentionally excluded from
-     * filler spawns so the stairs-down room is always an end tile.
+     * [Floor.staircaseTemplateAllowed] - only spawnable after enough
+     * non-hall rooms are revealed. Excluded from filler spawns so the
+     * stairs-down room is always an end tile.
      */
     val isEnd: Boolean = false,
     /**

@@ -1101,7 +1101,10 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <include layout="@layout/panel_inventory_hero_equipment" />
+                <include
+                    layout="@layout/panel_inventory_hero_equipment"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
             </FrameLayout>
         </LinearLayout>
     </FrameLayout>

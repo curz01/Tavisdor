@@ -27,6 +27,8 @@ import com.tavisdor.app.party.Party
 class Inventory {
 
     private val _weapons: MutableList<Weapon> = mutableListOf()
+    /** Spare armor — equipped armor stays on [Hero.armor]. */
+    private val _armor: MutableList<ArmorItem> = mutableListOf()
     private val _ingredients: MutableList<Ingredient> = mutableListOf()
     private val _potions: MutableList<Potion> = mutableListOf()
     private val _floorKeys: MutableList<FloorKey> = mutableListOf()
@@ -61,6 +63,9 @@ class Inventory {
     /** Spare weapons - everything not currently equipped on a hero. */
     val weapons: List<Weapon> get() = _weapons
 
+    /** Spare armor — everything not currently worn on a hero. */
+    val armor: List<ArmorItem> get() = _armor
+
     /**
      * Ingredient stash. Duplicates intended; each entry is one
      * physical item, so the UI can render and pick them up one
@@ -87,7 +92,7 @@ class Inventory {
     val maxSlotsPerTab: Int get() = InventoryCapacity.SLOTS_PER_TAB
 
     val usedEquipmentSlots: Int
-        get() = InventoryStacks.stackCount(_weapons) { a, b -> a == b }
+        get() = weaponStackCount() + armorStackCount()
 
     val usedMaterialsSlots: Int
         get() = ingredientStackCount() + potionStackCount() + floorKeyStackCount()
@@ -105,10 +110,28 @@ class Inventory {
     fun weaponGridSlots(): List<InventoryGridSlot> =
         InventoryStacks.slots(_weapons, label = { it.displayName }) { a, b -> a == b }
 
+    fun armorGridSlots(): List<InventoryGridSlot> =
+        InventoryStacks.slots(_armor, label = { it.displayName }) { a, b -> a == b }
+
+    /** Weapons first, then armor — matches [equipmentGridSlots] indices. */
+    fun equipmentGridSlots(): List<InventoryGridSlot> = buildList {
+        addAll(weaponGridSlots())
+        addAll(armorGridSlots())
+    }
+
     /** Representative weapon for a Gear-tab stack index. */
     fun weaponAtStackIndex(stackIndex: Int): Weapon? {
+        if (stackIndex >= weaponStackCount()) return null
         val index = InventoryStacks.backingIndexForStack(_weapons, stackIndex) { a, b -> a == b }
         return index?.let { _weapons[it] }
+    }
+
+    /** Representative armor name for a Gear-tab stack index (after weapon stacks). */
+    fun armorAtStackIndex(stackIndex: Int): ArmorItem? {
+        val local = stackIndex - weaponStackCount()
+        if (local < 0) return null
+        val index = InventoryStacks.backingIndexForStack(_armor, local) { a, b -> a == b }
+        return index?.let { _armor[it] }
     }
 
     /** Removes one instance from the stack at [stackIndex]. */
@@ -139,6 +162,23 @@ class Inventory {
         _weapons += weapon
         notifyChanged()
         return true
+    }
+
+    /** Adds one armor piece to the Gear stash. Returns false when full. */
+    fun addArmor(armor: ArmorItem): Boolean {
+        val newStack = _armor.none { it == armor }
+        if (newStack && usedEquipmentSlots >= maxSlotsPerTab) return false
+        _armor += armor
+        notifyChanged()
+        return true
+    }
+
+    fun removeFirstArmor(armor: ArmorItem): ArmorItem? {
+        val index = _armor.indexOfFirst { it == armor }
+        if (index < 0) return null
+        val removed = _armor.removeAt(index)
+        notifyChanged()
+        return removed
     }
 
     /** How many of [ingredient] are in the stash (duplicates count). */
@@ -232,7 +272,7 @@ class Inventory {
 
     fun canDeposit(drop: LootDrop, party: Party? = null): Boolean = when (drop) {
         is LootDrop.MeleeWeaponDrop -> {
-            val weapon = weaponFromDrop(drop)
+            val weapon = LootGearFactory.weaponFromDrop(drop)
             _weapons.any { it == weapon } || freeEquipmentSlots > 0
         }
         is LootDrop.IngredientDrop ->
@@ -240,7 +280,10 @@ class Inventory {
         is LootDrop.FloorKeyDrop ->
             _floorKeys.any { it.floorDepth == drop.key.floorDepth && it.lockId == drop.key.lockId } ||
                 freeMaterialsSlots > 0
-        is LootDrop.ArmorDrop -> party?.heroes?.any { it.isAlive && it.armor == null } == true
+        is LootDrop.ArmorDrop -> {
+            val piece = LootGearFactory.armorFromDrop(drop)
+            _armor.any { it == piece } || freeEquipmentSlots > 0
+        }
     }
 
     /** Pushes [drop] onto the back of the pickup queue. Returns false when the loot tab is full. */
@@ -327,18 +370,9 @@ class Inventory {
      */
     private fun depositPickup(drop: LootDrop, party: Party? = null): Boolean = when (drop) {
         is LootDrop.IngredientDrop -> addIngredient(drop.ingredient)
-        is LootDrop.MeleeWeaponDrop -> addWeapon(weaponFromDrop(drop))
+        is LootDrop.MeleeWeaponDrop -> addWeapon(LootGearFactory.weaponFromDrop(drop))
         is LootDrop.FloorKeyDrop -> addFloorKey(drop.key)
-        is LootDrop.ArmorDrop -> {
-            val hero = party?.heroes?.firstOrNull { it.isAlive && it.armor == null }
-            if (hero == null) {
-                false
-            } else {
-                hero.armor = drop.armorName
-                notifyChanged()
-                true
-            }
-        }
+        is LootDrop.ArmorDrop -> addArmor(LootGearFactory.armorFromDrop(drop))
     }
 
     /**
@@ -386,18 +420,6 @@ class Inventory {
         return removed
     }
 
-    private fun weaponFromDrop(drop: LootDrop.MeleeWeaponDrop): Weapon {
-        val type = drop.weapon
-        val tier = drop.tier
-        return Weapon(
-            type = type,
-            tier = tier,
-            displayName = tier.displayMeleeName(type),
-            attackBonus = tier.meleeWeaponBaseDamage,
-            range = Weapon.CRUDE_MELEE_RANGE,
-        )
-    }
-
     // ----- Save / load hooks (in-memory only; persistence path
     // lives on SaveStore) -----
 
@@ -413,9 +435,12 @@ class Inventory {
         ingredients: List<Ingredient>,
         potions: List<Potion> = emptyList(),
         floorKeys: List<FloorKey> = emptyList(),
+        armor: List<ArmorItem> = emptyList(),
     ) {
         _weapons.clear()
         _weapons += weapons
+        _armor.clear()
+        _armor += armor
         _ingredients.clear()
         _ingredients += ingredients
         _potions.clear()
@@ -425,4 +450,10 @@ class Inventory {
         _pendingPickup.clear()
         notifyChanged()
     }
+
+    private fun weaponStackCount(): Int =
+        InventoryStacks.stackCount(_weapons) { a, b -> a == b }
+
+    private fun armorStackCount(): Int =
+        InventoryStacks.stackCount(_armor) { a, b -> a == b }
 }
