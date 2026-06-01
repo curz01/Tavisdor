@@ -18,13 +18,48 @@ import com.tavisdor.app.party.LevelProgression
  */
 object SkillCatalog {
 
+    /**
+     * Out-of-combat utility skill definitions (one per class at level 1).
+     * Not part of per-class level-up unlock tables.
+     */
+    private val STARTING_UTILITY_SKILLS: List<Skill> = listOf(
+        skill(
+            id = "mage_make_potion_1", name = "Make Potion I", level = 1,
+            type = SkillCastType.PREPARE, range = 0, mp = 0,
+            desc = "Turn a 'reagent' into a mana potion; output depends on reagent quality. " +
+                "Out of combat only.",
+        ),
+        skill(
+            id = "fighter_camp", name = "Camp", level = 1,
+            type = SkillCastType.PREPARE, range = 0, mp = 0,
+            desc = "Uses up a 'camp' item to fully heal HP and MP for the party over the cast. " +
+                "Cannot heal dead. 50% chance enemies ambush mid-cast (decided at start; " +
+                "random recovery tick) so you may heal partially first. No ambush in a room " +
+                "with stairs. Ambush size scales with floor depth (1–4 enemies).",
+        ),
+        skill(
+            id = "thief_rest", name = "Rest", level = 1,
+            type = SkillCastType.PREPARE, range = 0, mp = 0,
+            desc = "Requires a 'beverage' item. Out of combat, restores each living hero " +
+                "up to 50% / 60% / 70% of max HP and MP (potency 1 / 2 / 3). No effect if " +
+                "already at or above the cap on both. No mana cost. Cannot heal dead.",
+        ),
+        skill(
+            id = "archer_cooking", name = "Cooking", level = 1,
+            type = SkillCastType.PREPARE, range = 0, mp = 0,
+            desc = "Requires 'raw food'. Out of combat, restores party HP only (no MP), up to " +
+                "70% / 80% / 90% of max (potency 1 / 2 / 3; e.g. Raw Rabbit). Consumes one " +
+                "ingredient; creates nothing. Cannot heal dead.",
+        ),
+    )
+
     // ---------- MAGE ----------
     private val MAGE: List<Skill> = listOf(
         skill(
             id = "mage_fire_1", name = "Fire I", level = 1,
-            type = SkillCastType.ACTIVE, range = 1, mp = 1,
+            type = SkillCastType.ACTIVE, range = 1, mp = 2,
             damage = 3, element = Element.FIRE,
-            desc = "Fire damage 3, 1 mana. Less damage to Water type, more to Earth type.",
+            desc = "Fire damage 3, 2 mana. Less damage to Water type, more to Earth type.",
         ),
         skill(
             // Heal is not an attack - element stays null so combat
@@ -37,52 +72,46 @@ object SkillCatalog {
             button = SkillButton.GUARD,
         ),
         skill(
-            id = "mage_make_potion_1", name = "Make Potion I", level = 3,
-            type = SkillCastType.PREPARE, range = 0, mp = 0,
-            desc = "Turn a 'reagent' into a mana potion; output depends on reagent quality. " +
-                "Out of combat only.",
-        ),
-        skill(
-            id = "mage_earth_1", name = "Earth I", level = 4,
-            type = SkillCastType.ACTIVE, range = 1, mp = 1,
+            id = "mage_earth_1", name = "Earth I", level = 3,
+            type = SkillCastType.ACTIVE, range = 1, mp = 2,
             damage = 2, element = Element.EARTH,
-            desc = "Earth damage 2, 1 mana.",
+            desc = "Earth damage 2, 2 mana.",
         ),
         skill(
-            id = "mage_fire_2", name = "Fire II", level = 5,
-            type = SkillCastType.ACTIVE, range = 2, mp = 3,
+            id = "mage_fire_2", name = "Fire II", level = 4,
+            type = SkillCastType.ACTIVE, range = 2, mp = 4,
             damage = 6, element = Element.FIRE,
-            desc = "Fire damage 6, 3 mana. 50% chance to burn target next turn for 1 damage. " +
+            desc = "Fire damage 6, 4 mana. 50% chance to burn target next turn for 1 damage. " +
                 "Less damage to Water type, more to Earth type.",
         ),
         skill(
-            id = "mage_heal_2", name = "Heal II", level = 6,
+            id = "mage_heal_2", name = "Heal II", level = 5,
             type = SkillCastType.ACTIVE, range = 1, mp = 3,
             desc = "Heal one target 10 HP, 3 mana. Cannot heal dead.",
             button = SkillButton.GUARD,
         ),
         skill(
-            id = "mage_earth_2", name = "Earth II", level = 7,
-            type = SkillCastType.ACTIVE, range = 1, mp = 3,
+            id = "mage_earth_2", name = "Earth II", level = 6,
+            type = SkillCastType.ACTIVE, range = 1, mp = 4,
             damage = 4, element = Element.EARTH,
-            desc = "Earth damage 4, 3 mana. 50% chance the enemy cannot move for 1 turn.",
+            desc = "Earth damage 4, 4 mana. 50% chance the enemy cannot move for 1 turn.",
         ),
         skill(
-            id = "mage_fire_3", name = "Fire III", level = 8,
-            type = SkillCastType.ACTIVE, range = 3, mp = 5,
+            id = "mage_fire_3", name = "Fire III", level = 7,
+            type = SkillCastType.ACTIVE, range = 3, mp = 6,
             damage = 10, element = Element.FIRE,
-            desc = "Fire damage 10, 5 mana. 85% chance to burn target for 2 turns at 3 damage. " +
+            desc = "Fire damage 10, 6 mana. 85% chance to burn target for 2 turns at 3 damage. " +
                 "Less damage to Water type, more to Earth type.",
         ),
         skill(
-            id = "mage_earth_3", name = "Earth III", level = 9,
-            type = SkillCastType.ACTIVE, range = 2, mp = 5,
+            id = "mage_earth_3", name = "Earth III", level = 8,
+            type = SkillCastType.ACTIVE, range = 2, mp = 6,
             damage = 6, element = Element.EARTH,
-            desc = "Earth damage 6, 5 mana. 75% chance the enemy cannot move for 2 turns; " +
+            desc = "Earth damage 6, 6 mana. 75% chance the enemy cannot move for 2 turns; " +
                 "25% chance the enemy cannot attack next turn.",
         ),
         skill(
-            id = "mage_heal_3", name = "Heal III", level = 10,
+            id = "mage_heal_3", name = "Heal III", level = 9,
             type = SkillCastType.ACTIVE, range = 1, mp = 5,
             desc = "Heal one target 20 HP, 5 mana. Residual heal of 5 HP next turn (does not " +
                 "stack but can be refreshed). Cannot heal dead.",
@@ -98,48 +127,40 @@ object SkillCatalog {
     private val FIGHTER: List<Skill> = listOf(
         skill(
             id = "fighter_taunt", name = "Taunt", level = 1,
-            type = SkillCastType.PREPARE, range = 2, mp = 0,
+            type = SkillCastType.PREPARE, range = 2, mp = 1,
             button = SkillButton.ACTION,
             desc = "Requires an enemy within range. Your threat +2 from each enemy; " +
                 "each other living hero's threat -1. Uses your action.",
         ),
         skill(
-            id = "fighter_camp", name = "Camp", level = 2,
-            type = SkillCastType.PREPARE, range = 0, mp = 0,
-            desc = "Uses up a 'camp' item to fully heal HP and MP for the party over the cast. " +
-                "Cannot heal dead. 50% chance enemies ambush mid-cast (decided at start; " +
-                "random recovery tick) so you may heal partially first. No ambush in a room " +
-                "with stairs. Ambush size scales with floor depth (1–4 enemies).",
-        ),
-        skill(
             // ID kept as `fighter_defender` (saves stable).
-            id = "fighter_defender", name = "Defender", level = 3,
+            id = "fighter_defender", name = "Defender", level = 2,
             type = SkillCastType.PREPARE, range = 1, mp = 1,
             costsAction = false,
             desc = "Choose a target to cover; take all damage for them on the next attack. " +
                 "Does not cost an action. 1 mana.",
         ),
         skill(
-            id = "fighter_charge", name = "Charge", level = 4,
+            id = "fighter_charge", name = "Charge", level = 3,
             type = SkillCastType.ACTIVE, range = 2, mp = 1,
             desc = "Move party 2 squares ahead (not diagonal) toward enemy and deal 50% damage. " +
                 "1 mana.",
         ),
         skill(
-            id = "fighter_heavy_strike", name = "Heavy Strike", level = 5,
+            id = "fighter_heavy_strike", name = "Heavy Strike", level = 4,
             type = SkillCastType.ACTIVE, range = 1, mp = 0,
             damage = 4, // 2d3 average
             desc = "Attack +2d3 damage. Cannot take an action next turn.",
         ),
         skill(
-            id = "fighter_thrust", name = "Thrust", level = 6,
+            id = "fighter_thrust", name = "Thrust", level = 5,
             type = SkillCastType.ACTIVE, range = 1, mp = 0,
             damage = 2, // 1d3 average
             desc = "Attack +1d3. 50% chance to also hit a target standing behind the current " +
                 "enemy. If no enemy behind and no wall, pushes the enemy back 1 square.",
         ),
         skill(
-            id = "fighter_disarm", name = "Disarm", level = 7,
+            id = "fighter_disarm", name = "Disarm", level = 6,
             type = SkillCastType.PREPARE, range = 0, mp = 1,
             costsAction = false,
             button = SkillButton.GUARD,
@@ -148,13 +169,13 @@ object SkillCatalog {
                 "highest-hate target). 1 mana. Does not cost an action.",
         ),
         skill(
-            id = "fighter_armor_break", name = "Armor Break", level = 8,
+            id = "fighter_armor_break", name = "Armor Break", level = 7,
             type = SkillCastType.ACTIVE, range = 1, mp = 1,
             desc = "Reduce the enemy's armor class by 30% for 2 turns. 1 mana. Higher chance if " +
                 "this hero is not the highest-hate target.",
         ),
         skill(
-            id = "fighter_counter_attack", name = "Counter Attack", level = 9,
+            id = "fighter_counter_attack", name = "Counter Attack", level = 8,
             type = SkillCastType.PREPARE, range = 0, mp = 1,
             costsAction = false,
             button = SkillButton.GUARD,
@@ -163,7 +184,7 @@ object SkillCatalog {
                 "strike back with a free normal attack. 1 mana. Does not cost an action.",
         ),
         skill(
-            id = "fighter_shield_bash", name = "Shield Bash", level = 10,
+            id = "fighter_shield_bash", name = "Shield Bash", level = 9,
             type = SkillCastType.ACTIVE, range = 1, mp = 0,
             desc = "If equipped with a shield, deal an additional attack at 50% damage. If no " +
                 "shield, just a normal attack.",
@@ -174,26 +195,19 @@ object SkillCatalog {
     private val THIEF: List<Skill> = listOf(
         skill(
             id = "thief_lock_pick", name = "Lock Pick", level = 1,
-            type = SkillCastType.PASSIVE, range = 1, mp = 0,
+            type = SkillCastType.PASSIVE, range = 1, mp = 1,
             desc = "Pick locked doors and chests within range 1, out of combat. Each attempt " +
-                "costs one Stone Shard. DEX + 1d3 vs lock level for this dungeon depth.",
+                "costs 1 MP and one Stone Shard. DEX + 1d3 vs lock level for this dungeon depth.",
         ),
         skill(
-            id = "thief_rest", name = "Rest", level = 2,
-            type = SkillCastType.PREPARE, range = 0, mp = 0,
-            desc = "Requires a 'beverage' item. Out of combat, restores each living hero " +
-                "up to 50% / 60% / 70% of max HP and MP (potency 1 / 2 / 3). No effect if " +
-                "already at or above the cap on both. No mana cost. Cannot heal dead.",
-        ),
-        skill(
-            id = "thief_sneak_attack", name = "Sneak Attack", level = 3,
+            id = "thief_sneak_attack", name = "Sneak Attack", level = 2,
             type = SkillCastType.ACTIVE, range = 1, mp = 3,
             damage = 7, // 2d6 average
             desc = "Attack +2d6. On a successful hit, hate is set to 5. If you have the " +
                 "highest threat on the target among other heroes, hit chance is halved. 3 mana.",
         ),
         skill(
-            id = "thief_trick_attack", name = "Trick Attack", level = 4,
+            id = "thief_trick_attack", name = "Trick Attack", level = 3,
             type = SkillCastType.ACTIVE, range = 1, mp = 1,
             costsAction = false,
             damage = 4, // 1d6 average rounded down (3.5 -> 4 in author table)
@@ -202,7 +216,7 @@ object SkillCatalog {
                 "your choice. 1 mana. Does not cost an action.",
         ),
         skill(
-            id = "thief_steal", name = "Steal", level = 5,
+            id = "thief_steal", name = "Steal", level = 4,
             type = SkillCastType.PREPARE, range = 1, mp = 1,
             costsAction = false,
             button = SkillButton.GUARD,
@@ -212,7 +226,7 @@ object SkillCatalog {
                 "1 mana.",
         ),
         skill(
-            id = "thief_hide", name = "Hide", level = 6,
+            id = "thief_hide", name = "Hide", level = 5,
             type = SkillCastType.PREPARE, range = 0, mp = 2,
             button = SkillButton.ACTION,
             desc = "Group is hidden from enemies 2 or more squares away. Must pass an INT + DEX " +
@@ -220,14 +234,14 @@ object SkillCatalog {
                 "+ (1d6 per level the enemy is higher than the hero). 2 mana. Uses your action.",
         ),
         skill(
-            id = "thief_side_step", name = "Side Step", level = 7,
+            id = "thief_side_step", name = "Side Step", level = 6,
             type = SkillCastType.PASSIVE, range = 0, mp = 1,
             desc = "Passive. While any living party member knows this skill, the party may " +
                 "move diagonally during combat (still one cell per move). Each diagonal step " +
                 "costs 1 mana (paid by a living hero who knows Side Step).",
         ),
         skill(
-            id = "thief_weak_point", name = "Weak Point", level = 8,
+            id = "thief_weak_point", name = "Weak Point", level = 7,
             type = SkillCastType.PREPARE, range = 2, mp = 2,
             button = SkillButton.ACTION,
             desc = "Mark an enemy within range. Each living hero may reroll once on their next " +
@@ -235,14 +249,14 @@ object SkillCatalog {
                 "2 mana. Uses your action.",
         ),
         skill(
-            id = "thief_double_strike", name = "Double Strike", level = 9,
+            id = "thief_double_strike", name = "Double Strike", level = 8,
             type = SkillCastType.PREPARE, range = 1, mp = 3,
             damage = 7, // 2d6 average
             desc = "Next attack deals +2d6 damage. 3 mana.",
             button = SkillButton.ACTION,
         ),
         skill(
-            id = "thief_evasive_maneuver", name = "Evasive Maneuver", level = 10,
+            id = "thief_evasive_maneuver", name = "Evasive Maneuver", level = 9,
             type = SkillCastType.PREPARE, range = 1, mp = 1,
             costsAction = false,
             desc = "Increase dodge by 20% for the next 2 turns. 1 mana. Does not cost an action.",
@@ -253,21 +267,14 @@ object SkillCatalog {
     private val ARCHER: List<Skill> = listOf(
         skill(
             id = "archer_aim_shot", name = "Aim Shot", level = 1,
-            type = SkillCastType.PREPARE, range = 3, mp = 0,
+            type = SkillCastType.PREPARE, range = 3, mp = 1,
             costsAction = false,
             desc = "Prepare as a free action, then attack: next damage +150%. If the defender " +
                 "dodges the first swing, roll a second hit check. Hate +2 on a connecting hit. " +
                 "Cannot take an action on your following turn.",
         ),
         skill(
-            id = "archer_cooking", name = "Cooking", level = 2,
-            type = SkillCastType.PREPARE, range = 0, mp = 0,
-            desc = "Requires 'raw food'. Out of combat, restores party HP only (no MP), up to " +
-                "70% / 80% / 90% of max (potency 1 / 2 / 3; e.g. Raw Rabbit). Consumes one " +
-                "ingredient; creates nothing. Cannot heal dead.",
-        ),
-        skill(
-            id = "archer_double_shot", name = "Double Shot", level = 3,
+            id = "archer_double_shot", name = "Double Shot", level = 2,
             type = SkillCastType.PREPARE, range = 2, mp = 1,
             costsAction = false,
             desc = "Next attack fires two arrows: first at 80% physical damage, second at 60%. " +
@@ -276,20 +283,20 @@ object SkillCatalog {
                 "1 mana. Does not cost an action.",
         ),
         skill(
-            id = "archer_poison_arrow", name = "Poison Arrow", level = 4,
+            id = "archer_poison_arrow", name = "Poison Arrow", level = 3,
             type = SkillCastType.ACTIVE, range = 2, mp = 0,
             requiredShard = Ingredient.STONE_SHARD,
             desc = "Normal damage; on poison success, enemy takes 2 damage each turn for the " +
                 "next 2 turns. Requires a Stone Shard.",
         ),
         skill(
-            id = "archer_close_range", name = "Close-Range", level = 5,
+            id = "archer_close_range", name = "Close-Range", level = 4,
             type = SkillCastType.PASSIVE, range = 0, mp = 0,
-            desc = "Reduces the penalty for attacking in close range (an enemy touching the " +
-                "party) by 25%. Always active.",
+            desc = "Reduces the penalty for attacking in close range (an enemy on an adjacent " +
+                "tile, including diagonals) by 25%. Always active.",
         ),
         skill(
-            id = "archer_fire_arrow", name = "Fire Arrow", level = 6,
+            id = "archer_fire_arrow", name = "Fire Arrow", level = 5,
             type = SkillCastType.ACTIVE, range = 2, mp = 0,
             damage = 4, element = Element.FIRE,
             requiredShard = Ingredient.FLAME_SHARD,
@@ -297,7 +304,7 @@ object SkillCatalog {
                 "to Water. Requires a Flame Shard.",
         ),
         skill(
-            id = "archer_ice_arrow", name = "Ice Arrow", level = 7,
+            id = "archer_ice_arrow", name = "Ice Arrow", level = 6,
             type = SkillCastType.ACTIVE, range = 2, mp = 0,
             damage = 4, element = Element.WATER, // ice resolves under WATER per the triangle
             requiredShard = Ingredient.HYDRO_SHARD,
@@ -305,12 +312,12 @@ object SkillCatalog {
                 "to Earth. Requires a Hydro Shard.",
         ),
         skill(
-            id = "archer_feint_death", name = "Feint Death", level = 8,
+            id = "archer_feint_death", name = "Feint Death", level = 7,
             type = SkillCastType.ACTIVE, range = 0, mp = 1,
             desc = "Reduce hate by 2 toward you from each living enemy. 1 mana. Uses your action.",
         ),
         skill(
-            id = "archer_rapid_fire", name = "Rapid Fire", level = 9,
+            id = "archer_rapid_fire", name = "Rapid Fire", level = 8,
             type = SkillCastType.PREPARE, range = 0, mp = 2,
             costsAction = false,
             desc = "Next attack fires 3 arrows. The 2nd has a 30% extra miss chance and the 3rd " +
@@ -318,7 +325,7 @@ object SkillCatalog {
                 "2 mana. Does not cost an action.",
         ),
         skill(
-            id = "archer_mark_target", name = "Mark Target", level = 10,
+            id = "archer_mark_target", name = "Mark Target", level = 9,
             type = SkillCastType.ACTIVE, range = 3, mp = 1,
             desc = "Mark an enemy for 2 combat rounds. Damage to that enemy is increased by 20%. " +
                 "1 mana.",
@@ -326,17 +333,18 @@ object SkillCatalog {
     ).forClass(HeroClass.ARCHER)
 
     init {
-        // Defensive: each class table should grant one skill per level
-        // from 1..MAX_LEVEL and have unique IDs across the whole catalog.
+        // Defensive: each class table grants one combat skill per level 1..9
+        // (utilities are in [STARTING_UTILITY_SKILLS]; level 10 is stat-only).
+        val progressionLevels = 1 until LevelProgression.MAX_LEVEL
         listOf(MAGE, FIGHTER, THIEF, ARCHER).forEach { table ->
             val unlocks = table.map { it.unlockLevel }.toSet()
-            val expected = (1..LevelProgression.MAX_LEVEL).toSet()
+            val expected = progressionLevels.toSet()
             require(unlocks == expected) {
                 "Skill table for ${table.first().heroClass} must unlock one skill per level " +
-                    "1..${LevelProgression.MAX_LEVEL}, got $unlocks"
+                    "$progressionLevels, got $unlocks"
             }
         }
-        val allIds = (MAGE + FIGHTER + THIEF + ARCHER).map { it.id }
+        val allIds = (MAGE + FIGHTER + THIEF + ARCHER + STARTING_UTILITY_SKILLS).map { it.id }
         require(allIds.toSet().size == allIds.size) {
             "Duplicate skill IDs detected in SkillCatalog: " +
                 allIds.groupingBy { it }.eachCount().filter { it.value > 1 }
@@ -485,7 +493,8 @@ object SkillCatalog {
 
     /**
      * Extra miss chance (0–100) when an archer fires while an enemy is
-     * adjacent to the party. [ARCHER_CLOSE_RANGE_ID] multiplies this
+     * on a tile adjacent to the party (cardinal or diagonal) with any bow.
+     * [ARCHER_CLOSE_RANGE_ID] multiplies this
      * by `(100 - [ARCHER_CLOSE_RANGE_PENALTY_RELIEF_PCT]) / 100`.
      */
     const val ARCHER_CLOSE_RANGE_BASE_PENALTY_PCT: Int = 50
@@ -509,6 +518,10 @@ object SkillCatalog {
 
     fun isArcherElementalArrow(skillId: String): Boolean =
         skillId in ARCHER_ELEMENTAL_ARROW_IDS
+
+    /** Archer bow skills that gain +1 range when a bow is equipped (see [WeaponClassRules]). */
+    fun receivesArcherBowRangeBonus(skillId: String): Boolean =
+        skillId in ARCHER_ELEMENTAL_ARROW_IDS || skillId == ARCHER_AIM_SHOT_ID
 
     /** Chance (0..100) that Poison Arrow applies its poison after a connecting shot. */
     const val ARCHER_POISON_ARROW_SUCCESS_PCT: Int = 50
@@ -609,9 +622,21 @@ object SkillCatalog {
         HeroClass.ARCHER -> ARCHER
     }
 
+    /** Class utility known from level 1 (Mage: potion, Fighter: camp, etc.). */
+    fun startingUtilitiesFor(cls: HeroClass): List<Skill> {
+        val id = when (cls) {
+            HeroClass.MAGE -> MAGE_MAKE_POTION_ID
+            HeroClass.FIGHTER -> FIGHTER_CAMP_ID
+            HeroClass.THIEF -> THIEF_REST_ID
+            HeroClass.ARCHER -> ARCHER_COOKING_ID
+        }
+        val skill = STARTING_UTILITY_SKILLS.firstOrNull { it.id == id } ?: return emptyList()
+        return listOf(skill.copy(heroClass = cls))
+    }
+
     /**
      * Skills a level-[level] hero of [cls] currently knows (everything
-     * with `unlockLevel <= level`).
+     * with `unlockLevel <= level`, plus [startingUtilitiesFor]).
      *
      * Both universal baselines - [basicAttackFor] and [basicDefendFor] -
      * are prepended so every hero, of every class, at every level,
@@ -620,7 +645,9 @@ object SkillCatalog {
      */
     fun knownSkillsFor(cls: HeroClass, level: Int): List<Skill> {
         val classKnown = allSkillsFor(cls).filter { it.unlockLevel <= level }
-        return listOf(basicAttackFor(cls), basicDefendFor(cls)) + classKnown
+        return listOf(basicAttackFor(cls), basicDefendFor(cls)) +
+            startingUtilitiesFor(cls) +
+            classKnown
     }
 
     /**
@@ -654,7 +681,8 @@ object SkillCatalog {
             "thief_steal_item", "thief_steal_gold" -> THIEF_STEAL_ID
             else -> id
         }
-        return allSkillsFor(HeroClass.MAGE).firstOrNull { it.id == resolvedId }
+        return STARTING_UTILITY_SKILLS.firstOrNull { it.id == resolvedId }
+            ?: allSkillsFor(HeroClass.MAGE).firstOrNull { it.id == resolvedId }
             ?: allSkillsFor(HeroClass.FIGHTER).firstOrNull { it.id == resolvedId }
             ?: allSkillsFor(HeroClass.THIEF).firstOrNull { it.id == resolvedId }
             ?: allSkillsFor(HeroClass.ARCHER).firstOrNull { it.id == resolvedId }

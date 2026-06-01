@@ -87,6 +87,23 @@ class CombatRound(
     var heroActionsLockedThisRound: Boolean = false
         private set
 
+    /**
+     * True after any hero has spent a real action this round (attack,
+     * skill, defend, potion, party step, etc.). Wait does not set this.
+     * While false, the party may reposition via
+     * [com.tavisdor.app.combat.CombatController.attemptPartyMove].
+     * Clears when the round advances.
+     */
+    var anyHeroActedThisRound: Boolean = false
+        private set
+
+    /** Party step/disengage is only allowed before the first hero acts. */
+    fun canPartyRepositionThisRound(): Boolean = !anyHeroActedThisRound
+
+    fun markHeroActedThisRound() {
+        anyHeroActedThisRound = true
+    }
+
     val isAnimating: Boolean
         get() = _leavers.isNotEmpty() || shiftProgress < 1f || waitReinsert != null
 
@@ -143,6 +160,9 @@ class CombatRound(
             "completeCurrentAction called with no actor (queuePos=$queuePos)."
         }
         val initIdx = _roundQueue[queuePos]
+        if (initiative[initIdx].kind == InitiativeEntry.Kind.HERO) {
+            markHeroActedThisRound()
+        }
         _deferredInitIndices.remove(initIdx)
         _leavers.add(
             Leaver(
@@ -337,6 +357,7 @@ class CombatRound(
         queuePos = 0
         roundNumber += 1
         heroActionsLockedThisRound = false
+        anyHeroActedThisRound = false
         waitReinsert = null
         shiftProgress = 1f
         shiftFromSlots = emptyMap()

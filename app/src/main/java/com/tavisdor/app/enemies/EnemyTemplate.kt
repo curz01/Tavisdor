@@ -15,10 +15,9 @@ import com.tavisdor.app.items.WeaponType
  * progression curve - the same monster at a higher "level" is
  * authored as a separate template.
  *
- * Derived attributes (Max HP / Max MP) use the same formulas the
- * party uses (see [Enemy.maxHp] / [Enemy.maxMp]). HP / MP at spawn
- * are filled to those derived maxes by [Enemy.spawnAt]; only the
- * `base*` values are authored here.
+ * Derived Max HP / Max MP use the same STR / INT multipliers as heroes
+ * plus the shared enemy bases [Enemy.BASE_MAX_HP] / [Enemy.BASE_MAX_MP]
+ * (see [Enemy.maxHp] / [Enemy.maxMp]).
  *
  * Loot is intentionally an opaque [lootTableId] string - real loot
  * resolution will land alongside the inventory system. Gold rolls
@@ -80,6 +79,12 @@ data class EnemyTemplate(
     val weaponType: WeaponType? = null,
 
     /**
+     * Combat role for damage stat and weapon perks ([EnemyCombatClass]).
+     * Null treats the enemy like a generic melee striker (STR + weapon).
+     */
+    val combatClass: EnemyCombatClass? = null,
+
+    /**
      * Boss-tier enemies (e.g. from `boss*.png` rooms). Used for
      * reduced-on-boss effects such as Mace stun (5% vs 10%).
      */
@@ -96,24 +101,9 @@ data class EnemyTemplate(
     /**
      * Armor class. Damage subtracts AC after a hit lands, mirroring
      * the hero formula (`damage = attacker.attack - defender.ac`).
-     * AC 10 is the hero baseline; higher AC = harder to damage.
+     * Heroes derive AC from DEX + armor; higher AC = harder to damage.
      */
     val armorClass: Int = 10,
-
-    /**
-     * Base Max HP before STR is applied. Final Max HP for spawned
-     * instances is `baseMaxHp + strength * STR_HP_PER_POINT`.
-     */
-    val baseMaxHp: Int,
-
-    /**
-     * Base Max MP before INT is applied. Final Max MP for spawned
-     * instances is `baseMaxMp + intelligence * INT_MP_PER_POINT`.
-     * Set to 0 for non-casters; the derived total may still be
-     * non-zero if the enemy has INT > 0, which is fine - it just
-     * means an unused pool.
-     */
-    val baseMaxMp: Int,
 
     /**
      * Flat XP awarded to every surviving party member on kill,
@@ -201,8 +191,6 @@ data class EnemyTemplate(
         require(strength >= 0 && dexterity >= 0 && intelligence >= 0) {
             "$id: stats must be >= 0 (got STR=$strength DEX=$dexterity INT=$intelligence)."
         }
-        require(baseMaxHp >= 1) { "$id: baseMaxHp must be >= 1, got $baseMaxHp." }
-        require(baseMaxMp >= 0) { "$id: baseMaxMp must be >= 0, got $baseMaxMp." }
         require(awardedExperience >= 0) {
             "$id: awardedExperience must be >= 0, got $awardedExperience."
         }

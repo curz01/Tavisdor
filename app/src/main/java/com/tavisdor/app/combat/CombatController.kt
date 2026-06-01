@@ -499,12 +499,24 @@ class CombatController(
      *   - If 4 enemies are touching (one on each cardinal side),
      *     disengage is impossible; the move is refused with no
      *     turn cost.
+     *   - Party repositioning is only allowed before any hero has
+     *     acted this round ([CombatRound.canPartyRepositionThisRound]).
+     *     Wait does not count; after the first real action or party
+     *     step, further repositioning is rejected until the next round.
      */
     fun attemptPartyMove(target: Cell): PartyMoveResult {
         if (ended || !awaitingHeroInput) return PartyMoveResult.REJECTED
         val heroSlot = currentHeroSlot ?: return PartyMoveResult.REJECTED
         val activeHero = combat.party.heroes.getOrNull(heroSlot) ?: return PartyMoveResult.REJECTED
         if (!activeHero.isAlive) return PartyMoveResult.REJECTED
+        if (!combat.round.canPartyRepositionThisRound()) {
+            log.append(
+                CombatLogEntry.Info(
+                    "The party cannot move after a hero has already acted this round.",
+                ),
+            )
+            return PartyMoveResult.REJECTED
+        }
 
         val current = floor.partyCell
         if (!isValidCombatMoveStep(current, target, heroSlot)) return PartyMoveResult.REJECTED
@@ -599,6 +611,7 @@ class CombatController(
      */
     fun wouldLockOthersOnMove(target: Cell): Boolean {
         if (ended || !awaitingHeroInput) return false
+        if (!combat.round.canPartyRepositionThisRound()) return false
         val heroSlot = currentHeroSlot ?: return false
         val activeHero = combat.party.heroes.getOrNull(heroSlot) ?: return false
         if (!activeHero.isAlive) return false
@@ -1078,31 +1091,37 @@ class CombatController(
         // walk. Heals route through [commitHeroHeal] and skip
         // this gate by design.
         val skillRange = WeaponClassRules.effectiveSkillRange(hero, chosen)
-        if (skillRange > 0) {
-            if (!LineOfSight.isInRange(floor.partyCell, target.cell, skillRange)) {
-                log.append(
-                    CombatLogEntry.OutOfRange(
-                        attacker = hero.name,
-                        skillName = chosen.displayName,
-                        target = target.name,
-                    ),
-                )
-                // No turn consumed - the player can reposition or
-                // pick a different target without losing their beat.
-                return false
-            }
-            if (skillRange > 1 &&
-                !LineOfSight.hasLineOfSight(floor, floor.partyCell, target.cell)
-            ) {
-                log.append(
+        if (skillRange > 0 &&
+            !WeaponClassRules.passesHeroAttackRangeAndLos(
+                floor,
+                floor.partyCell,
+                target.cell,
+                hero,
+                chosen,
+            )
+        ) {
+            val inRange = LineOfSight.isInRange(
+                floor.partyCell,
+                target.cell,
+                skillRange,
+                includeDiagonals = WeaponClassRules.heroSpearUsesDiagonalMeleeReach(hero, chosen),
+            )
+            log.append(
+                if (inRange) {
                     CombatLogEntry.LineOfSightBlocked(
                         attacker = hero.name,
                         skillName = chosen.displayName,
                         target = target.name,
-                    ),
-                )
-                return false
-            }
+                    )
+                } else {
+                    CombatLogEntry.OutOfRange(
+                        attacker = hero.name,
+                        skillName = chosen.displayName,
+                        target = target.name,
+                    )
+                },
+            )
+            return false
         }
 
         val shotPlan = consumeArcherShotPlan(slot)
@@ -1340,7 +1359,10 @@ class CombatController(
 
     private fun commitHeroTaunt(slot: Int, hero: Hero, skill: Skill): Boolean {
         if (effectiveSkillMpCost(hero, skill) > hero.mp) return false
-        if (!anyEnemyReachable(hero, skill)) {
+        val inRange = CombatTargeting.livingEnemiesInRange(
+            floor, floor.partyCell, skill, hero,
+        )
+        if (inRange.isEmpty()) {
             log.append(
                 CombatLogEntry.Info(
                     "${hero.name} taunts, but no enemy is in range.",
@@ -1349,8 +1371,8 @@ class CombatController(
             return false
         }
         spendHeroSkillMana(hero, skill)
-        val livingEnemyIndices = combat.enemies.indices.filter {
-            combat.enemies[it].isAlive
+        val livingEnemyIndices = inRange.mapNotNull { enemy ->
+            combat.enemies.indexOf(enemy).takeIf { it >= 0 }
         }
         combat.hate.applyTaunt(
             casterSlot = slot,
@@ -1837,7 +1859,7 @@ class CombatController(
      */
     private fun resolveChargeStrike(hero: Hero, target: Enemy) {
         val weaponBonus = hero.weapon1?.attackBonus ?: LootTier.FISTS_DAMAGE
-        val baseAttack = hero.strength + weaponBonus
+        val baseAttack = hero.physicalAttackStat + weaponBonus
         val attackPower = (
             baseAttack * SkillCatalog.FIGHTER_CHARGE_DAMAGE_PCT / 100
             ).coerceAtLeast(1)
@@ -1881,9 +1903,13 @@ class CombatController(
         if (range <= 0) return false
         return combat.enemies.any { enemy ->
             enemy.isAlive &&
-                LineOfSight.isInRange(floor.partyCell, enemy.cell, range) &&
-                (range <= 1 ||
-                    LineOfSight.hasLineOfSight(floor, floor.partyCell, enemy.cell))
+                WeaponClassRules.passesHeroAttackRangeAndLos(
+                    floor,
+                    floor.partyCell,
+                    enemy.cell,
+                    hero,
+                    skill,
+                )
         }
     }
 
@@ -2896,7 +2922,7 @@ class CombatController(
         val weapon = hero.weapon1
         val weaponBonus = weapon?.attackBonus ?: LootTier.FISTS_DAMAGE
         val skillDamageBonus = if (includeSkillDamageInAttackPower) skill.damage ?: 0 else 0
-        var attackPower = hero.strength + weaponBonus + skillDamageBonus +
+        var attackPower = hero.physicalAttackStat + weaponBonus + skillDamageBonus +
             WeaponClassRules.meleeAttackPowerBonus(hero, weapon)
         if (doubleStrike) {
             attackPower += SkillCatalog.byId(SkillCatalog.THIEF_DOUBLE_STRIKE_ID)?.damage ?: 0
@@ -2916,7 +2942,7 @@ class CombatController(
             attackPower = (attackPower * arrowMods.physicalDamagePct / 100).coerceAtLeast(1)
         }
 
-        logArcherCloseRangePenaltyIfNeeded(hero)
+        logArcherCloseRangePenaltyIfNeeded(hero, target)
         val enemyAdjacentToParty = touchingLivingEnemies(floor.partyCell).isNotEmpty()
         logSpearCloseRangePenaltyIfNeeded(hero, weapon, enemyAdjacentToParty)
 
@@ -2944,7 +2970,7 @@ class CombatController(
             out = WeaponClassRules.applySpearCloseRangeMissPenalty(
                 hero, weapon, enemyAdjacentToParty, out, rng,
             )
-            out = applyArcherCloseRangePenaltyIfNeeded(hero, out)
+            out = applyArcherCloseRangePenaltyIfNeeded(hero, target, out)
             if (arrowMods.extraMissChancePct > 0) {
                 out = applyMarginalHitPenalty(
                     out,
@@ -3184,21 +3210,22 @@ class CombatController(
         isPartyHidden() && hero.heroClass == HeroClass.THIEF
 
     private fun heroFiringBow(hero: Hero): Boolean =
-        hero.heroClass == HeroClass.ARCHER && hero.weapon1?.type == WeaponType.BOW
+        hero.weapon1?.type == WeaponType.BOW
 
-    private fun isArcherCloseRangeShot(): Boolean =
-        touchingLivingEnemies(floor.partyCell).isNotEmpty()
+    /** Bow shot at a target on a diagonally or cardinally adjacent tile. */
+    private fun isArcherCloseRangeShot(target: Enemy): Boolean =
+        LineOfSight.chebyshev(floor.partyCell, target.cell) <= 1
 
     private fun heroHasArcherCloseRangeSkill(hero: Hero): Boolean =
         hero.knownSkills.any { it.id == SkillCatalog.ARCHER_CLOSE_RANGE_ID }
 
-    private fun archerCloseRangeMissPenaltyPct(hero: Hero): Int? {
-        if (!heroFiringBow(hero) || !isArcherCloseRangeShot()) return null
+    private fun archerCloseRangeMissPenaltyPct(hero: Hero, target: Enemy): Int? {
+        if (!heroFiringBow(hero) || !isArcherCloseRangeShot(target)) return null
         return SkillCatalog.archerCloseRangeMissPenaltyPct(heroHasArcherCloseRangeSkill(hero))
     }
 
-    private fun logArcherCloseRangePenaltyIfNeeded(hero: Hero) {
-        val penaltyPct = archerCloseRangeMissPenaltyPct(hero) ?: return
+    private fun logArcherCloseRangePenaltyIfNeeded(hero: Hero, target: Enemy) {
+        val penaltyPct = archerCloseRangeMissPenaltyPct(hero, target) ?: return
         val hasSkill = heroHasArcherCloseRangeSkill(hero)
         val text = if (hasSkill) {
             "${hero.name} fires at close range — penalty reduced by " +
@@ -3242,8 +3269,12 @@ class CombatController(
         )
     }
 
-    private fun applyArcherCloseRangePenaltyIfNeeded(hero: Hero, out: MeleeOutcome): MeleeOutcome {
-        val penaltyPct = archerCloseRangeMissPenaltyPct(hero) ?: return out
+    private fun applyArcherCloseRangePenaltyIfNeeded(
+        hero: Hero,
+        target: Enemy,
+        out: MeleeOutcome,
+    ): MeleeOutcome {
+        val penaltyPct = archerCloseRangeMissPenaltyPct(hero, target) ?: return out
         if (penaltyPct <= 0) return out
         return applyMarginalHitPenalty(out, penaltyPct / 100f, rng)
     }
@@ -3478,9 +3509,8 @@ class CombatController(
     }
 
     /**
-     * Enemy melee resolver. Uses STR + a placeholder "claws/spear"
-     * +1 to mirror the hero's FISTS_DAMAGE fallback so the math
-     * stays symmetric until per-enemy weapon authoring lands.
+     * Enemy melee resolver. Attack power from [WeaponClassRules.enemyMeleeAttackPower]
+     * (class stat + weapon damage, same rules as heroes).
      *
      * Hate hook: a connecting hit ([MeleeOutcome.hit] = true) drops
      * the targeted hero's hate (from this enemy) back to 1, even
@@ -3494,7 +3524,7 @@ class CombatController(
     private fun resolveEnemyMelee(enemy: Enemy, target: Hero): Boolean {
         val enemyIdx = combat.enemies.indexOf(enemy)
         val heroSlot = combat.party.heroes.indexOf(target)
-        val baseAttackPower = enemy.strength + LootTier.FISTS_DAMAGE
+        val baseAttackPower = WeaponClassRules.enemyMeleeAttackPower(enemy)
         val attackPower = effectiveEnemyMeleeAttackPower(enemyIdx, baseAttackPower)
         val defenderDex = effectiveDefenderDexForEnemyMelee(target, heroSlot)
         var out = CombatMath.resolveMelee(
@@ -3837,8 +3867,8 @@ class CombatController(
         levelsGained: Int,
     ) {
         var snapshotStats = ClassStats.statsFor(hero.heroClass, startingLevel)
-        var snapshotMaxHp = derivedMaxHp(snapshotStats)
-        var snapshotMaxMp = derivedMaxMp(snapshotStats)
+        var snapshotMaxHp = derivedMaxHp(hero.heroClass, snapshotStats)
+        var snapshotMaxMp = derivedMaxMp(hero.heroClass, snapshotStats)
 
         for (step in 1..levelsGained) {
             val newLevel = startingLevel + step
@@ -3850,8 +3880,8 @@ class CombatController(
             }
 
             val newStats = ClassStats.statsFor(hero.heroClass, newLevel)
-            val newMaxHp = derivedMaxHp(newStats)
-            val newMaxMp = derivedMaxMp(newStats)
+            val newMaxHp = derivedMaxHp(hero.heroClass, newStats)
+            val newMaxMp = derivedMaxMp(hero.heroClass, newStats)
 
             val deltas = buildList {
                 if (snapshotStats.strength != newStats.strength) {
@@ -3880,11 +3910,11 @@ class CombatController(
         }
     }
 
-    private fun derivedMaxHp(stats: ClassStats.Stats): Int =
-        Hero.BASE_MAX_HP + stats.strength * Hero.STR_HP_PER_POINT
+    private fun derivedMaxHp(cls: HeroClass, stats: ClassStats.Stats): Int =
+        Hero.baseMaxHpFor(cls) + stats.strength * Hero.STR_HP_PER_POINT
 
-    private fun derivedMaxMp(stats: ClassStats.Stats): Int =
-        Hero.BASE_MAX_MP + stats.intelligence * Hero.INT_MP_PER_POINT
+    private fun derivedMaxMp(cls: HeroClass, stats: ClassStats.Stats): Int =
+        Hero.baseMaxMpFor(cls) + stats.intelligence * Hero.INT_MP_PER_POINT
 
     /**
      * Rolls per-enemy loot for every defeated combatant in [combat]

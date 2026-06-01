@@ -145,6 +145,7 @@
     <string name="hero_skill_assign_need_main_action">Select a main action skill as well (green).</string>
     <string name="hero_skill_assign_insufficient_mp">Not enough mana to use both staged skills.</string>
     <string name="combat_target_pick_enemy">Tap a highlighted enemy to attack or cast.</string>
+    <string name="combat_target_taunt_confirm">Highlighted enemies will be taunted. Tap Action to confirm.</string>
     <string name="hidden_attack_no_target">No enemy in range while hidden.</string>
 
     <!-- Heal target picker (Action button in combat with a Heal skill
@@ -176,6 +177,7 @@
     <string name="door_result_failed_pick_dex">Lock pick failed (%1$d vs lock %2$d). The Stone Shard is used up.</string>
     <string name="door_result_no_lock_pick">No Thief with Lock Pick in the party.</string>
     <string name="door_result_no_shard">Need a Stone Shard to pick this lock.</string>
+    <string name="door_result_no_mp">The Thief needs at least 1 MP to pick this lock.</string>
     <string name="door_result_failed_force">The door won\'t budge.</string>
     <string name="door_result_failed_force_str">Force failed (%1$d vs lock %2$d). You cannot try forcing it again.</string>
     <string name="door_result_str_already_tried">You already tried to force this lock.</string>
@@ -186,6 +188,14 @@
     <string name="chest_locked_title">Locked Chest</string>
     <string name="chest_locked_message">A sturdy lock seals this chest. What will you do?</string>
     <string name="chest_result_opened">The chest opens.</string>
+
+    <!-- Stairs up / down — the passage reshuffles when you leave a floor. -->
+    <string name="stair_transition_title">Leave this floor?</string>
+    <string name="stair_transition_message">The Shifting Passage will not hold this level for you. If you go up or down and return later, the dungeon here will be different — new halls, doors, and treasures.</string>
+    <string name="stair_transition_continue">Continue</string>
+    <string name="stair_transition_cancel">Stay here</string>
+    <string name="stair_descent_narrative">As the party descended deeper, the grinding of massive stone echoed from behind them.</string>
+    <string name="stair_surface_blocked">You are on a quest to go deeper — there is no point returning to the surface at this time.</string>
 
     <!-- Combat-mode party-move confirmation. Fired when a tap on
          a legal move target would forfeit the other heroes' turns

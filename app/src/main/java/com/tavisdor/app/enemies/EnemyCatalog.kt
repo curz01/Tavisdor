@@ -34,19 +34,12 @@ object EnemyCatalog {
             element = Element.NEUTRAL,
             movementSquares = 1,
             weaponType = WeaponType.SPEAR,
+            combatClass = EnemyCombatClass.FIGHTER,
             strength = 3,
             dexterity = 2,
             intelligence = 1,
-            // Squishy Floor-1 fodder. A L1 Fighter swinging fists
-            // (STR 5 + 1) clears 5 damage on a hit; the Goblin's
-            // HP 10 pool means a clean 2-shot kill before weapons
-            // even drop. Bump this if early floors play too soft.
+            // Max HP = Enemy.BASE_MAX_HP (2) + 2*STR = 8 at STR 3.
             armorClass = 1,
-            // baseMaxHp / baseMaxMp aren't on the design chart yet.
-            // Picked so derived totals land at Max HP = 10 (4 + 2*STR)
-            // and Max MP = 3 (0 + 3*INT). Update once the chart adds them.
-            baseMaxHp = 4,
-            baseMaxMp = 0,
             awardedExperience = 50,
             // Loot: see LootTableCatalog "spear_goblin" (ingredients, shards,
             // 40% melee weapon, 10% +1 melee weapon).
@@ -71,13 +64,11 @@ object EnemyCatalog {
             movementSquares = 1,
             attackRange = 2,
             weaponType = WeaponType.BOW,
+            combatClass = EnemyCombatClass.ARCHER,
             strength = 1,
             dexterity = 3,
             intelligence = 2,
             armorClass = 1,
-            // Max HP = 12 -> baseMaxHp + STR * 2
-            baseMaxHp = 10,
-            baseMaxMp = 0,
             awardedExperience = 60,
             lootTableId = "bow_goblin",
             goldMin = 10,
@@ -98,13 +89,11 @@ object EnemyCatalog {
             movementSquares = 3,
             moveThenStrikeSameTurn = true,
             weaponType = WeaponType.BITE,
+            combatClass = EnemyCombatClass.BEAST,
             strength = 2,
             dexterity = 2,
             intelligence = 0,
             armorClass = 1,
-            // Max HP = 8 (4 + 2*STR), Max MP = 2
-            baseMaxHp = 4,
-            baseMaxMp = 2,
             awardedExperience = 50,
             lootTableId = "bat",
             goldMin = 0,

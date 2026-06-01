@@ -8,8 +8,10 @@ import com.tavisdor.app.items.WeaponType
 
 /**
  * Tactical movement for goblin packs: bow users seek open shots at
- * range; spear users clear friendly fire lanes and body-block for
- * archers. Falls back to a straight chase toward the party.
+ * range first; when they can shoot they may reposition farther or
+ * diagonally from the party to reduce melee pressure. Spear users
+ * clear friendly-fire lanes and body-block for archers. Melee
+ * closers press toward the party when they cannot strike yet.
  */
 object EnemyCombatAi {
 
@@ -27,6 +29,7 @@ object EnemyCombatAi {
         if (budget <= 0) return emptyList()
         if (enemy.cell == partyCell) return emptyList()
         if (!enemy.template.moveThenStrikeSameTurn &&
+            enemy.weaponType != WeaponType.BOW &&
             canStrikeFrom(floor, enemy, enemy.cell, partyCell)
         ) {
             return emptyList()
@@ -39,8 +42,12 @@ object EnemyCombatAi {
             WeaponType.BITE -> planBatTactics(floor, enemy, partyCell, blocked, budget)
             else -> null
         }
-        if (tactical != null) return tactical
-        return planChasePath(floor, enemy, partyCell, blocked, budget)
+        if (tactical != null) {
+            if (tactical.isNotEmpty() || !prefersAggressiveMeleeApproach(enemy)) {
+                return tactical
+            }
+        }
+        return planAggressiveMeleeApproach(floor, enemy, partyCell, blocked, budget)
     }
 
     // ----- Spear goblin: clear bow lanes, then guard archers -----
@@ -65,7 +72,7 @@ object EnemyCombatAi {
         for (bow in bows) {
             if (!LineOfSight.hasLineOfSight(floor, partyCell, bow.cell)) continue
             if (LineOfSight.blocksLineBetween(spear.cell, partyCell, bow.cell)) {
-                return emptyList()
+                return null
             }
             val path = planGuardArcher(floor, spear, bow, partyCell, blocked, budget)
             if (path.isNotEmpty()) return path
@@ -119,7 +126,7 @@ object EnemyCombatAi {
         return stepsAlongPath(floor, spear.cell, best, blocked, budget)
     }
 
-    // ----- Bow goblin: stay at range with open LOS -----
+    // ----- Bow goblin: damage first, then kite / diagonal when safe -----
 
     private fun planBowTactics(
         floor: Floor,
@@ -134,15 +141,16 @@ object EnemyCombatAi {
             return planApproachForShot(floor, bow, partyCell, blocked, budget)
         }
 
-        val best = strikeCells.maxWith(
-            compareBy<Cell> { manhattan(it, partyCell) }
-                .thenByDescending { stepsToReach(floor, bow.cell, it, blocked) },
-        )
+        val best = strikeCells.maxWith(bowPositionComparator(bow.cell, partyCell, blocked, floor))
         if (best == bow.cell) return emptyList()
         return stepsAlongPath(floor, bow.cell, best, blocked, budget)
     }
 
-    /** Walk toward a cell that will open a ranged shot. */
+    /**
+     * Walk toward a shot when none is available yet. Damage over
+     * position: closest in-range LOS tile wins; only then prefer
+     * farther / less melee-exposed cells among ties.
+     */
     private fun planApproachForShot(
         floor: Floor,
         bow: Enemy,
@@ -157,11 +165,42 @@ object EnemyCombatAi {
                 LineOfSight.hasLineOfSight(floor, cell, partyCell)
         }
         if (candidates.isEmpty()) {
-            return planChasePath(floor, bow, partyCell, blocked, budget)
+            return planAggressiveMeleeApproach(floor, bow, partyCell, blocked, budget)
         }
-        val best = candidates.minBy { manhattan(it, partyCell) }
+        val best = candidates.minWith(
+            compareBy<Cell> { manhattan(it, partyCell) }
+                .thenBy { partyMeleePressure(it, partyCell) }
+                .thenBy { stepsToReach(floor, bow.cell, it, blocked) },
+        )
         if (best == bow.cell) return emptyList()
         return stepsAlongPath(floor, bow.cell, best, blocked, budget)
+    }
+
+    /**
+     * Among tiles that still allow a shot this turn, prefer the
+     * farthest from the party, then tiles that are harder for
+     * cardinal-only melee to reach (diagonal adjacency).
+     */
+    private fun bowPositionComparator(
+        from: Cell,
+        partyCell: Cell,
+        blocked: Set<Cell>,
+        floor: Floor,
+    ): Comparator<Cell> =
+        compareBy<Cell> { manhattan(it, partyCell) }
+            .thenBy { partyMeleePressure(it, partyCell) }
+            .thenByDescending { stepsToReach(floor, from, it, blocked) }
+
+    /**
+     * How exposed [cell] is to party melee from [partyCell]. Lower is
+     * better for a ranged enemy. Cardinal adjacency is worst; diagonal
+     * adjacency avoids heroes with range-1 cardinal melee; two or more
+     * steps away is safest.
+     */
+    private fun partyMeleePressure(cell: Cell, partyCell: Cell): Int {
+        val chebyshev = LineOfSight.chebyshev(cell, partyCell)
+        if (chebyshev >= 2) return 0
+        return if (manhattan(cell, partyCell) == 1) 2 else 1
     }
 
     // ----- Bat: close distance, then bite on the same turn -----
@@ -174,12 +213,22 @@ object EnemyCombatAi {
         budget: Int,
     ): List<Cell> {
         if (canStrikeFrom(floor, enemy, enemy.cell, partyCell)) return emptyList()
-        return planChasePath(floor, enemy, partyCell, blocked, budget)
+        return planAggressiveMeleeApproach(floor, enemy, partyCell, blocked, budget)
     }
 
-    // ----- Default: close to melee range -----
+    // ----- Default: press toward the party while unable to strike -----
 
-    private fun planChasePath(
+    /** Non-ranged enemies that should close distance even when blocked. */
+    private fun prefersAggressiveMeleeApproach(enemy: Enemy): Boolean =
+        enemy.weaponType != WeaponType.BOW
+
+    /**
+     * Spend the full movement budget getting as close to [partyCell]
+     * as pathing allows. Unlike the old chase, we do not stop on the
+     * first tile that could strike — if the party is still blocked,
+     * keep closing so a freed square puts them nearer.
+     */
+    private fun planAggressiveMeleeApproach(
         floor: Floor,
         enemy: Enemy,
         partyCell: Cell,
@@ -187,20 +236,44 @@ object EnemyCombatAi {
         budget: Int,
     ): List<Cell> {
         val path = Pathfinder.findPath(floor, enemy.cell, partyCell, blocked)
-        if (path.size <= 1) return emptyList()
-
-        val cells = ArrayList<Cell>(budget)
-        var stepsTaken = 0
-        var i = 1
-        while (i < path.size && stepsTaken < budget) {
-            val next = path[i]
-            if (next == partyCell) break
-            cells += next
-            stepsTaken += 1
-            i += 1
-            if (canStrikeFrom(floor, enemy, next, partyCell)) break
+        if (path.size > 1) {
+            val cells = ArrayList<Cell>(budget)
+            var stepsTaken = 0
+            var i = 1
+            while (i < path.size && stepsTaken < budget) {
+                val next = path[i]
+                if (next == partyCell) break
+                cells += next
+                stepsTaken += 1
+                i += 1
+            }
+            if (cells.isNotEmpty()) return cells
         }
-        return cells
+        return planClosestApproach(floor, enemy, partyCell, blocked, budget)
+    }
+
+    /**
+     * When the party cell is unreachable (allies / doors in the way),
+     * step toward the reachable tile with the smallest distance to
+     * the party.
+     */
+    private fun planClosestApproach(
+        floor: Floor,
+        enemy: Enemy,
+        partyCell: Cell,
+        blocked: Set<Cell>,
+        budget: Int,
+    ): List<Cell> {
+        val reachable = cellsWithinSteps(floor, enemy.cell, blocked, budget)
+        val target = reachable
+            .filter { it != enemy.cell }
+            .minWith(
+                compareBy<Cell> { manhattan(it, partyCell) }
+                    .thenBy { stepsToReach(floor, enemy.cell, it, blocked) },
+            )
+            ?: return emptyList()
+        if (target == enemy.cell) return emptyList()
+        return stepsAlongPath(floor, enemy.cell, target, blocked, budget)
     }
 
     // ----- Shared helpers -----

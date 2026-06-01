@@ -203,9 +203,8 @@ class Party private constructor(
         fun fromSaveData(saved: List<HeroSaveData>): Party {
             require(saved.size == 4) { "Saved party must contain exactly 4 heroes." }
             // While the debug level override is active, force every
-            // loaded hero up to that level too - otherwise testers
-            // would have to wipe their save just to see the L10 skill
-            // list. Saved level wins once the override is restored to 1.
+            // loaded hero to [DebugConfig.STARTING_HERO_LEVEL]; otherwise
+            // use the saved level from the file.
             val debugLevel = DebugConfig.STARTING_HERO_LEVEL
                 .coerceIn(1, LevelProgression.MAX_LEVEL)
             return Party(saved.map {
@@ -213,7 +212,11 @@ class Party private constructor(
                 // (class, level), so the saved dexterity / maxHp values
                 // are ignored. We only carry over the mutable runtime
                 // state: level, xp, hp.
-                val effectiveLevel = it.level.coerceAtLeast(debugLevel)
+                val effectiveLevel = if (DebugConfig.isLevelOverrideActive) {
+                    debugLevel
+                } else {
+                    it.level
+                }
                 val proto = Hero(
                     name = it.name,
                     heroClass = it.heroClass,
@@ -224,7 +227,6 @@ class Party private constructor(
                     // the old (lower) level and would otherwise be
                     // displayed against a different denominator.
                     xp = if (effectiveLevel == it.level) it.xp else 0,
-                    baseArmorClass = Hero.defaultArmorClassFor(it.heroClass),
                     // Weapons aren't part of the save schema yet, so
                     // re-issue the crude starter on every load. Once
                     // looted weapons can be carried across saves this

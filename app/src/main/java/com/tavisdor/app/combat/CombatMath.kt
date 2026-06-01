@@ -79,10 +79,11 @@ object CombatMath {
      * Resolve a single melee swing.
      *
      * @param attackerDex  attacker's effective DEX (after any temp buffs)
-     * @param attackPower  pre-computed attack value (e.g. STR + weapon +
-     *                     melee skill bonus). Resolver does NOT add STR
-     *                     itself - keep that math at the call site so
-     *                     skill modifiers can replace or augment freely.
+     * @param attackPower  pre-computed attack value (e.g. hero
+     *                     [com.tavisdor.app.party.Hero.physicalAttackStat]
+     *                     + weapon + melee skill bonus). Resolver does
+     *                     not add stats itself - keep that math at the
+     *                     call site so skill modifiers can augment freely.
      * @param defenderDex  defender's effective DEX
      * @param defenderAc   defender's effective AC (after temp buffs /
      *                     debuffs like Armor Break)

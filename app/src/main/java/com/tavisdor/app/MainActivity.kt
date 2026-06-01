@@ -105,7 +105,13 @@ class MainActivity : AppCompatActivity() {
         // whether a Combat is active; the strip rebinds itself to
         // the new encounter so portraits reflect the fresh fight.
         game.onCombatChanged = { combat -> onCombatChanged(combat) }
-        game.onFloorDepthChanged = { refreshFloorLabel() }
+        game.onFloorDepthChanged = {
+            refreshFloorLabel()
+            refreshCombatViews()
+        }
+        game.onStairTransitionPrompt = { direction ->
+            showStairTransitionDialog(direction)
+        }
 
         gameRoot = findViewById(R.id.gameRoot)
         titleOverlay = findViewById(R.id.titleOverlay)
@@ -135,7 +141,7 @@ class MainActivity : AppCompatActivity() {
         // border tracks the turn order in real time.
         gameView.onFrameTick = { needsRedraw ->
             // Hero portraits cycle their idle animation (and the
-            // hurt-blink) continuously, so the panel needs a redraw
+            // hurt hold / idle cycle) continuously, so the panel needs a redraw
             // every frame whenever a party exists - not just during
             // combat. The gameRoot is hidden on title / class-select
             // so this is a no-op cost when no party is loaded.
@@ -184,7 +190,13 @@ class MainActivity : AppCompatActivity() {
         game.onCombatTargetSelectionChanged = {
             gameView.invalidate()
             if (game.isCombatTargetSelectionActive()) {
-                AppToast.show(this, R.string.combat_target_pick_enemy)
+                val skill = game.combatTargetSelection?.skill
+                val msg = if (skill != null && CombatTargeting.showsMultiEnemyPreview(skill)) {
+                    R.string.combat_target_taunt_confirm
+                } else {
+                    R.string.combat_target_pick_enemy
+                }
+                AppToast.show(this, msg)
             }
         }
         game.onCombatTargetConfirmed = { slot, enemy ->
@@ -234,6 +246,7 @@ class MainActivity : AppCompatActivity() {
             if (combatLogContainer.visibility != View.VISIBLE) {
                 combatLogContainer.visibility = View.VISIBLE
             }
+            combatLogView.invalidate()
         }
 
         game.onCombatVictory = {
@@ -350,6 +363,18 @@ class MainActivity : AppCompatActivity() {
                 game.clearSkillStaging(slot)
                 refreshCombatViews()
             }
+            return
+        }
+
+        if (CombatTargeting.showsMultiEnemyPreview(main)) {
+            val controller = game.combatController ?: return
+            val selection = game.combatTargetSelection
+            if (selection != null && selection.heroSlot == slot && selection.skill.id == main.id) {
+                commitStagedCombatAction(slot, null)
+                return
+            }
+            if (!controller.anyEnemyReachable(caster, main)) return
+            game.beginCombatTargetSelection(slot, main)
             return
         }
 
@@ -949,6 +974,7 @@ class MainActivity : AppCompatActivity() {
             }
             Game.DoorOutcome.FAILED_NO_LOCK_PICK,
             Game.DoorOutcome.FAILED_NO_SHARD,
+            Game.DoorOutcome.FAILED_NO_MP,
             Game.DoorOutcome.FAILED_DEX_CHECK,
             Game.DoorOutcome.FAILED_STR_ALREADY_TRIED,
             Game.DoorOutcome.FAILED_STR_CHECK,
@@ -1068,6 +1094,21 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun showStairTransitionDialog(direction: Game.StairDirection) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.stair_transition_title)
+            .setMessage(R.string.stair_transition_message)
+            .setCancelable(true)
+            .setNegativeButton(R.string.stair_transition_cancel) { d, _ -> d.dismiss() }
+            .setPositiveButton(R.string.stair_transition_continue) { d, _ ->
+                d.dismiss()
+                if (game.commitStairTransition(direction)) {
+                    refreshCombatViews()
+                }
+            }
+            .show()
+    }
+
     private fun onDoorOutcome(outcome: Game.DoorOutcome) {
         when (outcome) {
             Game.DoorOutcome.OPENED, Game.DoorOutcome.ALREADY_UNLOCKED -> {
@@ -1077,6 +1118,7 @@ class MainActivity : AppCompatActivity() {
             }
             Game.DoorOutcome.FAILED_NO_LOCK_PICK,
             Game.DoorOutcome.FAILED_NO_SHARD,
+            Game.DoorOutcome.FAILED_NO_MP,
             Game.DoorOutcome.FAILED_DEX_CHECK,
             Game.DoorOutcome.FAILED_STR_ALREADY_TRIED,
             Game.DoorOutcome.FAILED_STR_CHECK,
@@ -1093,6 +1135,8 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.door_result_no_lock_pick)
             Game.DoorOutcome.FAILED_NO_SHARD ->
                 getString(R.string.door_result_no_shard)
+            Game.DoorOutcome.FAILED_NO_MP ->
+                getString(R.string.door_result_no_mp)
             Game.DoorOutcome.FAILED_DEX_CHECK -> {
                 val check = game.lastLockPickCheck
                 if (check != null) {

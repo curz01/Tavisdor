@@ -171,7 +171,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
     /**
      * Per-slot snapshot of the hero whose portrait we're tracking
      * and that hero's last-seen HP. Compared every frame to detect
-     * an HP DROP and kick off the hurt-blink animation. Identity
+     * an HP DROP and kick off the hurt-portrait hold. Identity
      * (not equality) so swapping in a fresh Hero instance - e.g.
      * starting a new run after load - resets the tracker without
      * spuriously firing the blink.
@@ -180,12 +180,11 @@ class HeroPanelRenderer(private val assets: AssetManager) {
     private val lastSeenHp: IntArray = IntArray(MAX_SLOTS) { -1 }
 
     /**
-     * Wall-clock timestamp at which each slot's hurt-blink animation
-     * began. `0L` means no animation is in flight; the blink lasts
-     * [HURT_BLINK_TOTAL_MS] from this anchor, after which the
-     * portrait reverts to the normal idle cycle.
+     * Wall-clock timestamp at which each slot's hurt portrait hold
+     * began. `0L` means idle; the hurt sprite stays up for
+     * [HURT_HOLD_MS], then the normal cycle resumes.
      */
-    private val hurtBlinkStartMs: LongArray = LongArray(MAX_SLOTS) { 0L }
+    private val hurtHoldStartMs: LongArray = LongArray(MAX_SLOTS) { 0L }
 
     // ----- Public draw entry point -----
 
@@ -506,8 +505,8 @@ class HeroPanelRenderer(private val assets: AssetManager) {
      * distinct paths:
      *   1. Empty slot      -> the original "(empty)" rounded square.
      *   2. Hero with art   -> animated idle cycle, periodically
-     *                         interrupted by a hurt-blink whenever
-     *                         [hero]'s HP just dropped.
+     *                         replaced by the hurt sprite for
+     *                         [HURT_HOLD_MS] when [hero]'s HP drops.
      *   3. Hero w/o art    -> the legacy color-tint + first-letter
      *                         fallback, so a missing sprite asset
      *                         degrades gracefully.
@@ -523,7 +522,7 @@ class HeroPanelRenderer(private val assets: AssetManager) {
             // fills the cell.
             lastSeenHero[slot] = null
             lastSeenHp[slot] = -1
-            hurtBlinkStartMs[slot] = 0L
+            hurtHoldStartMs[slot] = 0L
             canvas.drawRoundRect(rect, r, r, portraitEmptyPaint)
             canvas.drawRoundRect(rect, r, r, portraitBorderPaint)
             return
@@ -561,11 +560,11 @@ class HeroPanelRenderer(private val assets: AssetManager) {
 
     /**
      * Compares [hero]'s current HP to what we drew last frame and
-     * arms the hurt-blink timer whenever HP dropped. Three rules:
+     * arms the hurt-portrait hold whenever HP dropped. Three rules:
      *   - Different Hero instance in this slot than last frame
-     *     (load / new run / KO-revive) -> snapshot HP, no blink.
-     *   - HP went DOWN -> snapshot the lower value, start blink.
-     *   - HP went UP / unchanged       -> snapshot, no blink (heals
+     *     (load / new run / KO-revive) -> snapshot HP, no hold.
+     *   - HP went DOWN -> snapshot the lower value, start hold.
+     *   - HP went UP / unchanged       -> snapshot, no hold (heals
      *     and steady-state frames both pass through silently).
      */
     private fun updateHurtTracker(slot: Int, hero: Hero) {
@@ -574,11 +573,11 @@ class HeroPanelRenderer(private val assets: AssetManager) {
         if (prev !== hero) {
             lastSeenHero[slot] = hero
             lastSeenHp[slot] = hero.hp
-            hurtBlinkStartMs[slot] = 0L
+            hurtHoldStartMs[slot] = 0L
             return
         }
         if (hero.hp < prevHp) {
-            hurtBlinkStartMs[slot] = SystemClock.uptimeMillis()
+            hurtHoldStartMs[slot] = SystemClock.uptimeMillis()
         }
         lastSeenHp[slot] = hero.hp
     }
@@ -590,11 +589,8 @@ class HeroPanelRenderer(private val assets: AssetManager) {
      * to the colored-initial placeholder.
      *
      * Frame selection rules:
-     *   - Inside the hurt-blink window: alternate between the hurt
-     *     sprite and the current idle frame every
-     *     [HURT_BLINK_FLASH_MS] ms. With [HURT_BLINK_COUNT] = 3
-     *     and the alternating cadence, the player sees the hurt
-     *     sprite flash 3 times before the cycle resumes cleanly.
+     *   - Inside the hurt hold window: show the hurt sprite only for
+     *     [HURT_HOLD_MS], then resume the idle cycle.
      *   - Otherwise: pick the idle frame for this slot based on
      *     wall-clock time, using a tiny per-slot phase so adjacent
      *     heroes don't bob in lock-step.
@@ -607,21 +603,14 @@ class HeroPanelRenderer(private val assets: AssetManager) {
             cycle[idleCycleFrameIndex(now + phase, set)]
         } else null
 
-        val blinkStart = hurtBlinkStartMs[slot]
-        if (blinkStart > 0L) {
-            val elapsed = now - blinkStart
-            if (elapsed < HURT_BLINK_TOTAL_MS) {
-                val flashIdx = (elapsed / HURT_BLINK_FLASH_MS).toInt()
-                // Even flashes show the hurt sprite; odd flashes
-                // show the normal cycle, so the eye sees a clean
-                // "ouch!" flicker.
-                val showHurt = flashIdx % 2 == 0
-                if (showHurt && set.hurt != null) return set.hurt
-                if (idleFrame != null) return idleFrame
+        val holdStart = hurtHoldStartMs[slot]
+        if (holdStart > 0L) {
+            val elapsed = now - holdStart
+            if (elapsed < HURT_HOLD_MS) {
                 if (set.hurt != null) return set.hurt
-            } else {
-                hurtBlinkStartMs[slot] = 0L
+                return idleFrame
             }
+            hurtHoldStartMs[slot] = 0L
         }
         return idleFrame
     }
@@ -868,23 +857,10 @@ class HeroPanelRenderer(private val assets: AssetManager) {
             assetPath.substringAfterLast('/') in BLINK_PORTRAIT_ASSETS
 
         /**
-         * Milliseconds between hurt-blink flashes (one hurt frame +
-         * one idle frame = two consecutive flash slots). Combined
-         * with [HURT_BLINK_COUNT] this controls the "ouch" pacing:
-         * 3 blinks x (125ms hurt + 125ms idle) = 750ms total.
+         * How long the hurt portrait stays on screen after an HP
+         * drop before the idle animation cycle resumes.
          */
-        private const val HURT_BLINK_FLASH_MS: Long = 125L
-
-        /** Number of times the hurt sprite flashes before the cycle resumes. */
-        private const val HURT_BLINK_COUNT: Int = 3
-
-        /**
-         * Total length of the hurt-blink animation window. After
-         * this elapses [hurtBlinkStartMs] resets to 0L and the
-         * portrait reverts to its normal cycle until the next
-         * HP drop.
-         */
-        private const val HURT_BLINK_TOTAL_MS: Long = HURT_BLINK_FLASH_MS * HURT_BLINK_COUNT * 2L
+        private const val HURT_HOLD_MS: Long = 3_000L
 
         /**
          * Asset-decode helper. Mirrors the one in [DungeonRenderer] -

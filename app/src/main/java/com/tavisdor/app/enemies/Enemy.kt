@@ -11,8 +11,8 @@ import kotlin.random.Random
  *
  * Derived attributes (Max HP / Max MP / Dodge) intentionally share
  * the same formulas as [Hero]:
- *   - Max HP = baseMaxHp + STR * STR_HP_PER_POINT
- *   - Max MP = baseMaxMp + INT * INT_MP_PER_POINT
+ *   - Max HP = [BASE_MAX_HP] + STR * STR_HP_PER_POINT
+ *   - Max MP = [BASE_MAX_MP] + INT * INT_MP_PER_POINT
  *   - Dodge  = DEX * DEX_DODGE_PCT_PER_POINT (capped at 90%)
  * Keeping enemies on the same math as the party means combat
  * resolution can treat both sides uniformly when it lands.
@@ -49,8 +49,11 @@ data class Enemy(
     val level: Int get() = template.level
     val element: Element get() = template.element
     val movementSquares: Int get() = template.movementSquares
-    val attackRange: Int get() = template.attackRange
+    /** Authored reach, plus class/weapon bonuses (Fighter + spear, etc.). */
+    val attackRange: Int
+        get() = com.tavisdor.app.items.WeaponClassRules.effectiveEnemyAttackRange(this)
     val weaponType get() = template.weaponType
+    val combatClass get() = template.combatClass
     val strength: Int get() = template.strength
     val dexterity: Int get() = template.dexterity
     val intelligence: Int get() = template.intelligence
@@ -58,8 +61,8 @@ data class Enemy(
 
     // ----- Derived pools (mirror Hero's formulas) -----
 
-    val maxHp: Int get() = template.baseMaxHp + strength * Hero.STR_HP_PER_POINT
-    val maxMp: Int get() = template.baseMaxMp + intelligence * Hero.INT_MP_PER_POINT
+    val maxHp: Int get() = BASE_MAX_HP + strength * Hero.STR_HP_PER_POINT
+    val maxMp: Int get() = BASE_MAX_MP + intelligence * Hero.INT_MP_PER_POINT
 
     /** Dodge chance percent. Capped at 90% so 100% evaders aren't possible. */
     val dodgeChancePct: Int
@@ -100,6 +103,11 @@ data class Enemy(
         else rng.nextInt(template.goldMin, template.goldMax + 1)
 
     companion object {
+        /** Shared enemy pool floor before STR / INT (heroes use per-class bases in [Hero]). */
+        const val BASE_MAX_HP: Int = 2
+
+        const val BASE_MAX_MP: Int = 2
+
         /**
          * Builds a fresh enemy instance from [template] at [cell],
          * with HP / MP filled to their derived maxes. Use this for

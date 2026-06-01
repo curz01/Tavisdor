@@ -20,13 +20,13 @@ object DebugConfig {
      * picker shows every skill / spell for every class. Restore to
      * `1` for normal progression.
      */
-    const val STARTING_HERO_LEVEL: Int = 10
+    const val STARTING_HERO_LEVEL: Int = 1
 
     /**
-     * On new game / continue: seeds utility test ingredients and sets
-     * party HP/MP to 50% of max for recovery-animation testing.
+     * On new game / continue: seeds utility test ingredients and tops
+     * party HP/MP to max. Off for normal starting progression.
      */
-    const val GRANT_UTILITY_TEST_INGREDIENTS: Boolean = true
+    const val GRANT_UTILITY_TEST_INGREDIENTS: Boolean = false
 
     /** Copies of each elemental shard (Flame / Stone / Wind / Hydro) for arrow testing. */
     const val TEST_ELEMENTAL_SHARDS_EACH: Int = 6

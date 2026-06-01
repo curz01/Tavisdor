@@ -11,7 +11,8 @@ import com.tavisdor.app.skills.SkillCatalog
 
 /**
  * Range + target validation for the combat tile-picker overlay.
- * Uses the same Manhattan range and LOS rules as [CombatController.commitHeroAction].
+ * Uses the same range and LOS rules as [CombatController.commitHeroAction]
+ * (Manhattan by default; Fighter + spear melee uses diagonal reach at range 1).
  */
 object CombatTargeting {
 
@@ -63,6 +64,14 @@ object CombatTargeting {
             skill.id == SkillCatalog.FIGHTER_TAUNT_ID ||
             skill.id == SkillCatalog.ARCHER_MARK_TARGET_ID
 
+    /**
+     * Skills that show the combat tile overlay (dim + in-range highlights)
+     * but commit from the Action button without picking one enemy.
+     * Every [TARGETABLE_ENEMY] cell is affected (e.g. Fighter Taunt).
+     */
+    fun showsMultiEnemyPreview(skill: Skill): Boolean =
+        skill.id == SkillCatalog.FIGHTER_TAUNT_ID
+
     fun requiresEnemyTargetSelection(skill: Skill): Boolean {
         if (HealResolver.isHeal(skill)) return false
         if (skill.range <= 0) return false
@@ -103,14 +112,36 @@ object CombatTargeting {
         cell: Cell,
         hero: Hero? = null,
     ): Boolean {
-        val range = effectiveRange(hero, skill)
         if (cell !in floor.floorCells) return false
+        if (hero != null) {
+            return WeaponClassRules.passesHeroAttackRangeAndLos(
+                floor,
+                origin,
+                cell,
+                hero,
+                skill,
+            )
+        }
+        val range = effectiveRange(hero, skill)
         if (!LineOfSight.isInRange(origin, cell, range)) return false
         if (range > 1 && !LineOfSight.hasLineOfSight(floor, origin, cell)) {
             return false
         }
         return true
     }
+
+    /** Living, visible enemies in [skill] range with LOS (when required). */
+    fun livingEnemiesInRange(
+        floor: Floor,
+        origin: Cell,
+        skill: Skill,
+        hero: Hero? = null,
+    ): List<Enemy> =
+        floor.enemies.filter { enemy ->
+            enemy.isAlive &&
+                floor.isVisibleToParty(enemy.cell) &&
+                isTargetableEnemyCell(floor, origin, skill, enemy.cell, hero)
+        }
 
     fun livingEnemyAt(floor: Floor, cell: Cell): Enemy? {
         val enemy = floor.enemyAt(cell) ?: return null

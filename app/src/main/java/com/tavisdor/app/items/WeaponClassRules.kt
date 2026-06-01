@@ -1,8 +1,12 @@
 package com.tavisdor.app.items
 
 import com.tavisdor.app.combat.CombatMath
+import com.tavisdor.app.combat.LineOfSight
 import com.tavisdor.app.combat.MeleeOutcome
+import com.tavisdor.app.dungeon.Cell
+import com.tavisdor.app.dungeon.Floor
 import com.tavisdor.app.enemies.Enemy
+import com.tavisdor.app.enemies.EnemyCombatClass
 import com.tavisdor.app.enemies.EnemyTemplate
 import com.tavisdor.app.party.Hero
 import com.tavisdor.app.party.HeroClass
@@ -18,7 +22,6 @@ import kotlin.random.Random
  */
 object WeaponClassRules {
 
-    const val SPEAR_FIGHTER_RANGE_BONUS: Int = 1
     const val SPEAR_FIGHTER_CLOSE_MISS_PCT: Int = 5
     const val SPEAR_MAGE_CLOSE_MISS_PCT: Int = 10
 
@@ -55,7 +58,7 @@ object WeaponClassRules {
     /** Player-facing special lines for [type], one per class that has a modifier. */
     fun specialLinesFor(type: WeaponType): List<String> = when (type) {
         WeaponType.SPEAR -> listOf(
-            "Fighter: range +1; close combat +$SPEAR_FIGHTER_CLOSE_MISS_PCT% miss",
+            "Fighter: may attack diagonally at melee range; close combat +$SPEAR_FIGHTER_CLOSE_MISS_PCT% miss",
             "Mage: close combat +$SPEAR_MAGE_CLOSE_MISS_PCT% miss",
         )
         WeaponType.SWORD -> listOf(
@@ -76,6 +79,8 @@ object WeaponClassRules {
         )
         WeaponType.BOW -> listOf(
             "Archer: range +$BOW_ARCHER_RANGE_BONUS",
+            "Any class: ${SkillCatalog.ARCHER_CLOSE_RANGE_BASE_PENALTY_PCT}% miss at adjacent targets " +
+                "(incl. diagonal); Archer's Close-Range skill reduces this",
         )
         WeaponType.STAFF -> listOf(
             "Mage: ${(STAFF_MAGE_MP_DISCOUNT_CHANCE * 100).toInt()}% chance spells cost " +
@@ -103,10 +108,6 @@ object WeaponClassRules {
     fun effectiveRange(hero: Hero, weapon: Weapon): Int {
         var range = weapon.range
         when (weapon.type) {
-            WeaponType.SPEAR ->
-                if (hero.heroClass == HeroClass.FIGHTER) {
-                    range += SPEAR_FIGHTER_RANGE_BONUS
-                }
             WeaponType.BOW ->
                 if (hero.heroClass == HeroClass.ARCHER) {
                     range += BOW_ARCHER_RANGE_BONUS
@@ -117,12 +118,50 @@ object WeaponClassRules {
     }
 
     /**
-     * Skill reach for UI and combat gates. Fire / Poison / Ice Arrow
-     * gain [BOW_ARCHER_RANGE_BONUS] when an Archer wields a bow, same as
-     * the basic Attack.
+     * Fighter wielding a spear: melee reach 1 includes diagonals (not range 2).
+     */
+    fun heroSpearUsesDiagonalMeleeReach(hero: Hero, skill: Skill): Boolean {
+        if (hero.heroClass != HeroClass.FIGHTER) return false
+        if (hero.weapon1?.type != WeaponType.SPEAR) return false
+        if (skill.isSpell) return false
+        return effectiveSkillRange(hero, skill) == 1
+    }
+
+    /** Range + LOS gate shared by [CombatController] and [CombatTargeting]. */
+    fun passesHeroAttackRangeAndLos(
+        floor: Floor,
+        origin: Cell,
+        target: Cell,
+        hero: Hero,
+        skill: Skill,
+    ): Boolean {
+        val range = effectiveSkillRange(hero, skill)
+        if (range <= 0) return false
+        val diagonal = heroSpearUsesDiagonalMeleeReach(hero, skill)
+        if (!LineOfSight.isInRange(origin, target, range, includeDiagonals = diagonal)) {
+            return false
+        }
+        if (range > 1) {
+            return LineOfSight.hasLineOfSight(floor, origin, target)
+        }
+        if (diagonal) {
+            return LineOfSight.hasLineOfSight(
+                floor,
+                origin,
+                target,
+                treatDiagonalAdjacentAsClear = true,
+            )
+        }
+        return true
+    }
+
+    /**
+     * Skill reach for UI and combat gates. [SkillCatalog.receivesArcherBowRangeBonus]
+     * skills gain [BOW_ARCHER_RANGE_BONUS] when an Archer wields a bow,
+     * same as the basic Attack.
      */
     fun effectiveSkillRange(hero: Hero, skill: Skill): Int {
-        if (!SkillCatalog.isArcherElementalArrow(skill.id)) return skill.range
+        if (!SkillCatalog.receivesArcherBowRangeBonus(skill.id)) return skill.range
         if (hero.heroClass != HeroClass.ARCHER) return skill.range
         if (hero.weapon1?.type != WeaponType.BOW) return skill.range
         return skill.range + BOW_ARCHER_RANGE_BONUS
@@ -192,6 +231,57 @@ object WeaponClassRules {
             defenderCheck = target.dexterity,
         )
     }
+
+    // ----- Enemy combat (class + equipped weapon type) -----
+
+    /**
+     * Reach for enemy basic attacks. Starts at [EnemyTemplate.attackRange],
+     * then applies the same class bonuses heroes get (Fighter + spear, etc.).
+     */
+    fun effectiveEnemyAttackRange(enemy: Enemy): Int {
+        val template = enemy.template
+        var range = template.attackRange
+        when (template.weaponType) {
+            WeaponType.BOW ->
+                if (template.combatClass == EnemyCombatClass.ARCHER) {
+                    range += BOW_ARCHER_RANGE_BONUS
+                }
+            else -> Unit
+        }
+        return range
+    }
+
+    /**
+     * Mirrors [com.tavisdor.app.party.Hero.physicalAttackStat] for hero-like
+     * enemies; [EnemyCombatClass.BEAST] always uses STR.
+     */
+    fun enemyPhysicalAttackStat(enemy: Enemy): Int =
+        when (enemy.template.combatClass) {
+            EnemyCombatClass.ARCHER -> enemy.dexterity
+            EnemyCombatClass.THIEF -> enemy.dexterity + enemy.strength / 2
+            EnemyCombatClass.BEAST,
+            EnemyCombatClass.FIGHTER,
+            EnemyCombatClass.MAGE,
+            null,
+            -> enemy.strength
+        }
+
+    /**
+     * Weapon damage on top of [enemyPhysicalAttackStat]. Humanoid gear uses
+     * tier-1 melee damage; beasts and unarmed strikes use [LootTier.FISTS_DAMAGE].
+     */
+    fun enemyWeaponAttackBonus(enemy: Enemy): Int {
+        val template = enemy.template
+        return when {
+            template.combatClass == EnemyCombatClass.BEAST -> LootTier.FISTS_DAMAGE
+            template.weaponType == null || template.weaponType == WeaponType.BITE ->
+                LootTier.FISTS_DAMAGE
+            else -> LootTier.T1_3.meleeWeaponBaseDamage
+        }
+    }
+
+    fun enemyMeleeAttackPower(enemy: Enemy): Int =
+        enemyPhysicalAttackStat(enemy) + enemyWeaponAttackBonus(enemy)
 
     fun applySpearCloseRangeMissPenalty(
         hero: Hero,

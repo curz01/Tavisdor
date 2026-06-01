@@ -1,6 +1,7 @@
 package com.tavisdor.app.game
 
 import android.content.Context
+import com.tavisdor.app.R
 import com.tavisdor.app.combat.Combat
 import com.tavisdor.app.combat.CombatController
 import com.tavisdor.app.combat.CombatEndResult
@@ -21,6 +22,7 @@ import com.tavisdor.app.dungeon.FloorGenerator
 import com.tavisdor.app.dungeon.Pathfinder
 import com.tavisdor.app.dungeon.TemplateLibrary
 import com.tavisdor.app.party.HeroDraft
+import com.tavisdor.app.party.LevelProgression
 import com.tavisdor.app.party.Party
 import com.tavisdor.app.party.UtilityRecoverySession
 import com.tavisdor.app.party.UtilitySkillResolver
@@ -455,6 +457,18 @@ class Game(
     var onFloorDepthChanged: ((Int) -> Unit)? = null
 
     /**
+     * Fired when the party steps on stairs up or down during
+     * exploration. MainActivity shows a confirmation dialog; on
+     * approval call [commitStairTransition].
+     */
+    var onStairTransitionPrompt: ((StairDirection) -> Unit)? = null
+
+    enum class StairDirection {
+        DOWN,
+        UP,
+    }
+
+    /**
      * Fired EXACTLY once per victorious encounter, AFTER the
      * [CombatController] has deposited gold + queued any item
      * pickups into `party.inventory`. MainActivity hooks this to
@@ -525,10 +539,11 @@ class Game(
     var onSelectedEnemyChanged: ((Enemy?) -> Unit)? = null
 
     /**
-     * When non-null, the player is picking an enemy tile for the staged
-     * skill in [CombatTargetSelection.skill]. Works in combat and in
-     * exploration (ambush attacks). The dungeon view dims cells outside
-     * range and highlights valid targets.
+     * When non-null, the dungeon shows the combat target overlay for the
+     * staged [CombatTargetSelection.skill]: dimmed out-of-range tiles,
+     * highlighted in-range cells, and target markers on valid enemies.
+     * Single-target skills confirm by tapping an enemy; multi-target
+     * previews (Taunt) confirm with the Action button.
      */
     data class CombatTargetSelection(
         val heroSlot: Int,
@@ -724,8 +739,10 @@ class Game(
             CombatTargeting.isTargetableEnemyCell(f, f.partyCell, selection.skill, cell, caster)
         ) {
             setSelectedEnemy(enemy)
-            onCombatTargetConfirmed?.invoke(selection.heroSlot, enemy)
-            endCombatTargetSelection()
+            if (!CombatTargeting.showsMultiEnemyPreview(selection.skill)) {
+                onCombatTargetConfirmed?.invoke(selection.heroSlot, enemy)
+                endCombatTargetSelection()
+            }
             return true
         }
         return true
@@ -865,6 +882,8 @@ class Game(
         FAILED_NO_LOCK_PICK,
         /** Thief tried but party has no Stone Shard. */
         FAILED_NO_SHARD,
+        /** Lock-picking Thief does not have enough MP for the attempt. */
+        FAILED_NO_MP,
         /** DEX + 1d3 did not meet the lock level; shard was consumed. */
         FAILED_DEX_CHECK,
         /** STR force already attempted on this lock. */
@@ -1136,14 +1155,14 @@ class Game(
             applyUtilityTestSetup()
         }
         floorDepth = 1
-        descendToFloor(floorDepth)
+        descendToFloor(floorDepth, freshFloorSeed())
         saveStore.save(snapshotForFloorStart())
     }
 
     private fun applyUtilityTestSetup() {
         grantUtilityTestIngredients()
         grantTestElementalShards()
-        setPartyHalfHpMpForTesting()
+        setPartyFullHpMpForTesting()
     }
 
     /**
@@ -1176,12 +1195,20 @@ class Game(
         }
     }
 
-    /** Sets every living hero to 50% HP and 50% MP (utility FX testing). */
-    fun setPartyHalfHpMpForTesting() {
+    /** Sets every living hero to full HP and MP (utility / recovery FX testing). */
+    fun setPartyFullHpMpForTesting() {
         party?.heroes?.forEach { hero ->
             if (!hero.isAlive) return@forEach
-            hero.hp = (hero.maxHp / 2).coerceAtLeast(1)
-            hero.mp = hero.maxMp / 2
+            hero.restoreFull()
+        }
+    }
+
+    /** Level 1, zero XP, full HP/MP — normal new-run starting state. */
+    fun resetPartyToStartingProgression() {
+        party?.heroes?.forEach { hero ->
+            hero.level = 1
+            hero.xp = 0
+            hero.restoreFull()
         }
     }
 
@@ -1491,6 +1518,11 @@ class Game(
         // hero-only path so the level / xp clamp logic stays in one
         // place.
         party = Party.fromSaveData(data)
+        if (!DebugConfig.isLevelOverrideActive &&
+            data.heroes.all { it.level >= LevelProgression.MAX_LEVEL }
+        ) {
+            resetPartyToStartingProgression()
+        }
         if (DebugConfig.GRANT_UTILITY_TEST_INGREDIENTS) {
             applyUtilityTestSetup()
         }
@@ -1902,6 +1934,10 @@ class Game(
         // contract ever changes, restore the extension call here AND
         // un-stub Game.canExtendAt.
 
+        if (tryPromptStairTransitionAt(next)) {
+            return true
+        }
+
         if (checkEnterCombatOn(next)) {
             pendingPath.clear()
             pendingChestInteract = null
@@ -1948,8 +1984,11 @@ class Game(
         return DoorOutcome.OPENED
     }
 
-    /** True when a living Thief knows [SkillCatalog.THIEF_LOCK_PICK_ID]. */
-    fun canPartyPickLocks(): Boolean = partyLockPicker() != null
+    /** True when a living Thief can afford Lock Pick (skill known and MP). */
+    fun canPartyPickLocks(): Boolean {
+        val picker = partyLockPicker() ?: return false
+        return picker.mp >= lockPickMpCost()
+    }
 
     /**
      * Thief lock pick on a door (DEX + 1d3 vs lock level, one Stone Shard
@@ -1979,11 +2018,14 @@ class Game(
         if (!p.inventory.hasIngredient(Ingredient.STONE_SHARD)) {
             return DoorOutcome.FAILED_NO_SHARD
         }
+        val mpCost = lockPickMpCost()
+        if (picker.mp < mpCost) return DoorOutcome.FAILED_NO_MP
         val check = LockPick.rollDexPick(picker.dexterity, depth, runtimeRng)
         lastLockPickCheck = check
         if (!p.inventory.consumeIngredient(Ingredient.STONE_SHARD)) {
             return DoorOutcome.FAILED_NO_SHARD
         }
+        if (mpCost > 0) picker.spendMana(mpCost)
         if (!check.success) return DoorOutcome.FAILED_DEX_CHECK
         onSuccess()
         pruneSelectedEnemyIfHidden()
@@ -1999,6 +2041,9 @@ class Game(
             }
             .maxByOrNull { it.dexterity }
     }
+
+    private fun lockPickMpCost(): Int =
+        SkillCatalog.byId(SkillCatalog.THIEF_LOCK_PICK_ID)?.mpCost ?: 1
 
     /**
      * STR + 1d6 vs lock level (highest party STR). One attempt per lock;
@@ -2093,36 +2138,118 @@ class Game(
         saveStore.save(snapshotForFloorStart())
     }
 
-    /** Discards the current floor and generates the next one. Called when the party steps on a staircase. */
-    fun descend() {
-        floorDepth += 1
-        descendToFloor(floorDepth)
+    /**
+     * After the player confirms [onStairTransitionPrompt], travel to
+     * another depth. Always generates a fresh layout (new seed) so
+     * returning to a prior level is never the same dungeon.
+     */
+    fun commitStairTransition(direction: StairDirection): Boolean {
+        if (mode != Mode.EXPLORATION || combat != null) return false
+        val f = floor ?: return false
+        val onStairs = when (direction) {
+            StairDirection.DOWN -> f.isStaircase(f.partyCell)
+            StairDirection.UP -> f.isStairsUp(f.partyCell)
+        }
+        if (!onStairs) return false
+        if (direction == StairDirection.UP && floorDepth <= 1) {
+            appendExplorationLog(
+                CombatLogEntry.Info(
+                    context.getString(R.string.stair_surface_blocked),
+                ),
+            )
+            return false
+        }
+
+        prepareForFloorTravel()
+
+        val targetDepth = when (direction) {
+            StairDirection.DOWN -> floorDepth + 1
+            StairDirection.UP -> floorDepth - 1
+        }
+        travelToFloor(targetDepth, freshFloorSeed())
+
+        if (direction == StairDirection.DOWN) {
+            appendExplorationLog(
+                CombatLogEntry.Info(
+                    context.getString(R.string.stair_descent_narrative),
+                ),
+            )
+        }
+
         saveStore.save(snapshotForFloorStart())
+        return true
     }
 
-    private fun descendToFloor(depth: Int, seed: Long? = null) {
-        val s = seed ?: System.nanoTime()
-        val newFloor = FloorGenerator.generate(depth, s, templates)
+    /**
+     * When the party finishes a move onto stairs, ask for confirmation
+     * before changing floors.
+     */
+    private fun tryPromptStairTransitionAt(cell: Cell): Boolean {
+        if (mode != Mode.EXPLORATION || combat != null) return false
+        val f = floor ?: return false
+        val direction = when {
+            f.isStaircase(cell) -> StairDirection.DOWN
+            f.isStairsUp(cell) -> StairDirection.UP
+            else -> return false
+        }
+        if (direction == StairDirection.UP && floorDepth <= 1) {
+            cancelMove()
+            appendExplorationLog(
+                CombatLogEntry.Info(
+                    context.getString(R.string.stair_surface_blocked),
+                ),
+            )
+            return true
+        }
+
+        cancelMove()
+        onStairTransitionPrompt?.invoke(direction)
+            ?: commitStairTransition(direction)
+        return true
+    }
+
+    private fun prepareForFloorTravel() {
+        cancelMove()
+        clearPartyHide()
+        hideEscapeResumeEnemies = null
+        endCombatTargetSelection()
+        setSelectedEnemy(null)
+    }
+
+    /** New random layout at [depth]; used for stairs and new runs. */
+    private fun travelToFloor(depth: Int, seed: Long) {
+        floorDepth = depth
+        bindGeneratedFloor(depth, seed)
+        onFloorDepthChanged?.invoke(floorDepth)
+    }
+
+    /**
+     * Restore or create a floor from a known seed (save/load, new game
+     * start). Stair travel uses [travelToFloor] with a fresh seed instead.
+     */
+    private fun descendToFloor(depth: Int, seed: Long) {
+        floorDepth = depth
+        bindGeneratedFloor(depth, seed)
+        onFloorDepthChanged?.invoke(floorDepth)
+    }
+
+    private fun bindGeneratedFloor(depth: Int, seed: Long) {
+        val newFloor = FloorGenerator.generate(depth, seed, templates)
         floor = newFloor
-        mode = Mode.EXPLORATION
-        combat = null
-        // Any auto-move queued on the previous floor is referencing dead
-        // cells; drop it so the new floor starts at rest.
+        setCombat(null)
         pendingPath.clear()
         moveAccumSec = 0f
         lastRequestedTarget = null
         pendingChestInteract = null
-        // Pending skill picks belong to the encounter / floor they were
-        // staged on, not the next one - reseed each slot to the hero's
-        // basic Attack so an early Action tap on the new floor always
-        // resolves to a real swing.
+        pendingDoorInteract = null
         resetSelectedSkillsToDefault()
         setActiveHeroSlot(null)
         cameraFollowParty = true
         camera.centerOn(newFloor.partyCell.x, newFloor.partyCell.y)
         camera.scale = 1f
-        onFloorDepthChanged?.invoke(floorDepth)
     }
+
+    private fun freshFloorSeed(): Long = System.nanoTime()
 
     private fun snapshotForFloorStart(): SaveData {
         val p = party ?: error("Cannot snapshot without a party.")

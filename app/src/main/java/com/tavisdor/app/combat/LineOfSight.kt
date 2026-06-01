@@ -3,6 +3,7 @@ package com.tavisdor.app.combat
 import com.tavisdor.app.dungeon.Cell
 import com.tavisdor.app.dungeon.Floor
 import kotlin.math.abs
+import kotlin.math.max
 
 /**
  * Range + line-of-sight checks used by the combat controller when
@@ -38,9 +39,28 @@ object LineOfSight {
      */
     fun manhattan(a: Cell, b: Cell): Int = abs(a.x - b.x) + abs(a.y - b.y)
 
-    /** True iff [target] sits within [range] Manhattan cells of [origin]. */
-    fun isInRange(origin: Cell, target: Cell, range: Int): Boolean =
-        manhattan(origin, target) <= range
+    /** King-move distance (includes diagonals). */
+    fun chebyshev(a: Cell, b: Cell): Int =
+        max(abs(a.x - b.x), abs(a.y - b.y))
+
+    /**
+     * True iff [target] is within [range] of [origin].
+     * Default is Manhattan (cardinals only at range 1).
+     * With [includeDiagonals], uses Chebyshev so range 1 includes diagonals.
+     */
+    fun isInRange(
+        origin: Cell,
+        target: Cell,
+        range: Int,
+        includeDiagonals: Boolean = false,
+    ): Boolean {
+        val dist = if (includeDiagonals) {
+            chebyshev(origin, target)
+        } else {
+            manhattan(origin, target)
+        }
+        return dist <= range
+    }
 
     /**
      * Grid cells on the straight line from [from] to [to], including
@@ -71,10 +91,17 @@ object LineOfSight {
      *
      * All door cells block LOS; regular floor cells let the line pass.
      */
-    fun hasLineOfSight(floor: Floor, origin: Cell, target: Cell): Boolean {
+    fun hasLineOfSight(
+        floor: Floor,
+        origin: Cell,
+        target: Cell,
+        treatDiagonalAdjacentAsClear: Boolean = false,
+    ): Boolean {
         if (origin == target) return true
-        val md = manhattan(origin, target)
-        if (md <= 1) return true
+        if (manhattan(origin, target) <= 1) return true
+        if (treatDiagonalAdjacentAsClear && chebyshev(origin, target) <= 1) {
+            return true
+        }
 
         val line = bresenhamLine(origin, target)
         // The first cell is [origin], the last is [target]; only

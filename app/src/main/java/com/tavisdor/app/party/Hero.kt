@@ -66,14 +66,9 @@ data class Hero(
     /** XP earned at the current level. Resets to 0 on level-up. */
     var xp: Int = 0,
     /** Current HP. Damage is taken / healed against this. Must be <= [maxHp]. */
-    var hp: Int = BASE_MAX_HP,
+    var hp: Int = 1,
     /** Current MP. Spells / abilities spend against this. Must be <= [maxMp]. */
-    var mp: Int = BASE_MAX_MP,
-    /**
-     * Stored base AC from class (no gear). Use [armorClass] in combat/UI
-     * for the total including equipped pieces.
-     */
-    val baseArmorClass: Int = 10,
+    var mp: Int = 1,
     /** Equipment slots. Weapon slots are typed via [Weapon]; [weapon1]
      *  is the primary swing / shot and [weapon2] is off-hand. */
     val helmet: String? = null,
@@ -93,16 +88,30 @@ data class Hero(
     /** DEX from class chart plus weapon / armor suffixes. */
     val dexterity: Int get() = ClassStats.statsFor(heroClass, level).dexterity + suffixBonuses.dexterity
 
+    /**
+     * Primary stat for physical attack damage (weapon bonus + skill
+     * damage, then minus AC). Archer uses DEX; Thief uses DEX plus half
+     * STR (rounded down); Fighter and Mage use STR. To-hit still uses
+     * [dexterity] via [com.tavisdor.app.items.WeaponClassRules.effectiveDexterity].
+     */
+    val physicalAttackStat: Int get() = when (heroClass) {
+        HeroClass.ARCHER -> dexterity
+        HeroClass.THIEF -> dexterity + strength / 2
+        HeroClass.FIGHTER, HeroClass.MAGE -> strength
+    }
+
     /** INT from class chart plus weapon / armor suffixes. */
     val intelligence: Int get() = ClassStats.statsFor(heroClass, level).intelligence + suffixBonuses.intelligence
 
     // ----- Derived pools (from the Stat-Attributes design chart) -----
 
-    /** Max HP = base formula on [strength] plus Vital / Blessed suffix HP. */
-    val maxHp: Int get() = BASE_MAX_HP + strength * STR_HP_PER_POINT + suffixBonuses.bonusMaxHp
+    /** Max HP = class base + STR scaling + Vital / Blessed suffix HP. */
+    val maxHp: Int get() =
+        baseMaxHpFor(heroClass) + strength * STR_HP_PER_POINT + suffixBonuses.bonusMaxHp
 
-    /** Max MP = base formula on [intelligence] plus magical / Blessed suffix MP. */
-    val maxMp: Int get() = BASE_MAX_MP + intelligence * INT_MP_PER_POINT + suffixBonuses.bonusMaxMp
+    /** Max MP = class base + INT scaling + magical / Blessed suffix MP. */
+    val maxMp: Int get() =
+        baseMaxMpFor(heroClass) + intelligence * INT_MP_PER_POINT + suffixBonuses.bonusMaxMp
 
     /**
      * Flat dodge chance as a percentage (1% per point of [dexterity]).
@@ -112,8 +121,11 @@ data class Hero(
      */
     val dodgeChancePct: Int get() = (dexterity * DEX_DODGE_PCT_PER_POINT).coerceAtMost(90)
 
-    /** Class baseline plus AC from equipped armor (and future helm / boots / shield). */
-    val armorClass: Int get() = baseArmorClass + equippedArmorAcBonus()
+    /**
+     * Armor class for damage subtraction after a hit. Base 0; [dexterity]
+     * (including suffix bonuses) plus equipped armor [ArmorItem.acBonus].
+     */
+    val armorClass: Int get() = dexterity + equippedArmorAcBonus()
 
     private fun equippedArmorAcBonus(): Int {
         var bonus = 0
@@ -327,17 +339,26 @@ data class Hero(
     }
 
     companion object {
-        /** Base Max HP before STR is applied. Tuned in one place. */
-        const val BASE_MAX_HP: Int = 10
-
-        /** Base Max MP before INT is applied. */
-        const val BASE_MAX_MP: Int = 10
-
-        /** From the design chart: 1 STR grants +2 Max HP. */
+        /** From the design chart: 1 STR grants +2 Max HP (all classes). */
         const val STR_HP_PER_POINT: Int = 2
 
-        /** From the design chart: 1 INT grants +3 Max MP. */
+        /** From the design chart: 1 INT grants +3 Max MP (all classes). */
         const val INT_MP_PER_POINT: Int = 3
+
+        /** Class pool floor before STR / INT scaling. */
+        fun baseMaxHpFor(cls: HeroClass): Int = when (cls) {
+            HeroClass.FIGHTER -> 7
+            HeroClass.ARCHER -> 5
+            HeroClass.THIEF -> 6
+            HeroClass.MAGE -> 4
+        }
+
+        fun baseMaxMpFor(cls: HeroClass): Int = when (cls) {
+            HeroClass.FIGHTER -> 3
+            HeroClass.ARCHER -> 5
+            HeroClass.THIEF -> 4
+            HeroClass.MAGE -> 6
+        }
 
         /** From the design chart: 1 DEX grants +1% dodge. */
         const val DEX_DODGE_PCT_PER_POINT: Int = 1
@@ -355,14 +376,6 @@ data class Hero(
          * Real numbers should come from the armor-requirements chart.
          */
         const val STR_ARMOR_TIER_THRESHOLD: Int = 4
-
-        /** Class-flavored starting armor class. Placeholder until an AC chart lands. */
-        fun defaultArmorClassFor(cls: HeroClass): Int = when (cls) {
-            HeroClass.FIGHTER -> 14
-            HeroClass.ARCHER -> 12
-            HeroClass.THIEF -> 11
-            HeroClass.MAGE -> 10
-        }
 
         /**
          * Builds a freshly-spawned hero of [cls] with hp/mp filled to
@@ -382,7 +395,6 @@ data class Hero(
                 heroClass = cls,
                 gender = gender,
                 level = lvl,
-                baseArmorClass = defaultArmorClassFor(cls),
                 // Crude starter so the archer has range from
                 // turn one and the other classes have a flavor
                 // weapon to swing. Issuing it here keeps both

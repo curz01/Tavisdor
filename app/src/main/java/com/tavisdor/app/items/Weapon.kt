@@ -74,10 +74,10 @@ data class Weapon(
          *   - MAGE    -> Crude Staff (range 1)
          *   - ARCHER  -> Crude Bow (range 3, the only ranged starter)
          *
-         * All four return weapons with [attackBonus] = 0 so the
-         * baseline damage drops to pure STR until proper loot
-         * lands. This is intentional - the starter is more about
-         * giving the archer reach than buffing damage.
+         * All four return weapons with [attackBonus] = 0 so baseline
+         * damage is the hero's physical attack stat (DEX for
+         * Archer / Thief, STR for Fighter / Mage) until loot lands.
+         * The starter is mainly about reach for the Archer.
          */
         fun crudeStarterFor(cls: HeroClass): Weapon {
             val type = when (cls) {
