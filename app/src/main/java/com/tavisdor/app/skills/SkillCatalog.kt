@@ -59,7 +59,8 @@ object SkillCatalog {
             id = "mage_fire_1", name = "Fire I", level = 1,
             type = SkillCastType.ACTIVE, range = 1, mp = 2,
             damage = 3, element = Element.FIRE,
-            desc = "Fire damage 3, 2 mana. Less damage to Water type, more to Earth type.",
+            desc = "Fire damage 3, 2 mana. On a hit, lowers the target's fire resistance by 10% " +
+                "(stacks up to 5 until the enemy dies). Less damage to Water type, more to Earth type.",
         ),
         skill(
             // Heal is not an attack - element stays null so combat
@@ -75,7 +76,8 @@ object SkillCatalog {
             id = "mage_earth_1", name = "Earth I", level = 3,
             type = SkillCastType.ACTIVE, range = 1, mp = 2,
             damage = 2, element = Element.EARTH,
-            desc = "Earth damage 2, 2 mana.",
+            desc = "Earth damage 2, 2 mana. On a hit, lowers the target's earth resistance by 10% " +
+                "(stacks up to 5 until the enemy dies).",
         ),
         skill(
             id = "mage_fire_2", name = "Fire II", level = 4,
@@ -94,7 +96,8 @@ object SkillCatalog {
             id = "mage_earth_2", name = "Earth II", level = 6,
             type = SkillCastType.ACTIVE, range = 1, mp = 4,
             damage = 4, element = Element.EARTH,
-            desc = "Earth damage 4, 4 mana. 50% chance the enemy cannot move for 1 turn.",
+            desc = "Earth damage 4, 4 mana. On a hit, 10% chance the enemy cannot attack next turn; " +
+                "each non-proc stacks +10% (max 30%) until it triggers, then stacks reset.",
         ),
         skill(
             id = "mage_fire_3", name = "Fire III", level = 7,
@@ -359,6 +362,28 @@ object SkillCatalog {
     const val MAGE_FIRE_1_ID: String = "mage_fire_1"
     const val MAGE_FIRE_2_ID: String = "mage_fire_2"
     const val MAGE_FIRE_3_ID: String = "mage_fire_3"
+
+    /** Per stack: +10% fire spell damage vs the target (Fire I, max 5). */
+    const val MAGE_FIRE_RESIST_SHRED_PCT_PER_STACK: Int = 10
+
+    const val MAGE_FIRE_RESIST_SHRED_MAX_STACKS: Int = 5
+
+    /** Per stack: +10% earth spell damage vs the target (Earth I, max 5). */
+    const val MAGE_EARTH_RESIST_SHRED_PCT_PER_STACK: Int = 10
+
+    const val MAGE_EARTH_RESIST_SHRED_MAX_STACKS: Int = 5
+
+    /** Earth II: +10% attack-lock chance per buildup stack (10/20/30%). */
+    const val MAGE_EARTH_II_ATTACK_LOCK_CHANCE_PCT: Int = 10
+
+    const val MAGE_EARTH_II_ATTACK_BUILDUP_MAX_STACKS: Int = 3
+
+    fun mageEarthIIAttackLockChancePct(buildupStacks: Int): Int {
+        val tier = buildupStacks.coerceIn(0, MAGE_EARTH_II_ATTACK_BUILDUP_MAX_STACKS) + 1
+        return (tier * MAGE_EARTH_II_ATTACK_LOCK_CHANCE_PCT).coerceAtMost(
+            MAGE_EARTH_II_ATTACK_BUILDUP_MAX_STACKS * MAGE_EARTH_II_ATTACK_LOCK_CHANCE_PCT,
+        )
+    }
 
     /**
      * Stable id of the universal basic Attack every hero knows. Kept

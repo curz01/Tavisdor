@@ -132,13 +132,26 @@ object CombatMath {
         spellElement: Element,
         defenderInt: Int,
         defenderElement: Element,
+        defenderFireResistShredStacks: Int = 0,
+        defenderEarthResistShredStacks: Int = 0,
+        fireResistShredPctPerStack: Int = 0,
+        earthResistShredPctPerStack: Int = 0,
         rng: Random = Random.Default,
     ): SpellOutcome {
         val roll = rollCheckDie(rng)
         val hit = checkSucceeds(attackerInt, defenderInt, roll)
         val matchup = elementalMatchup(spellElement, defenderElement)
         val pre = skillDamage + (attackerInt / SPELL_INT_DIVISOR)
-        val multiplierPct = spellMultiplierPctForCritical(matchup, roll)
+        var multiplierPct = spellMultiplierPctForCritical(matchup, roll)
+        when (spellElement) {
+            Element.FIRE -> if (fireResistShredPctPerStack > 0) {
+                multiplierPct += defenderFireResistShredStacks * fireResistShredPctPerStack
+            }
+            Element.EARTH -> if (earthResistShredPctPerStack > 0) {
+                multiplierPct += defenderEarthResistShredStacks * earthResistShredPctPerStack
+            }
+            else -> Unit
+        }
         val damage = if (hit) (pre * multiplierPct) / 100 else 0
         return SpellOutcome(
             hit = hit,

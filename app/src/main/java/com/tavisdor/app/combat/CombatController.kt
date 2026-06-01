@@ -224,6 +224,21 @@ class CombatController(
     /** Enemy indices that skip their next turn (Mace stun). */
     private val stunnedEnemyIndices = mutableSetOf<Int>()
 
+    /** Enemy indices that may move but cannot attack on their next turn (Earth II). */
+    private val enemyAttackSilencedIndices = mutableSetOf<Int>()
+
+    /** Fire I shred stacks per enemy (persists until death). */
+    private val enemyFireResistShredStacks: IntArray = IntArray(combat.enemies.size)
+
+    /** Earth I shred stacks per enemy (persists until death). */
+    private val enemyEarthResistShredStacks: IntArray = IntArray(combat.enemies.size)
+
+    /**
+     * Earth II attack-lock buildup per enemy (0..[SkillCatalog.MAGE_EARTH_II_ATTACK_BUILDUP_MAX_STACKS]).
+     * Resets when the lock procs or the enemy dies.
+     */
+    private val earthIIAttackLockBuildup: IntArray = IntArray(combat.enemies.size)
+
     /** Per-enemy rolls used only for Steal (kill loot is rolled separately). */
     private val enemyStealPools: Array<MutableList<LootDrop>> = buildEnemyStealPools()
 
@@ -1491,6 +1506,7 @@ class CombatController(
         if (ended) return
         ended = true
         stunnedEnemyIndices.clear()
+        enemyAttackSilencedIndices.clear()
         log.append(CombatLogEntry.Info("The party slips away unseen."))
         awardVictoryXp()
         awardVictoryLoot()
@@ -2130,6 +2146,17 @@ class CombatController(
         enemyMoveAnim = null
         enemyMovedThisTurn = false
 
+        val enemyIdx = combat.enemies.indexOf(enemy)
+        val attackSilenced = enemyIdx >= 0 && enemyIdx in enemyAttackSilencedIndices
+        if (attackSilenced) {
+            enemyAttackSilencedIndices.remove(enemyIdx)
+            log.append(
+                CombatLogEntry.Info(
+                    "${enemy.name} is shaken and cannot attack this turn.",
+                ),
+            )
+        }
+
         // 0. Hate bookkeeping FIRST so the target pick later in
         //    [tryEnemyStrike] uses the freshly-bumped values:
         //      - whichever hero dealt the most damage to this
@@ -2157,7 +2184,7 @@ class CombatController(
 
         // 2. Strike before moving when slower than the party (unless
         //    this enemy always move-then-strikes in one action).
-        if (!moveThenStrike) {
+        if (!moveThenStrike && !attackSilenced) {
             enemyScript += EnemyStep.Strike(ENEMY_STRIKE_HOLD_MS)
         }
 
@@ -2170,7 +2197,7 @@ class CombatController(
 
         // 4. Strike after moving when fast enough or authored for
         //    combo turns (e.g. bat dive-bite after closing distance).
-        if (moveThenStrike && enemyCanStrikeFrom(enemy, endCell)) {
+        if (!attackSilenced && moveThenStrike && enemyCanStrikeFrom(enemy, endCell)) {
             enemyScript += EnemyStep.Strike(ENEMY_STRIKE_HOLD_MS)
         }
 
@@ -2845,6 +2872,10 @@ class CombatController(
             spellElement = skill.element!!,
             defenderInt = target.intelligence,
             defenderElement = target.element,
+            defenderFireResistShredStacks = enemyFireResistShredStacks.getOrElse(targetIdx) { 0 },
+            defenderEarthResistShredStacks = enemyEarthResistShredStacks.getOrElse(targetIdx) { 0 },
+            fireResistShredPctPerStack = SkillCatalog.MAGE_FIRE_RESIST_SHRED_PCT_PER_STACK,
+            earthResistShredPctPerStack = SkillCatalog.MAGE_EARTH_RESIST_SHRED_PCT_PER_STACK,
             rng = rng,
         )
 
@@ -2888,6 +2919,7 @@ class CombatController(
                 combat.hate.recordDamage(targetIdx, heroSlot, spellDamage)
             }
             tryApplyDisarmFromPrepare(hero, heroSlot, targetIdx)
+            tryApplyMageSpellOnHit(hero, skill, target, targetIdx)
             handleEnemyKoIfDead(target)
             return true
         }
@@ -2901,6 +2933,95 @@ class CombatController(
             )
         }
         return false
+    }
+
+    private fun tryApplyMageSpellOnHit(
+        hero: Hero,
+        skill: Skill,
+        target: Enemy,
+        targetIdx: Int,
+    ) {
+        if (!target.isAlive || targetIdx < 0) return
+        when (skill.id) {
+            SkillCatalog.MAGE_FIRE_1_ID -> addElementalResistShredStack(
+                target = target,
+                targetIdx = targetIdx,
+                stacks = enemyFireResistShredStacks,
+                maxStacks = SkillCatalog.MAGE_FIRE_RESIST_SHRED_MAX_STACKS,
+                shredPct = SkillCatalog.MAGE_FIRE_RESIST_SHRED_PCT_PER_STACK,
+                elementLabel = "fire",
+                casterName = hero.name,
+            )
+            SkillCatalog.MAGE_EARTH_1_ID -> addElementalResistShredStack(
+                target = target,
+                targetIdx = targetIdx,
+                stacks = enemyEarthResistShredStacks,
+                maxStacks = SkillCatalog.MAGE_EARTH_RESIST_SHRED_MAX_STACKS,
+                shredPct = SkillCatalog.MAGE_EARTH_RESIST_SHRED_PCT_PER_STACK,
+                elementLabel = "earth",
+                casterName = hero.name,
+            )
+            SkillCatalog.MAGE_EARTH_2_ID -> tryApplyEarthIIAttackLock(target, targetIdx)
+        }
+    }
+
+    private fun addElementalResistShredStack(
+        target: Enemy,
+        targetIdx: Int,
+        stacks: IntArray,
+        maxStacks: Int,
+        shredPct: Int,
+        elementLabel: String,
+        casterName: String,
+    ) {
+        if (targetIdx !in stacks.indices) return
+        val before = stacks[targetIdx]
+        if (before >= maxStacks) return
+        stacks[targetIdx] = (before + 1).coerceAtMost(maxStacks)
+        log.append(
+            CombatLogEntry.Info(
+                "${target.name}'s $elementLabel resistance drops by $shredPct% " +
+                    "(${stacks[targetIdx]}/$maxStacks, ${casterName}).",
+            ),
+        )
+    }
+
+    private fun tryApplyEarthIIAttackLock(target: Enemy, targetIdx: Int) {
+        if (targetIdx !in earthIIAttackLockBuildup.indices) return
+        val buildup = earthIIAttackLockBuildup[targetIdx]
+        val chance = SkillCatalog.mageEarthIIAttackLockChancePct(buildup)
+        if (rng.nextInt(100) < chance) {
+            earthIIAttackLockBuildup[targetIdx] = 0
+            enemyAttackSilencedIndices.add(targetIdx)
+            log.append(
+                CombatLogEntry.Info(
+                    "${target.name} is staggered and cannot attack next turn!",
+                ),
+            )
+            return
+        }
+        val capped = SkillCatalog.MAGE_EARTH_II_ATTACK_BUILDUP_MAX_STACKS
+        if (buildup < capped) {
+            earthIIAttackLockBuildup[targetIdx] = buildup + 1
+            log.append(
+                CombatLogEntry.Info(
+                    "${target.name} is unsteady (${earthIIAttackLockBuildup[targetIdx]}/$capped).",
+                ),
+            )
+        }
+    }
+
+    private fun clearEnemyMageDebuffs(enemyIdx: Int) {
+        if (enemyIdx in enemyFireResistShredStacks.indices) {
+            enemyFireResistShredStacks[enemyIdx] = 0
+        }
+        if (enemyIdx in enemyEarthResistShredStacks.indices) {
+            enemyEarthResistShredStacks[enemyIdx] = 0
+        }
+        if (enemyIdx in earthIIAttackLockBuildup.indices) {
+            earthIIAttackLockBuildup[enemyIdx] = 0
+        }
+        enemyAttackSilencedIndices.remove(enemyIdx)
     }
 
     private fun resolveHeroMeleeAttack(
@@ -3654,6 +3775,7 @@ class CombatController(
             enemyDisarmTurnsRemaining[enemyIdx] = 0
         }
         if (enemyIdx >= 0) {
+            clearEnemyMageDebuffs(enemyIdx)
             dotEffects.clearEnemy(enemyIdx)
         }
         log.append(CombatLogEntry.Defeat(enemy.name))
@@ -3799,6 +3921,7 @@ class CombatController(
         if (!anyEnemyAlive) {
             ended = true
             stunnedEnemyIndices.clear()
+            enemyAttackSilencedIndices.clear()
             log.append(CombatLogEntry.Victory)
             awardVictoryXp()
             awardVictoryLoot()
@@ -3809,6 +3932,7 @@ class CombatController(
         if (!anyHeroAlive) {
             ended = true
             stunnedEnemyIndices.clear()
+            enemyAttackSilencedIndices.clear()
             log.append(CombatLogEntry.PartyWipe)
             applyPartyWipeRespawn()
             onEnd(CombatEndResult.WIPE)
